@@ -1,0 +1,1814 @@
+﻿[
+    {
+        "cityName":  "Aamby Valley City",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Abohar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Adampur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Adilabad",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Adiudupi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Agartala",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Agatti",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Agra",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ahmedabad",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Ahmednagar",
+        "usageCount":  4
+    },
+    {
+        "cityName":  "Aizawl",
+        "usageCount":  4
+    },
+    {
+        "cityName":  "Aizawl (Lengpui)",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ajmer (Kishangarh)",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ajog",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Akbarpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Akli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Akola",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Alappuzha",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Aligarh",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Allahabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Alok",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Amaravati",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ambala",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ambikapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Amini",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Amla",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Amravati",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Amreli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Amritsar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Anachal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Anaparthi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Andrott",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Angul",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Anjuna",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Arakkonam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Areshiroor",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Arga",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Aritar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Aurangabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Awantipura",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ayiranalloor",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Azamgarh",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bagalkot",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Baghbari Gaon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Baihar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Balasore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Balurghat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bamnipal",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Bandalo",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bandar Seendri",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bangalore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bangaram",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Barauli Khurd",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bareilly",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Barrackpore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Basapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Basavana Durga",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Begusarai",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Belgaum",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Bellary",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bengaluru",
+        "usageCount":  5
+    },
+    {
+        "cityName":  "Benti",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Berhampur (Brahmapur)",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhagalpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhaini",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhainsdehi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhatinda",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhavnagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhawanipatna",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhiwani",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhokardan",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhopal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhubaneswar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhuj",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhuntar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bhusugaon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bidar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bikaner",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bilaspur",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Biraich",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Birpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Bitra",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Boleng",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Buragam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Calicut",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Campbell Bay",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Candolim",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chabua",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chakkuppallam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chakrata",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Champhai",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chandigarh",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chango",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chedilpakkam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chennai",
+        "usageCount":  4
+    },
+    {
+        "cityName":  "Chetlat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chikhaldara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chinyalisour",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chipi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chitrakoot",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chumathang",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Chushul",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Clement Town",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Coimbatore",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Cooch Behar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Cuddalore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dadiya",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dahod",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Daman",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Daporijo",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Darbhanga",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Darlawn",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Davanagere",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Deesa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dehradun (Jauligrant)",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Deoghar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Deomali",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Deopur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dhenko",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dholka",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dibrugarh",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Digha",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Diglipur",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Dimapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Diu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dona Paula",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Duddebanda",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Duliajan",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Dumka",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Durgapur",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Dwarka",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Ella",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ernakulam",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Ezhimala",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Faizabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Fazilka",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gadag",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gadapur",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Gadimoga",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gandhinagar",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Gangpimual",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gangtok",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gannan",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gauchar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gautam Buddha Nagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gaya",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gelling",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ghaziabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ghooghra",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gibpura",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gondia",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gopinathapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gorakhpur",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Govind Nagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Greater Noida",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gulbarga",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Guntur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gurugram",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Guwahati",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Gwalior",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Hadagali",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Halvad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Halwara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Harihar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Hingot Kheria",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Hisar",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Hollongi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Hubballi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Hyderabad",
+        "usageCount":  5
+    },
+    {
+        "cityName":  "IAF Camp",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Imphal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Indore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Itanagar",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Itarbalijor",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jabalpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jagdalpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jaigaon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jaipur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jalandhar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jalgaon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jalgoan",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jalpaiguri",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jammu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jamnagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jamshedpur",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Jengging",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jeypore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jodhpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jorhat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Jubbarhatti",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kadapa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kadmat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kailashahar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kakadi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kakinada",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Kakraban",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kalaburagi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kalol",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kalpa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kalpeni",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kandla",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kangla",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kangra",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kannur",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Kanpur",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Kanyakumari",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Karaikal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kargil",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Kargong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Karimnagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Karu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Karwar, Jodhpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kawade",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kawnpui",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kawrtethawveng",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kedareshwar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kelambakkam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Keshod",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khajuraho",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khalatse",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khaltsi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khandwa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khanpura",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khowai",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Khuldo",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kiari",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kiltan",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kishanganj",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kishanpura Goyla",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Kochi",
+        "usageCount":  4
+    },
+    {
+        "cityName":  "Kohima",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kolhapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kolkata",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Kollam",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Korwa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kota",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Koteshwara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kottayam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Koyul",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kunnakkadu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kurnool",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kushinagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Kwate-tu-kwage (Hut Bay)",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Lakshmanpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Lalbarra",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Lalitpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Latur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Lebong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Leh",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Lilabari",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Lucknow",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Lunglei",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Madhubani",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Madhurapudi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Madurai",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Maithon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Malda",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mamidiyal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mamit",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mampara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Man",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mandapam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mandvi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mangaluru",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Manik Bhandar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mannampandal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mararikkulam North",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Marhamtabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Marwad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mathura",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mau",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mavalli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mayabunder",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Meerut",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mehsana",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Miao",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mimbai",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Minicoy",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Minjur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mithapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mohammadabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Moolamattom",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mopa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Moradabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Morang",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mukhem Renge",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Muluk Gaon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mumbai",
+        "usageCount":  7
+    },
+    {
+        "cityName":  "Mundra",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Muzaffarpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Myliem",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Mysore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nagapattinam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nagarjuna Sagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nagpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nahuli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nako",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Naliya",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nallatinputhur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nalung",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nampong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Namsai",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nancowry",
+        "usageCount":  6
+    },
+    {
+        "cityName":  "Nanded",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Narajmarthapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Narayannagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nashik",
+        "usageCount":  4
+    },
+    {
+        "cityName":  "Navi Mumbai",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Nawapara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nayabazar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nellore",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "New Delhi",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Neyveli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Niawal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nimmoo",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nirmalapuram",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Nubra",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Nyoma",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Ongole",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Orvakal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Osmanabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pahalgam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pakyong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Panchalimedu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Panchkula",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pangin",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pantnagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Parsuram Kund",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Parva II",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Paschim Jalefa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pasighat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pathanamthitta",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pathankot",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pathumury",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Patna",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Pedong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pelling City",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Perunad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Petrapole",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Phalodi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pilani",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pithoragarh",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pooh",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Poonch",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Porbandar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Port Blair",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Prayagraj",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Puducherry (Pondicherry)",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Pune",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Puri",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Pushkar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Puttaparthi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Quitol",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Radhakishorepur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rahani",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Raipur",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Rajkot",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Rajouri",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ramagundam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ramanathapuram",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ramnad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rampurhat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ranchi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rangat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Razam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rewa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rohini",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Roing",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rourkela",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rudra Sagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rumgara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Rupsi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Saharsa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Saiha",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Saitual",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Salem",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Salugara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sambalpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sampalli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sarkhej-Okaf",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Secunderabad",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Serchhip",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shahjahanpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shegaon",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sherpur Naqeebpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shey",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shillong",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Shimla",
+        "usageCount":  6
+    },
+    {
+        "cityName":  "Shimoga",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shirpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shoktsen",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Shravasti",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sialsuk",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Silchar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Siliguri",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Silvassa",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sindhigan",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sito Gunno",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sokriting T.E.",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Solapur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sonamarg",
+        "usageCount":  3
+    },
+    {
+        "cityName":  "Spiti",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sri City",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sriharikota",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Srikakulam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Srinagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Suangpuilawn",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Suheli Par",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sultanpur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sulur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sunabeda",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Sundipenta",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Surat",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Surtok",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tangtse",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tarauna",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tawang",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Telgi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tenali",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tezu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Thanjavur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Thiruvananthapuram",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Thrissur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tiloniya",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tiruchirappalli",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tirupati",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Toranagallu",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tuipuibari",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Tuting",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Udaipur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Udhampur",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ujjain",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Umaria",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Upper Tadong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Upshi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vadodara",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vagaikulam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vanasthali",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vapi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Varanasi",
+        "usageCount":  2
+    },
+    {
+        "cityName":  "Varkala",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vasco da Gama",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vellore",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vijay Nagar",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Vijayawada",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Visakhapatnam",
+        "usageCount":  4
+    },
+    {
+        "cityName":  "Wakodi",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Warangal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Yanam",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Yavatmal",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Yelahanka",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Yingkiong",
+        "usageCount":  1
+    },
+    {
+        "cityName":  "Ziro",
+        "usageCount":  1
+    }
+]
