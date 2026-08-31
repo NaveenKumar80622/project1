@@ -1214,18 +1214,7 @@ namespace PickNBook.Api.Controllers
             _logger.LogInformation("Hotel pricing preview requested for HotelCode: {HotelCode}", request.HotelCode);
 
             decimal agentMarkup = 0m;
-            
-            if (request.B2CBasePrice > 0)
-            {
-                using var markupScope = HttpContext.RequestServices.CreateScope();
-                var markupService = markupScope.ServiceProvider.GetService<PickNBook.Api.Services.IHotelMarkupService>();
-                if (markupService != null)
-                {
-                    agentMarkup = await markupService.CalculateMarkupAsync(request.B2CBasePrice, request.CityCode, request.HotelCode, "B2C");
-                }
-            }
-
-            decimal totalBeforeDiscount = request.B2CBasePrice + request.SrdvGstAmount + agentMarkup;
+            decimal totalBeforeDiscount = request.B2CBasePrice + request.SrdvGstAmount;
             
             decimal discountAmount = 0m;
             bool isCouponValid = false;

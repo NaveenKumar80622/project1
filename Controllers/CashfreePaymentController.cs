@@ -166,17 +166,54 @@ namespace PickNBook.Api.Controllers
                         {
                             var normalizedCoupon = request.CouponCode.Trim().ToUpperInvariant();
                             var coupon = await _dbContext.HotelCoupons.FirstOrDefaultAsync(c => c.CouponCode == normalizedCoupon && c.Status == "Active");
-                            if (coupon != null && coupon.ExpiryDate >= DateOnly.FromDateTime(DateTime.UtcNow))
+                            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+                            
+                            bool isCouponValid = coupon != null && today >= coupon.StartDate && today <= coupon.ExpiryDate && blockedHotel.GrandTotal >= coupon.MinBookingAmount;
+                            
+                            if (isCouponValid)
                             {
-                                if (coupon.CouponType == "Percentage")
-                                    discountAmount = calculatedFinalAmount * (coupon.Value / 100m);
-                                else
-                                    discountAmount = coupon.Value;
+                                if (coupon!.UseLimit > 0 && coupon.UsedCount >= coupon.UseLimit)
+                                    isCouponValid = false;
+                                
+                                if (isCouponValid)
+                                {
+                                    var userUsageCount = await _dbContext.HotelCouponUsages
+                                        .CountAsync(u => u.CouponCode == normalizedCoupon && u.UserId == userIdStr && u.BookingStatus != "Cancelled");
+                                    if (userUsageCount >= coupon.MaxUsagePerUser)
+                                        isCouponValid = false;
+                                }
 
-                                if (coupon.MaxDiscountAmount > 0 && discountAmount > coupon.MaxDiscountAmount)
-                                    discountAmount = coupon.MaxDiscountAmount;
+                                if (isCouponValid && coupon.IsFirstTimeUserOnly)
+                                {
+                                    var hasPriorBookings = await _dbContext.HotelReservations
+                                        .AnyAsync(r => r.UserId == userIdStr && r.Status != "Cancelled");
+                                    if (hasPriorBookings)
+                                        isCouponValid = false;
+                                }
                             }
-                            calculatedFinalAmount -= discountAmount;
+
+                            if (isCouponValid)
+                            {
+                                decimal couponDiscount = 0m;
+                                decimal totalBeforeDiscount = blockedHotel.OfferedPrice + blockedHotel.Tax + blockedHotel.MarkupAmount;
+
+                                if (coupon!.CouponType == "Percentage")
+                                {
+                                    couponDiscount = totalBeforeDiscount * (coupon.Value / 100m);
+                                    if (coupon.MaxDiscountAmount > 0 && couponDiscount > coupon.MaxDiscountAmount)
+                                        couponDiscount = coupon.MaxDiscountAmount;
+                                }
+                                else if (coupon.CouponType == "Flat")
+                                {
+                                    couponDiscount = coupon.Value;
+                                }
+
+                                couponDiscount = Math.Min(couponDiscount, totalBeforeDiscount);
+                                couponDiscount = decimal.Round(couponDiscount, 2, MidpointRounding.AwayFromZero);
+
+                                discountAmount += couponDiscount;
+                                calculatedFinalAmount -= couponDiscount;
+                            }
                         }
                     }
                     else if (request.BookingType == BookingType.Flight)
@@ -241,11 +278,11 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
-                    // Strict Price Parity Check
-                    if (calculatedFinalAmount != request.OrderAmount)
+                    // Strict Price Parity Check (Rounded)
+                    if (Math.Round(calculatedFinalAmount, 2) != Math.Round(request.OrderAmount, 2))
                     {
                         _logger.LogWarning("Price mismatch detected. Frontend sent {FrontendAmount}, Backend calculated {BackendAmount}", request.OrderAmount, calculatedFinalAmount);
-                        return BadRequest(new { message = $"Price mismatch. The calculated final amount is {calculatedFinalAmount}, but the request specified {request.OrderAmount}. Please refresh the pricing." });
+                        return BadRequest(new { message = $"Price mismatch. The calculated final amount is {Math.Round(calculatedFinalAmount, 2)}, but the request specified {Math.Round(request.OrderAmount, 2)}. Please refresh the pricing." });
                     }
 
                     // Populate Snapshot
