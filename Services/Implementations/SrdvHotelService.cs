@@ -2096,7 +2096,7 @@ namespace PickNBook.Api.Services
 
                         if (booking.LastCancellationDate.HasValue && now <= booking.LastCancellationDate.Value)
                         {
-                            return (0m, booking.TotalPrice);
+                            return (0m, booking.Price);
                         }
 
                         HotelRoomCancellationPolicyDto? matchingPolicy = null;
@@ -2129,16 +2129,16 @@ namespace PickNBook.Api.Services
                             decimal penalty = 0m;
                             if (matchingPolicy.ChargeType == 1) // Percentage
                             {
-                                penalty = booking.TotalPrice * (matchingPolicy.Charge / 100m);
+                                penalty = booking.Price * (matchingPolicy.Charge / 100m);
                             }
                             else // Flat Amount
                             {
                                 penalty = matchingPolicy.Charge;
                             }
 
-                            penalty = Math.Min(booking.TotalPrice, Math.Max(0m, penalty));
+                            penalty = Math.Min(booking.Price, Math.Max(0m, penalty));
                             penalty = decimal.Round(penalty, 2, MidpointRounding.AwayFromZero);
-                            decimal refund = Math.Max(0m, booking.TotalPrice - penalty);
+                            decimal refund = Math.Max(0m, booking.Price - penalty);
 
                             return (penalty, refund);
                         }
@@ -2152,14 +2152,14 @@ namespace PickNBook.Api.Services
 
             if (booking.LastCancellationDate.HasValue && DateTime.UtcNow <= booking.LastCancellationDate.Value)
             {
-                return (0m, booking.TotalPrice);
+                return (0m, booking.Price);
             }
             if (DateTime.UtcNow < booking.CheckInDate)
             {
-                return (0m, booking.TotalPrice);
+                return (0m, booking.Price);
             }
 
-            return (booking.TotalPrice, 0m);
+            return (booking.Price, 0m);
         }
 
         private static string NormalizeTitle(string? title)

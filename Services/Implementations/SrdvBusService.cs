@@ -704,7 +704,7 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<(bool Success, string ErrorMessage)> CancelTicketAsync(string traceId, string seatName, string remark)
+        public async Task<(bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount)> CancelTicketAsync(string traceId, string seatName, string remark)
         {
             var requestBody = new
             {
@@ -740,7 +740,22 @@ namespace PickNBook.Api.Services
                 }
             }
 
-            return (errorCode == 0, errorMessage);
+            decimal cancellationCharge = 0m;
+            decimal refundAmount = 0m;
+
+            if (json.RootElement.TryGetProperty("CancellationCharge", out var ccProp))
+            {
+                if (ccProp.ValueKind == JsonValueKind.Number) cancellationCharge = ccProp.GetDecimal();
+                else if (ccProp.ValueKind == JsonValueKind.String && decimal.TryParse(ccProp.GetString(), out var c)) cancellationCharge = c;
+            }
+
+            if (json.RootElement.TryGetProperty("RefundAmount", out var raProp))
+            {
+                if (raProp.ValueKind == JsonValueKind.Number) refundAmount = raProp.GetDecimal();
+                else if (raProp.ValueKind == JsonValueKind.String && decimal.TryParse(raProp.GetString(), out var r)) refundAmount = r;
+            }
+
+            return (errorCode == 0, errorMessage, cancellationCharge, refundAmount);
         }
         public async Task<string> GetSrdvMasterWalletBalanceAsync(string endUserIp)
         {

@@ -65,6 +65,7 @@ builder.Services.Configure<CashfreeSettings>(
 builder.Services.AddHttpClient<ICashfreeService, CashfreeService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IBookingOrchestratorService, BookingOrchestratorService>();
+builder.Services.AddScoped<ICancellationRefundCalculator, CancellationRefundCalculator>();
 
 builder.Services.AddTransient<PickNBook.Api.Infrastructure.Logging.SrdvFlightLoggingHandler>();
 builder.Services.AddHttpClient<ISrdvFlightService, SrdvFlightService>()

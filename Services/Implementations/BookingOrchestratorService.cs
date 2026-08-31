@@ -408,6 +408,21 @@ namespace PickNBook.Api.Services.Implementations
                 reservation.SrdvTicketNo = srdvTicketNo;
                 reservation.Status = "Booked";
                 reservation.SrdvBookingResponseJson = srdvResponseJson;
+                
+                if (!string.IsNullOrEmpty(srdvResponseJson))
+                {
+                    try
+                    {
+                        using var sDoc = JsonDocument.Parse(srdvResponseJson);
+                        var sRoot = sDoc.RootElement;
+                        if (sRoot.TryGetProperty("CancellationPolicies", out var cPolicies))
+                        {
+                            reservation.CancellationPolicyJson = cPolicies.ToString();
+                        }
+                    }
+                    catch { /* Ignore parsing errors */ }
+                }
+
                 reservation.Pnr = srdvPnr ?? reservation.Pnr;
                 
                 _dbContext.BusBookings.Add(bus);

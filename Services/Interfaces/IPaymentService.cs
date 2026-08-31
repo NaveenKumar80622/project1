@@ -27,6 +27,8 @@ namespace PickNBook.Api.Services.Interfaces
             
         Task<bool> ProcessWebhookAsync(string cashfreeOrderId, string eventType,
             string paymentStatus, decimal amount, string? paymentId, string? paymentMethod);
+
+        Task<bool> ProcessRefundWebhookAsync(string cashfreeRefundId, string refundStatus);
             
         Task<PaymentVerificationResponse> VerifyPaymentAsync(string cashfreeOrderId);
     }

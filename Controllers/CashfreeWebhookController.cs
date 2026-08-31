@@ -68,6 +68,21 @@ namespace PickNBook.Api.Controllers
                 }
 
                 var payload = JsonSerializer.Deserialize<CashfreeWebhookPayload>(rawBody);
+                if (payload.Type == "REFUND_STATUS_WEBHOOK")
+                {
+                    if (payload.Data?.Refund == null)
+                    {
+                        _logger.LogWarning("Refund Webhook payload missing refund data.");
+                        return BadRequest(new { message = "Invalid refund payload" });
+                    }
+
+                    string refundId = payload.Data.Refund.RefundId;
+                    string refundStatus = payload.Data.Refund.RefundStatus;
+
+                    bool refundProcessed = await _paymentService.ProcessRefundWebhookAsync(refundId, refundStatus);
+                    return Ok(new { message = refundProcessed ? "Refund webhook processed" : "Refund webhook ignored" });
+                }
+
                 if (payload?.Data?.Order == null || payload.Data.Payment == null)
                 {
                     _logger.LogWarning("Webhook payload missing order/payment data.");

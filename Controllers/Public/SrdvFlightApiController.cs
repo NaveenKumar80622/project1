@@ -13,6 +13,7 @@ using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PickNBook.Api.Models.Config;
+using PickNBook.Api.Services.Interfaces;
 
 namespace PickNBook.Api.Controllers.Public
 {
@@ -27,6 +28,7 @@ namespace PickNBook.Api.Controllers.Public
         private readonly IAgentWalletService _walletService;
         private readonly SrdvSettings _srdvSettings;
         private readonly ILogger<SrdvFlightApiController> _logger;
+        private readonly ICancellationRefundCalculator _refundCalculator;
 
         public SrdvFlightApiController(
             ISrdvFlightService srdvFlightService, 
@@ -35,6 +37,7 @@ namespace PickNBook.Api.Controllers.Public
             ITicketEmailService ticketEmailService,
             IAgentWalletService walletService,
             IOptions<SrdvSettings> srdvSettings,
+            ICancellationRefundCalculator refundCalculator,
             ILogger<SrdvFlightApiController> logger)
         {
             _srdvFlightService = srdvFlightService;
@@ -43,6 +46,7 @@ namespace PickNBook.Api.Controllers.Public
             _ticketEmailService = ticketEmailService;
             _walletService = walletService;
             _srdvSettings = srdvSettings.Value;
+            _refundCalculator = refundCalculator;
             _logger = logger;
         }
 
@@ -2023,40 +2027,57 @@ namespace PickNBook.Api.Controllers.Public
                         var cancelReq = await _dbContext.FlightCancellationRequests.FirstOrDefaultAsync(c => c.SrdvChangeRequestId == changeRequestId);
                         if (cancelReq != null)
                         {
-                            string cStatus = "Completed";
-                            if (resp.TryGetProperty("CancelStatus", out var csNode))
-                                cStatus = csNode.ToString() ?? "Completed";
-                            
-                            cancelReq.CancellationStatus = cStatus;
-                            cancelReq.CustomerRefundStatus = cStatus;
-                            cancelReq.AdminRefundStatus = cStatus;
-
-                            decimal refundAmount = 0;
-                            if (resp.TryGetProperty("RefundAmount", out var rAmt))
-                            {
-                                if (rAmt.ValueKind == JsonValueKind.Number)
-                                    refundAmount = rAmt.GetDecimal();
-                                else if (rAmt.ValueKind == JsonValueKind.String && decimal.TryParse(rAmt.ToString(), out var rAmtDec))
-                                    refundAmount = rAmtDec;
-                            }
-
-                            decimal cancellationCharge = 0;
-                            if (resp.TryGetProperty("CancellationCharge", out var cCharge))
-                            {
-                                if (cCharge.ValueKind == JsonValueKind.Number)
-                                    cancellationCharge = cCharge.GetDecimal();
-                                else if (cCharge.ValueKind == JsonValueKind.String && decimal.TryParse(cCharge.ToString(), out var cChargeDec))
-                                    cancellationCharge = cChargeDec;
-                            }
-                            
-                            cancelReq.CustomerRefundAmountInr = refundAmount;
-                            cancelReq.AdminRefundAmountInr = refundAmount;
-                            cancelReq.CustomerCancellationChargeInr = cancellationCharge;
-                            cancelReq.AdminCancellationChargeInr = cancellationCharge;
-                            
                             var res = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(x => x.Id == cancelReq.FlightReservationId);
                             if (res != null) 
                             {
+                                string cStatus = "Completed";
+                                if (resp.TryGetProperty("CancelStatus", out var csNode))
+                                    cStatus = csNode.ToString() ?? "Completed";
+                                
+                                cancelReq.CancellationStatus = cStatus;
+                                cancelReq.CustomerRefundStatus = cStatus;
+                                cancelReq.AdminRefundStatus = cStatus;
+
+                                decimal refundAmount = 0;
+                                if (resp.TryGetProperty("RefundAmount", out var rAmt))
+                                {
+                                    if (rAmt.ValueKind == JsonValueKind.Number)
+                                        refundAmount = rAmt.GetDecimal();
+                                    else if (rAmt.ValueKind == JsonValueKind.String && decimal.TryParse(rAmt.ToString(), out var rAmtDec))
+                                        refundAmount = rAmtDec;
+                                }
+
+                                decimal cancellationCharge = 0;
+                                if (resp.TryGetProperty("CancellationCharge", out var cCharge))
+                                {
+                                    if (cCharge.ValueKind == JsonValueKind.Number)
+                                        cancellationCharge = cCharge.GetDecimal();
+                                    else if (cCharge.ValueKind == JsonValueKind.String && decimal.TryParse(cCharge.ToString(), out var cChargeDec))
+                                        cancellationCharge = cChargeDec;
+                                }
+
+                                var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
+                                {
+                                    OriginalCustomerPaid = res.CustomerFareInr,
+                                    SupplierAmount = res.NetFareInr,
+                                    MarkupAmount = res.MarkupAmount,
+                                    DiscountAmount = res.CouponDiscount,
+                                    ConvenienceFee = 0m,
+                                    SupplierCancellationCharge = cancellationCharge,
+                                    SupplierRefundAmount = refundAmount
+                                };
+
+                                var calculatedRefund = _refundCalculator.CalculateCustomerRefund(
+                                    refundInput,
+                                    refundMarkup: false,
+                                    refundConvenienceFee: false,
+                                    refundCoupon: false);
+                                
+                                cancelReq.CustomerRefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
+                                cancelReq.AdminRefundAmountInr = refundAmount;
+                                cancelReq.CustomerCancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                                cancelReq.AdminCancellationChargeInr = cancellationCharge;
+                                
                                 res.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
                                 res.CancelledAtUtc = DateTime.UtcNow;
                                 res.CancellationReason = !string.IsNullOrWhiteSpace(cancelReq.CustomerRemark) ? cancelReq.CustomerRemark 
@@ -2064,7 +2085,7 @@ namespace PickNBook.Api.Controllers.Public
                                                        : (!string.IsNullOrWhiteSpace(cancelReq.AdminRemark) ? cancelReq.AdminRemark 
                                                        : "Cancelled via API / Provider"));
                                 
-                                res.RefundAmountInr = refundAmount;
+                                res.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                                 res.CancellationChargeInr = cancellationCharge;
 
                                 var passengers = await _dbContext.FlightReservationPassengers.Where(p => p.FlightReservationId == res.Id).ToListAsync();

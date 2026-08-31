@@ -243,5 +243,22 @@ namespace PickNBook.Api.Services.Implementations
                 FailureReason = payment.FailureReason
             };
         }
+
+        public async Task<bool> ProcessRefundWebhookAsync(string cashfreeRefundId, string refundStatus)
+        {
+            var refundRecord = await _dbContext.BookingCancellations
+                .FirstOrDefaultAsync(r => r.CashfreeRefundId == cashfreeRefundId);
+
+            if (refundRecord != null)
+            {
+                refundRecord.Status = refundStatus;
+                await _dbContext.SaveChangesAsync();
+                _logger.LogInformation("Updated refund status for CashfreeRefundId {RefundId} to {Status}", cashfreeRefundId, refundStatus);
+                return true;
+            }
+
+            _logger.LogWarning("Received refund webhook for unknown CashfreeRefundId {RefundId}", cashfreeRefundId);
+            return false;
+        }
     }
 }

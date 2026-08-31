@@ -22,6 +22,9 @@ namespace PickNBook.Api.Models.Payments
 
         [JsonPropertyName("payment")]
         public CashfreeWebhookPaymentDetail? Payment { get; set; }
+
+        [JsonPropertyName("refund")]
+        public CashfreeWebhookRefund? Refund { get; set; }
     }
 
     public class CashfreeWebhookOrder
@@ -83,5 +86,19 @@ namespace PickNBook.Api.Models.Payments
             }
             return "unknown";
         }
+    }
+    public class CashfreeWebhookRefund
+    {
+        [JsonPropertyName("refund_id")]
+        public string RefundId { get; set; } = string.Empty;
+
+        [JsonPropertyName("cf_refund_id")]
+        public string CfRefundId { get; set; } = string.Empty;
+
+        [JsonPropertyName("refund_status")]
+        public string RefundStatus { get; set; } = string.Empty;
+
+        [JsonPropertyName("refund_amount")]
+        public decimal RefundAmount { get; set; }
     }
 }

@@ -24,6 +24,7 @@ namespace PickNBook.Api.Models
         public bool NonRefundable { get; set; }
         public string? CancellationCharges { get; set; }
         public string? FareRulesJson { get; set; }
+        public string? CancellationPolicyJson { get; set; }
         public string? PartialSegmentCancellation { get; set; }
 
         public string PassengerName { get; set; } = string.Empty;

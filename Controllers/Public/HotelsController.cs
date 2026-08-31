@@ -25,6 +25,8 @@ namespace PickNBook.Api.Controllers
         private readonly ILogger<HotelsController> _logger;
         private readonly ITicketEmailService _ticketEmailService;
         private readonly IMemoryCache _cache;
+        private readonly PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator _refundCalculator;
+        private readonly PickNBook.Api.Services.Interfaces.ICashfreeService _cashfreeService;
 
         public HotelsController(
             IHotelService hotelService,
@@ -32,7 +34,9 @@ namespace PickNBook.Api.Controllers
             ICurrentUserService currentUserService,
             ILogger<HotelsController> logger,
             ITicketEmailService ticketEmailService,
-            IMemoryCache cache)
+            IMemoryCache cache,
+            PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator refundCalculator,
+            PickNBook.Api.Services.Interfaces.ICashfreeService cashfreeService)
         {
             _hotelService = hotelService;
             _dbContext = dbContext;
@@ -40,6 +44,8 @@ namespace PickNBook.Api.Controllers
             _logger = logger;
             _ticketEmailService = ticketEmailService;
             _cache = cache;
+            _refundCalculator = refundCalculator;
+            _cashfreeService = cashfreeService;
         }
 
         // =====================================
@@ -1168,16 +1174,69 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
-                    var (cancellationCharges, refundAmount) = SrdvHotelService.EvaluateCancellationFee(booking);
+                    var (supplierCancellationCharge, supplierRefundAmount) = SrdvHotelService.EvaluateCancellationFee(booking);
 
-                    booking.CancellationCharges = cancellationCharges;
-                    booking.RefundAmount = refundAmount;
+                    var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
+                    {
+                        OriginalCustomerPaid = booking.TotalPrice,
+                        SupplierAmount = booking.Price,
+                        MarkupAmount = booking.MarkupAmount,
+                        DiscountAmount = booking.CouponDiscount,
+                        ConvenienceFee = booking.ConvenienceFee,
+                        SupplierCancellationCharge = supplierCancellationCharge,
+                        SupplierRefundAmount = supplierRefundAmount
+                    };
+
+                    var calculatedRefund = _refundCalculator.CalculateCustomerRefund(
+                        refundInput,
+                        refundMarkup: false,
+                        refundConvenienceFee: false,
+                        refundCoupon: false);
+
+                    booking.CancellationCharges = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                    booking.RefundAmount = calculatedRefund.FinalCustomerRefundAmount;
                     booking.Status = "Cancelled";
                     booking.CancelledAt = DateTime.UtcNow;
                     booking.CancellationReason = string.IsNullOrWhiteSpace(reason) ? "Cancelled by user" : reason.Trim();
                     booking.UpdatedAt = DateTime.UtcNow;
 
+                    var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
+                    {
+                        BookingType = "Hotel",
+                        BookingReference = booking.BookingReference,
+                        UserId = booking.UserId,
+                        CreatedAtUtc = DateTime.UtcNow,
+                        OriginalCustomerPaid = booking.TotalPrice,
+                        SupplierAmount = booking.Price,
+                        MarkupAmount = booking.MarkupAmount,
+                        ConvenienceFee = booking.ConvenienceFee,
+                        DiscountAmount = booking.CouponDiscount,
+                        SupplierRefundAmount = supplierRefundAmount,
+                        SupplierCancellationCharge = supplierCancellationCharge,
+                        MarkupRefunded = calculatedRefund.MarkupRefunded,
+                        FeeRefunded = calculatedRefund.FeeRefunded,
+                        CouponForfeited = calculatedRefund.CouponForfeited,
+                        CustomerRefundAmount = calculatedRefund.FinalCustomerRefundAmount,
+                        Status = "Pending"
+                    };
+                    
+                    _dbContext.BookingCancellations.Add(cancellationAudit);
                     await _dbContext.SaveChangesAsync();
+
+                    if (calculatedRefund.FinalCustomerRefundAmount > 0)
+                    {
+                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == booking.UserId && p.BookingReferenceId == booking.Id && p.BookingType == "Hotel");
+                        if (payment != null && payment.CashfreeOrderId != null)
+                        {
+                            string refundId = $"REF-CANCEL-{booking.Id}-{cancellationAudit.Id}";
+                            await _cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Hotel Cancellation");
+                            cancellationAudit.CashfreeRefundId = refundId;
+                            cancellationAudit.Status = "Initiated";
+                            cancellationAudit.PaymentId = payment.Id;
+                            await _dbContext.SaveChangesAsync();
+                        }
+                    }
+
                     await transaction.CommitAsync();
 
                     try

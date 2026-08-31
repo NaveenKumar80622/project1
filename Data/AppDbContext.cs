@@ -128,6 +128,9 @@ namespace PickNBook.Api.Data
         public DbSet<PendingPaymentBooking> PendingPaymentBookings => Set<PendingPaymentBooking>();
         public DbSet<SupplierFulfillmentExecution> SupplierFulfillmentExecutions => Set<SupplierFulfillmentExecution>();
 
+        // Cancellations and Refunds
+        public DbSet<BookingCancellation> BookingCancellations => Set<BookingCancellation>();
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

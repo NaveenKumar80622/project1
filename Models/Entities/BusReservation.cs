@@ -60,6 +60,7 @@ namespace PickNBook.Api.Models
         public string? SrdvBookingId { get; set; }
         public string? SrdvTicketNo { get; set; }
         public string? SrdvBookingResponseJson { get; set; }
+        public string? CancellationPolicyJson { get; set; }
 
         // Specific SRDV Selected Points
         public string? BoardingPointName { get; set; }
