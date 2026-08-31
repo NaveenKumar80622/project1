@@ -50,7 +50,7 @@ namespace PickNBook.Api.Services.Background
             var orchestrator = scope.ServiceProvider.GetRequiredService<IBookingOrchestratorService>();
 
             var pendingPayments = await dbContext.Payments
-                .Where(p => p.FulfillmentStatus == "Pending")
+                .Where(p => p.FulfillmentStatus == "Pending" && (p.Status == PickNBook.Api.Models.Payments.PaymentStatus.Success || p.Status == "PAID"))
                 .Select(p => p.Id)
                 .ToListAsync(stoppingToken);
 
@@ -111,10 +111,11 @@ namespace PickNBook.Api.Services.Background
 
             var thresholdTime = DateTime.UtcNow.AddMinutes(-10);
 
-            // Find payments that are stuck InProgress or Failed_LocalPersistence
+            // Find payments that are stuck InProgress or Failed_LocalPersistence, BUT only if they are paid
             var strandedPayments = await dbContext.Payments
-                .Where(p => (p.FulfillmentStatus == "InProgress" && p.UpdatedAt < thresholdTime) ||
-                             p.FulfillmentStatus == "Failed_LocalPersistence")
+                .Where(p => ((p.FulfillmentStatus == "InProgress" && p.UpdatedAt < thresholdTime) ||
+                             p.FulfillmentStatus == "Failed_LocalPersistence") &&
+                            (p.Status == PickNBook.Api.Models.Payments.PaymentStatus.Success || p.Status == "PAID"))
                 .ToListAsync(stoppingToken);
 
             foreach (var payment in strandedPayments)

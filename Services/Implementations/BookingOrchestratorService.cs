@@ -29,11 +29,18 @@ namespace PickNBook.Api.Services.Implementations
         {
             // ATOMIC LOCK: Only ONE thread can transition the status from Pending to InProgress.
             var lockAcquired = await _dbContext.Payments
-                .Where(p => p.Id == paymentId && (p.FulfillmentStatus == "Pending" || p.FulfillmentStatus == null))
+                .Where(p => p.Id == paymentId && 
+                           (p.FulfillmentStatus == "Pending" || p.FulfillmentStatus == null) &&
+                           (p.Status == PickNBook.Api.Models.Payments.PaymentStatus.Success || p.Status == "PAID"))
                 .ExecuteUpdateAsync(s => s.SetProperty(p => p.FulfillmentStatus, "InProgress")) == 1;
 
             var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.Id == paymentId);
             if (payment == null) return (false, "Payment not found.");
+
+            if (payment.Status != PickNBook.Api.Models.Payments.PaymentStatus.Success && payment.Status != "PAID")
+            {
+                return (false, "Payment has not been verified as successful. Fulfillment blocked.");
+            }
 
             if (!lockAcquired)
             {
