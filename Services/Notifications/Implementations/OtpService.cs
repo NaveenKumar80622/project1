@@ -26,12 +26,15 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             string challengeId = Guid.NewGuid().ToString("N");
             string hash = HashOtp(otpCode);
 
+            // Dynamically set expiry: 10 minutes for Login, 5 minutes for everything else
+            int expiryMinutes = purpose == "Login" ? 10 : 5;
+
             var otpRecord = new PickNBook.Api.Models.OTP
             {
                 UserId = userId,
                 Code = hash,
                 Purpose = purpose,
-                Expiry = DateTime.UtcNow.AddMinutes(5),
+                Expiry = DateTime.UtcNow.AddMinutes(expiryMinutes),
                 IsUsed = false,
                 ChallengeId = challengeId
             };
