@@ -132,7 +132,10 @@ namespace PickNBook.Api.Services.Implementations
                 byte[] hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(payload));
                 string computedSignature = Convert.ToBase64String(hash);
 
-                return computedSignature == signature;
+                byte[] computedBytes = Convert.FromBase64String(computedSignature);
+                byte[] providedBytes = Convert.FromBase64String(signature);
+
+                return CryptographicOperations.FixedTimeEquals(computedBytes, providedBytes);
             }
             catch (Exception ex)
             {

@@ -54,12 +54,8 @@ namespace PickNBook.Api.Controllers
                     return Unauthorized(new { message = "Missing signature headers" });
                 }
 
-                if (!string.IsNullOrEmpty(version) && version != _settings.ApiVersion)
-                {
-                    _logger.LogWarning("Webhook version mismatch. Expected {Expected}, received {Received}", _settings.ApiVersion, version);
-                    // We don't reject necessarily to prevent retries of bad versions from clogging, 
-                    // but we log it as a warning since parsing might fail or be unexpected.
-                }
+                // Webhook version is intentionally NOT compared against ApiVersion 
+                // since Webhook (e.g. 2023-08-01) and API (e.g. 2026-01-01) versions can be correctly divergent.
 
                 if (!_cashfreeService.VerifyWebhookSignature(rawBody, timestamp, signature))
                 {
