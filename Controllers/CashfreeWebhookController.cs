@@ -103,8 +103,8 @@ namespace PickNBook.Api.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing Cashfree webhook.");
-                // Return OK on error to prevent Cashfree retry storms on permanent failures
-                return Ok(new { message = "Webhook error handled" });
+                // Return 500 to allow Cashfree to retry for temporary internal errors
+                return StatusCode(500, new { message = "Internal processing failure" });
             }
         }
     }
