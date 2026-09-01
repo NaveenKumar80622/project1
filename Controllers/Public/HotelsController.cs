@@ -1188,10 +1188,7 @@ namespace PickNBook.Api.Controllers
                     };
 
                     var calculatedRefund = _refundCalculator.CalculateCustomerRefund(
-                        refundInput,
-                        refundMarkup: false,
-                        refundConvenienceFee: false,
-                        refundCoupon: false);
+                        refundInput);
 
                     booking.CancellationCharges = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
                     booking.RefundAmount = calculatedRefund.FinalCustomerRefundAmount;

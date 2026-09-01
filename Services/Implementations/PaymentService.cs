@@ -262,6 +262,14 @@ namespace PickNBook.Api.Services.Implementations
                     refundRecord.Status = "Completed";
                     refundRecord.CompletedAtUtc = DateTime.UtcNow;
                 }
+                else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
+                {
+                    refundRecord.Status = "RefundFailed";
+                }
+                else if (refundStatus.Equals("PENDING", StringComparison.OrdinalIgnoreCase))
+                {
+                    refundRecord.Status = "RefundInitiated";
+                }
                 else
                 {
                     refundRecord.Status = refundStatus;

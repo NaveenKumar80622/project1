@@ -252,10 +252,7 @@ namespace PickNBook.Api.Services.Background
                         };
 
                         var calculatedRefund = refundCalculator.CalculateCustomerRefund(
-                            refundInput,
-                            refundMarkup: false,
-                            refundConvenienceFee: false,
-                            refundCoupon: false);
+                            refundInput);
                         
                         // Populate BookingCancellation LEDGER
                         cancelRecord.SupplierCancellationCharge = calculatedRefund.SupplierCancellationCharge;
@@ -322,8 +319,17 @@ namespace PickNBook.Api.Services.Background
                             var payment = await dbContext.Payments.FindAsync(new object[] { cancelRecord.PaymentId }, stoppingToken);
                             if (payment != null && payment.CashfreeOrderId != null)
                             {
-                                await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, cancelRecord.CashfreeRefundId, "Flight Cancellation via Background Poller");
-                                cancelRecord.Status = "RefundInitiated";
+                                try
+                                {
+                                    await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, cancelRecord.CashfreeRefundId, "Flight Cancellation via Background Poller");
+                                    cancelRecord.Status = "RefundInitiated";
+                                }
+                                catch (Exception ex)
+                                {
+                                    cancelRecord.Status = "RefundFailed";
+                                    cancelRecord.FailureReason = ex.Message;
+                                    _logger.LogError(ex, "Failed to initiate Cashfree refund for BookingCancellation {CancellationId}", cancelRecord.Id);
+                                }
                             }
                             else
                             {
@@ -339,35 +345,38 @@ namespace PickNBook.Api.Services.Background
 
                         await dbContext.SaveChangesAsync(stoppingToken);
 
-                        // Send Email Notification
-                        try
+                        if (cancelRecord.Status == "RefundInitiated" || cancelRecord.Status == "Completed")
                         {
-                            var emailReq = new PickNBook.Api.Models.DTOs.SendFlightTicketEmailRequest
+                            // Send Email Notification
+                            try
                             {
-                                ToEmail = res.PassengerEmail,
-                                PassengerName = res.PassengerName,
-                                BookingReference = res.BookingReference,
-                                Airline = res.Airline,
-                                Origin = res.FromCity,
-                                Destination = res.ToCity,
-                                DepartureTime = res.DepartureTime,
-                                ArrivalTime = res.ArrivalTime,
-                                Pnr = res.Pnr,
-                                Price = cancelRecord.OriginalCustomerPaid,
-                                Currency = "INR",
-                                NonRefundable = res.NonRefundable,
-                                CancellationCharges = res.CancellationCharges,
-                                IsPartialCancellation = cancelReq.IsPartialCancellation,
-                                Passengers = passengers.Select(p => new PickNBook.Api.Models.DTOs.FlightPassengerTicketDto { FullName = p.FullName, Status = p.Status, SeatNumber = p.SeatNumber }).ToList(),
-                                Segments = res.Segments.Select(s => new PickNBook.Api.Models.DTOs.FlightTicketSegmentDto { Airline = s.Airline, FlightNumber = s.FlightNumber, FromCity = s.FromCity, ToCity = s.ToCity, Status = s.Status }).ToList(),
-                                CancelledPassengers = passengers.Where(p => p.Status == "Cancelled").Select(p => new PickNBook.Api.Models.DTOs.FlightPassengerTicketDto { FullName = p.FullName, SeatNumber = p.SeatNumber, Status = p.Status }).ToList(),
-                                CancelledSegments = res.Segments.Where(s => s.Status == "Cancelled").Select(s => new PickNBook.Api.Models.DTOs.FlightTicketSegmentDto { Airline = s.Airline, FlightNumber = s.FlightNumber, FromCity = s.FromCity, ToCity = s.ToCity, Status = s.Status }).ToList()
-                            };
-                            await emailService.SendFlightCancellationAsync(emailReq, cancelRecord.CustomerRefundAmount);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Failed to send cancellation email for Flight Booking {BookingReference}", res.BookingReference);
+                                var emailReq = new PickNBook.Api.Models.DTOs.SendFlightTicketEmailRequest
+                                {
+                                    ToEmail = res.PassengerEmail,
+                                    PassengerName = res.PassengerName,
+                                    BookingReference = res.BookingReference,
+                                    Airline = res.Airline,
+                                    Origin = res.FromCity,
+                                    Destination = res.ToCity,
+                                    DepartureTime = res.DepartureTime,
+                                    ArrivalTime = res.ArrivalTime,
+                                    Pnr = res.Pnr,
+                                    Price = cancelRecord.OriginalCustomerPaid,
+                                    Currency = "INR",
+                                    NonRefundable = res.NonRefundable,
+                                    CancellationCharges = res.CancellationCharges,
+                                    IsPartialCancellation = cancelReq.IsPartialCancellation,
+                                    Passengers = passengers.Select(p => new PickNBook.Api.Models.DTOs.FlightPassengerTicketDto { FullName = p.FullName, Status = p.Status, SeatNumber = p.SeatNumber }).ToList(),
+                                    Segments = res.Segments.Select(s => new PickNBook.Api.Models.DTOs.FlightTicketSegmentDto { Airline = s.Airline, FlightNumber = s.FlightNumber, FromCity = s.FromCity, ToCity = s.ToCity, Status = s.Status }).ToList(),
+                                    CancelledPassengers = passengers.Where(p => p.Status == "Cancelled").Select(p => new PickNBook.Api.Models.DTOs.FlightPassengerTicketDto { FullName = p.FullName, SeatNumber = p.SeatNumber, Status = p.Status }).ToList(),
+                                    CancelledSegments = res.Segments.Where(s => s.Status == "Cancelled").Select(s => new PickNBook.Api.Models.DTOs.FlightTicketSegmentDto { Airline = s.Airline, FlightNumber = s.FlightNumber, FromCity = s.FromCity, ToCity = s.ToCity, Status = s.Status }).ToList()
+                                };
+                                await emailService.SendFlightCancellationAsync(emailReq, cancelRecord.CustomerRefundAmount);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Failed to send cancellation email for Flight Booking {BookingReference}", res.BookingReference);
+                            }
                         }
                     }
 

@@ -1,3 +1,4 @@
+using PickNBook.Api.Models.Config;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Services.Interfaces;
 using System;
@@ -6,21 +7,25 @@ namespace PickNBook.Api.Services.Implementations
 {
     public class CancellationRefundCalculator : ICancellationRefundCalculator
     {
+        private readonly RefundPolicyOptions _refundOptions;
+
+        public CancellationRefundCalculator(Microsoft.Extensions.Options.IOptions<PickNBook.Api.Models.Config.RefundPolicyOptions> options)
+        {
+            _refundOptions = options.Value;
+        }
+
         public RefundCalculationResult CalculateCustomerRefund(
-            RefundCalculationInput input,
-            bool refundMarkup,
-            bool refundConvenienceFee,
-            bool refundCoupon)
+            RefundCalculationInput input)
         {
             decimal supplierRefund = input.SupplierRefundAmount;
 
-            decimal markupRefunded = refundMarkup ? input.MarkupAmount : 0m;
+            decimal markupRefunded = _refundOptions.RefundMarkup ? input.MarkupAmount : 0m;
             decimal markupRetained = input.MarkupAmount - markupRefunded;
 
-            decimal feeRefunded = refundConvenienceFee ? input.ConvenienceFee : 0m;
+            decimal feeRefunded = _refundOptions.RefundConvenienceFee ? input.ConvenienceFee : 0m;
             decimal feeRetained = input.ConvenienceFee - feeRefunded;
 
-            decimal couponForfeited = refundCoupon ? 0m : input.DiscountAmount;
+            decimal couponForfeited = _refundOptions.RefundCoupon ? 0m : input.DiscountAmount;
             decimal couponRefunded = input.DiscountAmount - couponForfeited;
 
             decimal customerRefund = supplierRefund + markupRefunded + feeRefunded - couponForfeited;

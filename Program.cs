@@ -122,6 +122,8 @@ builder.Services.Configure<WhatsAppSettings>(
     builder.Configuration.GetSection("WhatsAppSettings"));
 builder.Services.Configure<SmsSettings>(
     builder.Configuration.GetSection("SmsSettings"));
+builder.Services.Configure<PickNBook.Api.Models.Config.RefundPolicyOptions>(
+    builder.Configuration.GetSection("RefundPolicy"));
 
 builder.Services.AddScoped<IEmailService, EmailService>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateService>();

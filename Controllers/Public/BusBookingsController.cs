@@ -1609,10 +1609,7 @@ namespace PickNBook.Api.Controllers
                     };
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(
-                        refundInput,
-                        refundMarkup: false,
-                        refundConvenienceFee: false,
-                        refundCoupon: false);
+                        refundInput);
 
                     booking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
                     booking.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
@@ -1650,10 +1647,19 @@ namespace PickNBook.Api.Controllers
                         if (payment != null && payment.CashfreeOrderId != null)
                         {
                             string refundId = $"REF-CANCEL-{booking.Id}-{cancellationAudit.Id}";
-                            await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Bus Cancellation");
                             cancellationAudit.CashfreeRefundId = refundId;
-                            cancellationAudit.Status = "RefundInitiated";
                             cancellationAudit.PaymentId = payment.Id;
+                            try
+                            {
+                                await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Bus Cancellation");
+                                cancellationAudit.Status = "RefundInitiated";
+                            }
+                            catch (Exception ex)
+                            {
+                                cancellationAudit.Status = "RefundFailed";
+                                cancellationAudit.FailureReason = ex.Message;
+                                logger.LogError(ex, "Failed to initiate Cashfree refund for Bus Booking {BookingId}", booking.Id);
+                            }
                             await dbContext.SaveChangesAsync();
                         }
                     }
@@ -1858,10 +1864,7 @@ namespace PickNBook.Api.Controllers
                     };
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(
-                        refundInput,
-                        refundMarkup: false,
-                        refundConvenienceFee: false,
-                        refundCoupon: false);
+                        refundInput);
 
                     booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
                     booking.RefundAmountInr = (booking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
@@ -1899,10 +1902,19 @@ namespace PickNBook.Api.Controllers
                         if (payment != null && payment.CashfreeOrderId != null)
                         {
                             string refundId = $"REF-CANCEL-{booking.Id}-{cancellationAudit.Id}";
-                            await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Bus Partial Cancellation");
                             cancellationAudit.CashfreeRefundId = refundId;
-                            cancellationAudit.Status = "RefundInitiated";
                             cancellationAudit.PaymentId = payment.Id;
+                            try
+                            {
+                                await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Bus Partial Cancellation");
+                                cancellationAudit.Status = "RefundInitiated";
+                            }
+                            catch (Exception ex)
+                            {
+                                cancellationAudit.Status = "RefundFailed";
+                                cancellationAudit.FailureReason = ex.Message;
+                                logger.LogError(ex, "Failed to initiate Cashfree refund for Bus Booking {BookingId} (Partial)", booking.Id);
+                            }
                             await dbContext.SaveChangesAsync();
                         }
                     }
