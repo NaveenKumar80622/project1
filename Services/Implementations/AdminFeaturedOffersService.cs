@@ -128,8 +128,11 @@ namespace PickNBook.Api.Services
         private async Task<string> SaveImageAsync(
     IFormFile file)
         {
+            var webRootPath = _environment.WebRootPath ?? 
+                Path.Combine(_environment.ContentRootPath, "wwwroot");
+                
             var uploadsFolder = Path.Combine(
-                _environment.WebRootPath,
+                webRootPath,
                 "offers");
 
             if (!Directory.Exists(uploadsFolder))
