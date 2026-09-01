@@ -11,11 +11,16 @@ namespace PickNBook.Api.Services.Notifications.Implementations
     {
         private readonly AppDbContext _dbContext;
         private readonly IServiceProvider _serviceProvider;
+        private readonly PickNBook.Api.Models.Config.NotificationRoutingSettings _routingSettings;
 
-        public NotificationService(AppDbContext dbContext, IServiceProvider serviceProvider)
+        public NotificationService(
+            AppDbContext dbContext, 
+            IServiceProvider serviceProvider, 
+            Microsoft.Extensions.Options.IOptions<PickNBook.Api.Models.Config.NotificationRoutingSettings> routingOptions)
         {
             _dbContext = dbContext;
             _serviceProvider = serviceProvider;
+            _routingSettings = routingOptions.Value;
         }
 
         public Task EnqueueAsync(string eventType, string channel, string recipient, string templateKey, object payload, string? bookingId = null, string? userId = null)
@@ -52,13 +57,31 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 content = ReplaceVariables(template.Body, payload);
             }
 
-            INotificationProvider? provider = channel switch
+            INotificationProvider? provider = null;
+            if (channel == "SMS")
             {
-                "SMS" => _serviceProvider.GetService<ISmsProvider>(),
-                "WhatsApp" => _serviceProvider.GetService<IWhatsAppProvider>(),
-                "Email" => _serviceProvider.GetService<IEmailProvider>(),
-                _ => null
-            };
+                var providers = _serviceProvider.GetServices<ISmsProvider>();
+                if (_routingSettings.SmsProviderRoutes.TryGetValue(eventType, out var providerName))
+                {
+                    provider = providers.FirstOrDefault(p => p.ProviderName == providerName);
+                    if (provider == null)
+                    {
+                        throw new InvalidOperationException($"Configured SMS provider '{providerName}' not found for event '{eventType}'.");
+                    }
+                }
+                else
+                {
+                    provider = providers.FirstOrDefault(p => p.ProviderName == "Mock");
+                }
+            }
+            else if (channel == "WhatsApp")
+            {
+                provider = _serviceProvider.GetService<IWhatsAppProvider>();
+            }
+            else if (channel == "Email")
+            {
+                provider = _serviceProvider.GetService<IEmailProvider>();
+            }
 
             if (provider == null) return false;
 

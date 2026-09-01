@@ -6,6 +6,8 @@ namespace PickNBook.Api.Services.Notifications.Providers
 {
     public class MockSmsProvider : ISmsProvider
     {
+        public string ProviderName => "Mock";
+
         private readonly ILogger<MockSmsProvider> _logger;
 
         public MockSmsProvider(ILogger<MockSmsProvider> logger)

@@ -36,7 +36,7 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 ```
 
 **SMS/WhatsApp Template**
-*Body*: `Your PickNBook login OTP is {OtpCode}. Do not share this with anyone.`
+*Body*: `Dear User, your OTP for login to ShyamAgro is {OtpCode}. This OTP is valid for 10 minutes. Do not share it with anyone`
 
 ---
 

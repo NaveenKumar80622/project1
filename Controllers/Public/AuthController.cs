@@ -507,6 +507,84 @@ namespace PickNBook.Api.Controllers
             });
         }
 
+        // ---------------- MOBILE OTP LOGIN ----------------
+        [HttpPost("send-login-otp")]
+        public async Task<IActionResult> SendLoginOtp(SendLoginOtpRequest request)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var normalizedPhone = request.PhoneNumber.Trim();
+            
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.PhoneNumber == normalizedPhone);
+
+            if (user == null)
+                return Unauthorized(new { success = false, message = "Mobile number not registered." });
+
+            if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
+                return Unauthorized(new { success = false, message = "Your account is inactive. Please contact support." });
+
+            if (AuthRoles.IsAdminScope(user.Role))
+                return StatusCode(StatusCodes.Status403Forbidden, new { success = false, message = "Admin users must login using admin OTP flow." });
+
+            await _context.OTPs
+                .Where(o =>
+                    o.PhoneNumber == normalizedPhone &&
+                    o.Purpose == OtpPurposes.Login &&
+                    !o.IsUsed)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(o => o.IsUsed, true));
+
+            await _otpService.GenerateAndSendOtpAsync(normalizedPhone, "SMS", OtpPurposes.Login, user.Id);
+
+            return Ok(new { success = true, message = "Login OTP sent successfully." });
+        }
+
+        [HttpPost("verify-login-otp")]
+        public async Task<IActionResult> VerifyLoginOtp(VerifyLoginOtpRequest request)
+        {
+            if (!ModelState.IsValid)
+                return BadRequest(ModelState);
+
+            var normalizedPhone = request.PhoneNumber.Trim();
+
+            var (isValid, message) = await _otpService.VerifyOtpAsync(normalizedPhone, OtpPurposes.Login, request.Otp);
+
+            if (!isValid)
+                return BadRequest(new { success = false, message = message });
+
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.PhoneNumber == normalizedPhone);
+
+            if (user == null)
+                return Unauthorized(new { success = false, message = "User not found." });
+
+            if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
+                return Unauthorized(new { success = false, message = "Your account is inactive. Please contact support." });
+
+            var token = _jwtService.GenerateToken(user, user.Role);
+
+            var guestId = HttpContext.Request.Headers["X-Guest-Id"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(guestId))
+            {
+                await MigrateGuestDataAsync(guestId, user.Id.ToString());
+            }
+
+            return Ok(new
+            {
+                token,
+                userId = user.Id,
+                role = user.Role,
+                user = new
+                {
+                    userId = user.Id.ToString(),
+                    name = user.Role == AuthRoles.Agent ? user.CompanyName : $"{user.FirstName} {user.LastName}",
+                    email = user.Email,
+                    role = user.Role
+                }
+            });
+        }
+
         // ---------------- ADMIN LOGIN STEP-1 (PASSWORD -> SEND OTP) ----------------
         [HttpPost("admin/login/request-otp")]
         public async Task<IActionResult> RequestAdminLoginOtp(AdminLoginRequest request)

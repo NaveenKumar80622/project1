@@ -133,9 +133,16 @@ builder.Services.AddHttpClient<IWhatsAppService, WhatsAppService>();
 builder.Services.AddHttpClient<ISmsService, SmsService>();
 
 // Centralized Notification Architecture DI
+builder.Services.Configure<PickNBook.Api.Models.Config.PointerItSmsSettings>(
+    builder.Configuration.GetSection("PointerItSms"));
+builder.Services.Configure<PickNBook.Api.Models.Config.NotificationRoutingSettings>(
+    builder.Configuration.GetSection("NotificationRouting"));
+
 builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.INotificationService, PickNBook.Api.Services.Notifications.Implementations.NotificationService>();
 builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.IOtpService, PickNBook.Api.Services.Notifications.Implementations.OtpService>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.MockSmsProvider>();
+builder.Services.AddHttpClient<PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider>();
+builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IWhatsAppProvider, PickNBook.Api.Services.Notifications.Providers.MockWhatsAppProvider>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.NotificationOutboxWorker>();
 
