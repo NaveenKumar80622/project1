@@ -38,33 +38,23 @@ namespace PickNBook.Api.Services.Notifications.Providers
                     ? _settings.Url.Substring(0, _settings.Url.Length - 10) 
                     : _settings.Url;
 
-                var builder = new UriBuilder(baseUrl);
-                var query = HttpUtility.ParseQueryString(builder.Query);
-
-                query["username"] = _settings.Username;
-                query["password"] = _settings.Password;
-                query["unicode"] = "false";
-                query["from"] = _settings.SenderId;
-                
-                string formattedRecipient = recipient.Trim();
-                if (formattedRecipient.StartsWith("+"))
+                var parameters = new Dictionary<string, string>
                 {
-                    formattedRecipient = formattedRecipient.Substring(1); // PointerIT expects numbers without +
-                }
-                else if (formattedRecipient.Length == 10 && formattedRecipient.All(char.IsDigit))
-                {
-                    formattedRecipient = "91" + formattedRecipient; // Default to India country code
-                }
-                
-                query["to"] = formattedRecipient;
-                query["dltPrincipalEntityId"] = _settings.PrincipalEntityId;
-                query["dltContentId"] = _settings.ContentId;
-                query["text"] = content;
+                    { "username", _settings.Username },
+                    { "password", _settings.Password },
+                    { "unicode", "false" },
+                    { "from", _settings.SenderId },
+                    { "to", recipient },
+                    { "dltPrincipalEntityId", _settings.PrincipalEntityId },
+                    { "dltContentId", _settings.ContentId },
+                    { "text", content }
+                };
 
-                builder.Query = query.ToString();
-                var requestUrl = builder.ToString();
+                var formContent = new FormUrlEncodedContent(parameters);
 
-                var response = await client.PostAsync(requestUrl, null);
+                // Send POST with FormUrlEncodedContent instead of query string to prevent 
+                // HttpClient from automatically logging the password and OTP in the URL.
+                var response = await client.PostAsync(baseUrl, formContent);
                 var responseContent = await response.Content.ReadAsStringAsync();
                 
                 if (!response.IsSuccessStatusCode)
