@@ -31,6 +31,13 @@ public class GlobalExceptionHandlingMiddleware
         {
             // Log full exception with the system request correlation ID
             _logger.LogError(ex, "An unhandled exception occurred. TraceIdentifier: {TraceId}", context.TraceIdentifier);
+            
+            try 
+            { 
+                System.IO.File.AppendAllText("Logs/test-error.txt", $"\n\n--- EXCEPTION [{DateTime.UtcNow}] ---\n{ex.ToString()}\n"); 
+            } 
+            catch { }
+
             await HandleExceptionAsync(context, ex);
         }
     }

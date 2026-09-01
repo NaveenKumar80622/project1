@@ -45,7 +45,18 @@ namespace PickNBook.Api.Services.Notifications.Providers
                 query["password"] = _settings.Password;
                 query["unicode"] = "false";
                 query["from"] = _settings.SenderId;
-                query["to"] = recipient;
+                
+                string formattedRecipient = recipient.Trim();
+                if (formattedRecipient.StartsWith("+"))
+                {
+                    formattedRecipient = formattedRecipient.Substring(1); // PointerIT expects numbers without +
+                }
+                else if (formattedRecipient.Length == 10 && formattedRecipient.All(char.IsDigit))
+                {
+                    formattedRecipient = "91" + formattedRecipient; // Default to India country code
+                }
+                
+                query["to"] = formattedRecipient;
                 query["dltPrincipalEntityId"] = _settings.PrincipalEntityId;
                 query["dltContentId"] = _settings.ContentId;
                 query["text"] = content;
