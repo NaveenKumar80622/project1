@@ -251,9 +251,24 @@ namespace PickNBook.Api.Services.Implementations
 
             if (refundRecord != null)
             {
-                refundRecord.Status = refundStatus;
+                if (refundRecord.Status == "Completed")
+                {
+                    _logger.LogInformation("Refund for CashfreeRefundId {RefundId} is already Completed. Ignoring webhook.", cashfreeRefundId);
+                    return true;
+                }
+
+                if (refundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                {
+                    refundRecord.Status = "Completed";
+                    refundRecord.CompletedAtUtc = DateTime.UtcNow;
+                }
+                else
+                {
+                    refundRecord.Status = refundStatus;
+                }
+
                 await _dbContext.SaveChangesAsync();
-                _logger.LogInformation("Updated refund status for CashfreeRefundId {RefundId} to {Status}", cashfreeRefundId, refundStatus);
+                _logger.LogInformation("Updated refund status for CashfreeRefundId {RefundId} to {Status}", cashfreeRefundId, refundRecord.Status);
                 return true;
             }
 

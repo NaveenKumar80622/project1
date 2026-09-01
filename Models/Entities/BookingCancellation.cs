@@ -1,9 +1,11 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using Microsoft.EntityFrameworkCore;
 
 namespace PickNBook.Api.Models.Entities
 {
+    [Index(nameof(CashfreeRefundId), IsUnique = true)]
     public class BookingCancellation
     {
         [Key]

@@ -153,19 +153,42 @@ namespace PickNBook.Api.Services.Background
             var srdvFlightService = scope.ServiceProvider.GetRequiredService<ISrdvFlightService>();
             var cashfreeService = scope.ServiceProvider.GetRequiredService<ICashfreeService>();
             var refundCalculator = scope.ServiceProvider.GetRequiredService<ICancellationRefundCalculator>();
+            var emailService = scope.ServiceProvider.GetRequiredService<PickNBook.Api.Services.ITicketEmailService>();
 
-            var pendingRequests = await dbContext.FlightCancellationRequests
-                .Where(c => c.CancellationStatus == "Pending" && c.SrdvChangeRequestId != null)
+            var pendingCancellations = await dbContext.BookingCancellations
+                .Where(c => c.Status == "Pending" && c.BookingType == "Flight" && c.SrdvChangeRequestId != null)
+                .Select(c => c.Id)
                 .ToListAsync(stoppingToken);
 
-            foreach (var cancelReq in pendingRequests)
+            foreach (var cancelId in pendingCancellations)
             {
                 try
                 {
+                    // Atomic Transition: Pending -> Processing
+                    var rowsAffected = await dbContext.BookingCancellations
+                        .Where(c => c.Id == cancelId && c.Status == "Pending")
+                        .ExecuteUpdateAsync(s => s.SetProperty(p => p.Status, "Processing"), stoppingToken);
+
+                    if (rowsAffected == 0) continue; // Another worker claimed it
+
+                    var cancelRecord = await dbContext.BookingCancellations.FindAsync(new object[] { cancelId }, stoppingToken);
+                    if (cancelRecord == null) continue;
+
+                    var cancelReq = await dbContext.FlightCancellationRequests
+                        .FirstOrDefaultAsync(c => c.SrdvChangeRequestId == cancelRecord.SrdvChangeRequestId, stoppingToken);
+
+                    if (cancelReq == null)
+                    {
+                        cancelRecord.Status = "Failed";
+                        cancelRecord.FailureReason = "FlightCancellationRequest not found.";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        continue;
+                    }
+
                     var request = new PickNBook.Api.Models.DTOs.GetCancelStatusRequestDto
                     {
                         EndUserIp = "127.0.0.1",
-                        ChangeRequestId = cancelReq.SrdvChangeRequestId!
+                        ChangeRequestId = cancelRecord.SrdvChangeRequestId!
                     };
 
                     var responseRaw = await srdvFlightService.GetCancelStatusRawAsync(request);
@@ -183,7 +206,13 @@ namespace PickNBook.Api.Services.Background
                         if (status.ValueKind == System.Text.Json.JsonValueKind.String && status.ToString() == "1") isSuccess = true;
                     }
                     
-                    if (!isSuccess) continue; // Still pending or failed at SRDV, wait for next poll
+                    if (!isSuccess)
+                    {
+                        // Rollback to Pending for next poll
+                        cancelRecord.Status = "Pending";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        continue;
+                    }
 
                     string cStatus = "Completed";
                     if (resp.TryGetProperty("CancelStatus", out var csNode))
@@ -192,6 +221,7 @@ namespace PickNBook.Api.Services.Background
                     cancelReq.CancellationStatus = cStatus;
                     cancelReq.CustomerRefundStatus = cStatus;
                     cancelReq.AdminRefundStatus = cStatus;
+                    cancelRecord.SrdvStatus = cStatus;
 
                     decimal refundAmount = 0;
                     if (resp.TryGetProperty("RefundAmount", out var rAmt))
@@ -212,11 +242,11 @@ namespace PickNBook.Api.Services.Background
                     {
                         var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
                         {
-                            OriginalCustomerPaid = res.CustomerFareInr,
-                            SupplierAmount = res.NetFareInr,
-                            MarkupAmount = res.MarkupAmount,
-                            DiscountAmount = res.CouponDiscount,
-                            ConvenienceFee = 0m,
+                            OriginalCustomerPaid = cancelRecord.OriginalCustomerPaid,
+                            SupplierAmount = cancelRecord.SupplierAmount,
+                            MarkupAmount = cancelRecord.MarkupAmount,
+                            DiscountAmount = cancelRecord.DiscountAmount,
+                            ConvenienceFee = cancelRecord.ConvenienceFee,
                             SupplierCancellationCharge = cancellationCharge,
                             SupplierRefundAmount = refundAmount
                         };
@@ -227,6 +257,16 @@ namespace PickNBook.Api.Services.Background
                             refundConvenienceFee: false,
                             refundCoupon: false);
                         
+                        // Populate BookingCancellation LEDGER
+                        cancelRecord.SupplierCancellationCharge = calculatedRefund.SupplierCancellationCharge;
+                        cancelRecord.SupplierRefundAmount = calculatedRefund.SupplierRefundAmount;
+                        cancelRecord.MarkupRefunded = calculatedRefund.MarkupRefunded;
+                        cancelRecord.CouponForfeited = calculatedRefund.CouponForfeited;
+                        cancelRecord.FeeRefunded = calculatedRefund.FeeRefunded;
+                        cancelRecord.CustomerRefundAmount = calculatedRefund.FinalCustomerRefundAmount;
+                        cancelRecord.CashfreeRefundId = $"REF-CANCEL-{res.Id}-{cancelRecord.Id}";
+
+                        // Update FlightCancellationRequest
                         cancelReq.CustomerRefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                         cancelReq.AdminRefundAmountInr = refundAmount;
                         cancelReq.CustomerCancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
@@ -234,9 +274,10 @@ namespace PickNBook.Api.Services.Background
                         
                         res.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
                         res.CancelledAtUtc = DateTime.UtcNow;
-                        res.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
-                        res.CancellationChargeInr = cancellationCharge;
 
+                        // DO NOT Overwrite financial snapshot on FlightReservation (NetFareInr, TotalPriceInr, etc).
+                        // Just update status properties.
+                        
                         var passengers = await dbContext.FlightReservationPassengers.Where(p => p.FlightReservationId == res.Id).ToListAsync(stoppingToken);
 
                         if (cancelReq.IsPartialCancellation)
@@ -272,24 +313,69 @@ namespace PickNBook.Api.Services.Background
                             foreach (var pax in passengers) pax.Status = "Cancelled";
                         }
 
-                        // Initiate Cashfree Refund
+                        // PERSIST FIRST
+                        await dbContext.SaveChangesAsync(stoppingToken);
+
+                        // THEN Initiate Cashfree Refund
                         if (calculatedRefund.FinalCustomerRefundAmount > 0)
                         {
-                            var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == res.UserId && p.BookingReferenceId == res.Id && p.BookingType == "Flight", stoppingToken);
+                            var payment = await dbContext.Payments.FindAsync(new object[] { cancelRecord.PaymentId }, stoppingToken);
                             if (payment != null && payment.CashfreeOrderId != null)
                             {
-                                string refundId = $"REF-CANCEL-{res.Id}-{cancelReq.Id}";
-                                await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Flight Cancellation via Background Poller");
+                                await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, cancelRecord.CashfreeRefundId, "Flight Cancellation via Background Poller");
+                                cancelRecord.Status = "RefundInitiated";
                             }
+                            else
+                            {
+                                cancelRecord.Status = "Failed";
+                                cancelRecord.FailureReason = "Payment or CashfreeOrderId missing.";
+                            }
+                        }
+                        else
+                        {
+                            cancelRecord.Status = "Completed";
+                            cancelRecord.CompletedAtUtc = DateTime.UtcNow;
+                        }
+
+                        await dbContext.SaveChangesAsync(stoppingToken);
+
+                        // Send Email Notification
+                        try
+                        {
+                            var emailReq = new PickNBook.Api.Models.DTOs.SendFlightTicketEmailRequest
+                            {
+                                ToEmail = res.PassengerEmail,
+                                PassengerName = res.PassengerName,
+                                BookingReference = res.BookingReference,
+                                Airline = res.Airline,
+                                Origin = res.FromCity,
+                                Destination = res.ToCity,
+                                DepartureTime = res.DepartureTime,
+                                ArrivalTime = res.ArrivalTime,
+                                Pnr = res.Pnr,
+                                Price = cancelRecord.OriginalCustomerPaid,
+                                Currency = "INR",
+                                NonRefundable = res.NonRefundable,
+                                CancellationCharges = res.CancellationCharges,
+                                IsPartialCancellation = cancelReq.IsPartialCancellation,
+                                Passengers = passengers.Select(p => new PickNBook.Api.Models.DTOs.FlightPassengerTicketDto { FullName = p.FullName, Status = p.Status, SeatNumber = p.SeatNumber }).ToList(),
+                                Segments = res.Segments.Select(s => new PickNBook.Api.Models.DTOs.FlightTicketSegmentDto { Airline = s.Airline, FlightNumber = s.FlightNumber, FromCity = s.FromCity, ToCity = s.ToCity, Status = s.Status }).ToList(),
+                                CancelledPassengers = passengers.Where(p => p.Status == "Cancelled").Select(p => new PickNBook.Api.Models.DTOs.FlightPassengerTicketDto { FullName = p.FullName, SeatNumber = p.SeatNumber, Status = p.Status }).ToList(),
+                                CancelledSegments = res.Segments.Where(s => s.Status == "Cancelled").Select(s => new PickNBook.Api.Models.DTOs.FlightTicketSegmentDto { Airline = s.Airline, FlightNumber = s.FlightNumber, FromCity = s.FromCity, ToCity = s.ToCity, Status = s.Status }).ToList()
+                            };
+                            await emailService.SendFlightCancellationAsync(emailReq, cancelRecord.CustomerRefundAmount);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to send cancellation email for Flight Booking {BookingReference}", res.BookingReference);
                         }
                     }
 
-                    await dbContext.SaveChangesAsync(stoppingToken);
                     _logger.LogInformation("Successfully polled and processed flight cancellation for ChangeRequestId {ChangeRequestId}", cancelReq.SrdvChangeRequestId);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Failed to poll flight cancellation for ChangeRequestId {ChangeRequestId}", cancelReq.SrdvChangeRequestId);
+                    _logger.LogError(ex, "Failed to poll flight cancellation for Id {Id}", cancelId);
                 }
             }
         }

@@ -13,6 +13,8 @@ using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PickNBook.Api.Models.Config;
+using PickNBook.Api.Models.DTOs;
+using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
 
 namespace PickNBook.Api.Controllers.Public
@@ -1966,6 +1968,27 @@ namespace PickNBook.Api.Controllers.Public
                         reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
                         
                         _dbContext.FlightCancellationRequests.Add(cancelReq);
+                        
+                        // Create BookingCancellation as the single financial ledger
+                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                        var bookingCancellation = new BookingCancellation
+                        {
+                            BookingReference = reservation.BookingReference,
+                            BookingType = "Flight",
+                            PaymentId = payment?.Id ?? 0,
+                            UserId = reservation.UserId,
+                            OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
+                            SupplierAmount = reservation.NetFareInr,
+                            MarkupAmount = reservation.MarkupAmount,
+                            DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
+                            ConvenienceFee = payment?.ConvenienceFee ?? 0m,
+                            SrdvChangeRequestId = changeRequestId,
+                            Status = "Pending",
+                            SrdvStatus = "Pending",
+                            CreatedAtUtc = DateTime.UtcNow
+                        };
+                        _dbContext.BookingCancellations.Add(bookingCancellation);
+                        
                         await _dbContext.SaveChangesAsync();
                     }
                 }
@@ -2018,197 +2041,11 @@ namespace PickNBook.Api.Controllers.Public
                     if (errCode.ValueKind == JsonValueKind.String && (errCode.ToString() == "0" || errCode.ToString() == "")) isSuccess = true;
                     if (errCode.ValueKind == JsonValueKind.Null) isSuccess = true;
                 }
-
                 if (isSuccess)
                 {
-                    string changeRequestId = request.ChangeRequestId;
-                    if (!string.IsNullOrEmpty(changeRequestId))
-                    {
-                        var cancelReq = await _dbContext.FlightCancellationRequests.FirstOrDefaultAsync(c => c.SrdvChangeRequestId == changeRequestId);
-                        if (cancelReq != null)
-                        {
-                            var res = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(x => x.Id == cancelReq.FlightReservationId);
-                            if (res != null) 
-                            {
-                                string cStatus = "Completed";
-                                if (resp.TryGetProperty("CancelStatus", out var csNode))
-                                    cStatus = csNode.ToString() ?? "Completed";
-                                
-                                cancelReq.CancellationStatus = cStatus;
-                                cancelReq.CustomerRefundStatus = cStatus;
-                                cancelReq.AdminRefundStatus = cStatus;
-
-                                decimal refundAmount = 0;
-                                if (resp.TryGetProperty("RefundAmount", out var rAmt))
-                                {
-                                    if (rAmt.ValueKind == JsonValueKind.Number)
-                                        refundAmount = rAmt.GetDecimal();
-                                    else if (rAmt.ValueKind == JsonValueKind.String && decimal.TryParse(rAmt.ToString(), out var rAmtDec))
-                                        refundAmount = rAmtDec;
-                                }
-
-                                decimal cancellationCharge = 0;
-                                if (resp.TryGetProperty("CancellationCharge", out var cCharge))
-                                {
-                                    if (cCharge.ValueKind == JsonValueKind.Number)
-                                        cancellationCharge = cCharge.GetDecimal();
-                                    else if (cCharge.ValueKind == JsonValueKind.String && decimal.TryParse(cCharge.ToString(), out var cChargeDec))
-                                        cancellationCharge = cChargeDec;
-                                }
-
-                                var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
-                                {
-                                    OriginalCustomerPaid = res.CustomerFareInr,
-                                    SupplierAmount = res.NetFareInr,
-                                    MarkupAmount = res.MarkupAmount,
-                                    DiscountAmount = res.CouponDiscount,
-                                    ConvenienceFee = 0m,
-                                    SupplierCancellationCharge = cancellationCharge,
-                                    SupplierRefundAmount = refundAmount
-                                };
-
-                                var calculatedRefund = _refundCalculator.CalculateCustomerRefund(
-                                    refundInput,
-                                    refundMarkup: false,
-                                    refundConvenienceFee: false,
-                                    refundCoupon: false);
-                                
-                                cancelReq.CustomerRefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
-                                cancelReq.AdminRefundAmountInr = refundAmount;
-                                cancelReq.CustomerCancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                                cancelReq.AdminCancellationChargeInr = cancellationCharge;
-                                
-                                res.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
-                                res.CancelledAtUtc = DateTime.UtcNow;
-                                res.CancellationReason = !string.IsNullOrWhiteSpace(cancelReq.CustomerRemark) ? cancelReq.CustomerRemark 
-                                                       : (!string.IsNullOrWhiteSpace(cancelReq.SupplierRemark) ? cancelReq.SupplierRemark 
-                                                       : (!string.IsNullOrWhiteSpace(cancelReq.AdminRemark) ? cancelReq.AdminRemark 
-                                                       : "Cancelled via API / Provider"));
-                                
-                                res.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
-                                res.CancellationChargeInr = cancellationCharge;
-
-                                var passengers = await _dbContext.FlightReservationPassengers.Where(p => p.FlightReservationId == res.Id).ToListAsync();
-
-                                if (cancelReq.IsPartialCancellation)
-                                {
-                                    if (!string.IsNullOrEmpty(cancelReq.CancelledSectorsJson))
-                                    {
-                                        var sectors = System.Text.Json.JsonSerializer.Deserialize<List<ChangeRequestSectorDto>>(cancelReq.CancelledSectorsJson);
-                                        if (sectors != null)
-                                        {
-                                            foreach (var sec in sectors)
-                                            {
-                                                var matchedSeg = res.Segments.FirstOrDefault(s => string.Equals(s.FromCity, sec.Origin, StringComparison.OrdinalIgnoreCase) && string.Equals(s.ToCity, sec.Destination, StringComparison.OrdinalIgnoreCase));
-                                                if (matchedSeg != null) matchedSeg.Status = "Cancelled";
-                                            }
-                                        }
-                                    }
-                                    if (!string.IsNullOrEmpty(cancelReq.CancelledPassengersJson))
-                                    {
-                                        var paxs = System.Text.Json.JsonSerializer.Deserialize<List<ChangeRequestTicketDataDto>>(cancelReq.CancelledPassengersJson);
-                                        if (paxs != null)
-                                        {
-                                            foreach (var px in paxs)
-                                            {
-                                                var matchedPx = passengers.FirstOrDefault(p => string.Equals(p.FirstName, px.FirstName, StringComparison.OrdinalIgnoreCase) && string.Equals(p.LastName, px.LastName, StringComparison.OrdinalIgnoreCase));
-                                                if (matchedPx != null) matchedPx.Status = "Cancelled";
-                                            }
-                                        }
-                                    }
-                                }
-                                else
-                                {
-                                    foreach (var seg in res.Segments) seg.Status = "Cancelled";
-                                    foreach (var pax in passengers) pax.Status = "Cancelled";
-                                }
-
-                                await _dbContext.SaveChangesAsync();
-
-                                // Dispatch Cancellation email
-                                try
-                                {
-                                    global::User? agentInfo = null;
-                                    if (int.TryParse(res.UserId, out var aId) && aId > 0)
-                                    {
-                                        agentInfo = await _dbContext.Users.FindAsync(aId);
-                                    }
-                                    
-                                    var emailReq = new SendFlightTicketEmailRequest
-                                    {
-                                        ToEmail = string.IsNullOrEmpty(res.PassengerEmail) ? (agentInfo?.Email ?? "") : res.PassengerEmail,
-                                        PassengerName = res.PassengerName,
-                                        BookingReference = res.BookingReference,
-                                        Airline = res.Airline,
-                                        Origin = res.FromCity,
-                                        Destination = res.ToCity,
-                                        DepartureTime = res.DepartureTime,
-                                        ArrivalTime = res.ArrivalTime,
-                                        Pnr = res.Pnr,
-                                        Price = res.TotalPriceInr,
-                                        Currency = "INR",
-                                        NonRefundable = res.NonRefundable,
-                                        CancellationCharges = res.CancellationCharges,
-                                        AgentCompanyName = agentInfo?.CompanyName,
-                                        AgentLogoUrl = agentInfo?.AgentLogoUrl,
-                                        Passengers = passengers
-                                                        .Select(p => new FlightPassengerTicketDto {
-                                                            FullName = p.FullName,
-                                                            PassengerType = p.PassengerType,
-                                                            Gender = p.Gender,
-                                                            SeatNumber = p.SeatNumber,
-                                                            TicketNumber = p.TicketNumber,
-                                                            Status = p.Status
-                                                        }).ToList(),
-                                        Segments = res.Segments.Select(s => new FlightTicketSegmentDto {
-                                            Airline = s.Airline,
-                                            FlightNumber = s.FlightNumber,
-                                            FromCity = s.FromCity,
-                                            ToCity = s.ToCity,
-                                            DepartureTime = s.DepartureTime,
-                                            ArrivalTime = s.ArrivalTime,
-                                            Pnr = s.Pnr,
-                                            Status = s.Status
-                                        }).ToList(),
-                                        IsPartialCancellation = cancelReq.IsPartialCancellation,
-                                        CancelledPassengers = passengers.Where(p => p.Status == "Cancelled")
-                                                        .Select(p => new FlightPassengerTicketDto {
-                                                            FullName = p.FullName,
-                                                            PassengerType = p.PassengerType,
-                                                            Gender = p.Gender,
-                                                            SeatNumber = p.SeatNumber,
-                                                            TicketNumber = p.TicketNumber,
-                                                            Status = p.Status
-                                                        }).ToList(),
-                                        CancelledSegments = res.Segments.Where(s => s.Status == "Cancelled").Select(s => new FlightTicketSegmentDto {
-                                            Airline = s.Airline,
-                                            FlightNumber = s.FlightNumber,
-                                            FromCity = s.FromCity,
-                                            ToCity = s.ToCity,
-                                            DepartureTime = s.DepartureTime,
-                                            ArrivalTime = s.ArrivalTime,
-                                            Pnr = s.Pnr,
-                                            Status = s.Status
-                                        }).ToList()
-                                    };
-                                    var backgroundJobQueue = HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.IBackgroundJobQueue>();
-                                    backgroundJobQueue.QueueBackgroundWorkItem(async (sp, ct) =>
-                                    {
-                                        var scopedEmailService = sp.GetRequiredService<ITicketEmailService>();
-                                        await scopedEmailService.SendFlightCancellationAsync(emailReq, refundAmount);
-                                    });
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, "Failed to send cancellation email for Booking {BookingReference}", res.BookingReference);
-                                }
-                            }
-                            else
-                            {
-                                await _dbContext.SaveChangesAsync();
-                            }
-                        }
-                    }
+                    // Note: Actual refund calculation, persistence, and Cashfree refund initiation
+                    // are now strictly handled by the FulfillmentRecoveryWorker to ensure idempotency
+                    // and a single source of truth for financial ledgers.
                 }
 
                 return Ok(doc.RootElement.Clone());

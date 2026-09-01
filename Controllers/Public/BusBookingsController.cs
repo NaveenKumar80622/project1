@@ -1518,14 +1518,12 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
-                    // Fallback to calculation if SRDV returns 0 for both charge and refund
+                    bool requiresManualReview = false;
                     if (srdvCancellationCharge == 0 && srdvRefundAmount == 0)
                     {
-                        var calculatedFallback = CalculateSrdvRefund(booking.BusBooking, activePassengers, booking.NetFareInr, booking.SeatsBooked);
-                        srdvRefundAmount = calculatedFallback.RefundAmount;
-                        srdvCancellationCharge = calculatedFallback.CancellationCharge;
+                        // DO NOT fabricate refunds. If both are 0, the SRDV response was likely ambiguous.
+                        requiresManualReview = true;
                     }
-
 
 
                     // Mark passengers cancelled
@@ -1641,7 +1639,12 @@ namespace PickNBook.Api.Controllers
                     dbContext.BookingCancellations.Add(cancellationAudit);
                     await dbContext.SaveChangesAsync();
 
-                    if (calculatedRefund.FinalCustomerRefundAmount > 0)
+                    if (requiresManualReview)
+                    {
+                        cancellationAudit.Status = "PendingReview";
+                        await dbContext.SaveChangesAsync();
+                    }
+                    else if (calculatedRefund.FinalCustomerRefundAmount > 0)
                     {
                         var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == booking.UserId && p.BookingReferenceId == booking.Id && p.BookingType == "Bus");
                         if (payment != null && payment.CashfreeOrderId != null)
@@ -1649,10 +1652,15 @@ namespace PickNBook.Api.Controllers
                             string refundId = $"REF-CANCEL-{booking.Id}-{cancellationAudit.Id}";
                             await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Bus Cancellation");
                             cancellationAudit.CashfreeRefundId = refundId;
-                            cancellationAudit.Status = "Initiated";
+                            cancellationAudit.Status = "RefundInitiated";
                             cancellationAudit.PaymentId = payment.Id;
                             await dbContext.SaveChangesAsync();
                         }
+                    }
+                    else
+                    {
+                        cancellationAudit.Status = "Completed";
+                        await dbContext.SaveChangesAsync();
                     }
                     
 
@@ -1818,11 +1826,10 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
+                    bool requiresManualReview = false;
                     if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && srdvCancellationCharge == 0 && srdvRefundAmount == 0)
                     {
-                        var fallback = CalculateSrdvRefund(booking.BusBooking, targetPassengers, booking.NetFareInr, booking.SeatsBooked);
-                        srdvRefundAmount = fallback.RefundAmount;
-                        srdvCancellationCharge = fallback.CancellationCharge;
+                        requiresManualReview = true;
                     }
 
                     // Non-SRDV booking logic is omitted above, so we handle refund based on defaults
@@ -1881,7 +1888,12 @@ namespace PickNBook.Api.Controllers
                     dbContext.BookingCancellations.Add(cancellationAudit);
                     await dbContext.SaveChangesAsync();
 
-                    if (calculatedRefund.FinalCustomerRefundAmount > 0)
+                    if (requiresManualReview)
+                    {
+                        cancellationAudit.Status = "PendingReview";
+                        await dbContext.SaveChangesAsync();
+                    }
+                    else if (calculatedRefund.FinalCustomerRefundAmount > 0)
                     {
                         var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == booking.UserId && p.BookingReferenceId == booking.Id && p.BookingType == "Bus");
                         if (payment != null && payment.CashfreeOrderId != null)
@@ -1889,10 +1901,15 @@ namespace PickNBook.Api.Controllers
                             string refundId = $"REF-CANCEL-{booking.Id}-{cancellationAudit.Id}";
                             await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Bus Partial Cancellation");
                             cancellationAudit.CashfreeRefundId = refundId;
-                            cancellationAudit.Status = "Initiated";
+                            cancellationAudit.Status = "RefundInitiated";
                             cancellationAudit.PaymentId = payment.Id;
                             await dbContext.SaveChangesAsync();
                         }
+                    }
+                    else
+                    {
+                        cancellationAudit.Status = "Completed";
+                        await dbContext.SaveChangesAsync();
                     }
 
                     // If all active passengers are now cancelled, set full booking status to Cancelled and cancel coupon/promo usages
