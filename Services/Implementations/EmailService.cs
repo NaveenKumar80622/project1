@@ -5,13 +5,26 @@ using System.Net.Mail;
 
 namespace PickNBook.Api.Services
 {
-    public class EmailService : IEmailService
+    public class EmailService : IEmailService, PickNBook.Api.Services.Notifications.Interfaces.IEmailProvider
     {
         private readonly EmailSettings _settings;
 
         public EmailService(IOptions<EmailSettings> settings)
         {
             _settings = settings.Value;
+        }
+
+        public async Task<(bool IsSuccess, string? ProviderMessageId, string? ErrorMessage)> SendAsync(string recipient, string content, string? subject = null)
+        {
+            try
+            {
+                await SendEmailAsync(recipient, subject ?? "PickNBook Notification", content);
+                return (true, System.Guid.NewGuid().ToString(), null);
+            }
+            catch (Exception ex)
+            {
+                return (false, null, ex.Message);
+            }
         }
 
         public async Task SendEmailAsync(string toEmail, string subject, string body)

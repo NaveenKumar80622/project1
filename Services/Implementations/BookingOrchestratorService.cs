@@ -14,15 +14,18 @@ namespace PickNBook.Api.Services.Implementations
         private readonly AppDbContext _dbContext;
         private readonly ILogger<BookingOrchestratorService> _logger;
         private readonly IServiceProvider _serviceProvider; // Used to resolve scoped services like _srdvBusService dynamically without circular deps
+        private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
 
         public BookingOrchestratorService(
             AppDbContext dbContext,
             ILogger<BookingOrchestratorService> logger,
-            IServiceProvider serviceProvider)
+            IServiceProvider serviceProvider,
+            PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService)
         {
             _dbContext = dbContext;
             _logger = logger;
             _serviceProvider = serviceProvider;
+            _notificationService = notificationService;
         }
 
         public async Task<(bool Success, string? ErrorMessage)> ProcessFulfillmentAsync(int paymentId)
@@ -399,6 +402,15 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     payment.FulfillmentStatus = "Failed_SupplierError";
                     payment.FailureReason = srdvErrorMessage ?? "Supplier responded with false success flag.";
+                    
+                    await _notificationService.EnqueueAsync(
+                        eventType: "BusBookingFailed",
+                        channel: "Email",
+                        recipient: reservation.PassengerEmail ?? payment.UserId,
+                        templateKey: "BUS_BOOKING_FAILED",
+                        payload: new { Reason = payment.FailureReason, Amount = payment.FinalPayableAmount }
+                    );
+
                     await _dbContext.SaveChangesAsync();
                     return (false, payment.FailureReason);
                 }
@@ -445,6 +457,22 @@ namespace PickNBook.Api.Services.Implementations
 
                 // Coupon Consumption
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Bus");
+
+                await _notificationService.EnqueueAsync(
+                    eventType: "BusBookingSuccess",
+                    channel: "Email",
+                    recipient: reservation.PassengerEmail ?? payment.UserId,
+                    templateKey: "BUS_BOOKING_CONFIRMED",
+                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName, Amount = payment.FinalPayableAmount }
+                );
+
+                await _notificationService.EnqueueAsync(
+                    eventType: "BusBookingSuccess",
+                    channel: "SMS",
+                    recipient: reservation.PassengerPhone ?? "",
+                    templateKey: "BUS_BOOKING_CONFIRMED_SMS",
+                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName }
+                );
 
                 // Commit payment and coupon changes
                 await _dbContext.SaveChangesAsync();
@@ -688,6 +716,15 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     payment.FulfillmentStatus = "Failed_SupplierError";
                     payment.FailureReason = srdvErrorMessage ?? "Supplier rejected booking.";
+
+                    await _notificationService.EnqueueAsync(
+                        eventType: "HotelBookingFailed",
+                        channel: "Email",
+                        recipient: reservation.GuestEmail ?? payment.UserId,
+                        templateKey: "HOTEL_BOOKING_FAILED",
+                        payload: new { Reason = payment.FailureReason, Amount = payment.FinalPayableAmount }
+                    );
+
                     await _dbContext.SaveChangesAsync();
                     return (false, payment.FailureReason);
                 }
@@ -708,6 +745,22 @@ namespace PickNBook.Api.Services.Implementations
                 payment.BookingReferenceId = reservation.Id;
 
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Hotel");
+
+                await _notificationService.EnqueueAsync(
+                    eventType: "HotelBookingSuccess",
+                    channel: "Email",
+                    recipient: reservation.GuestEmail ?? payment.UserId,
+                    templateKey: "HOTEL_BOOKING_CONFIRMED",
+                    payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName, Amount = payment.FinalPayableAmount }
+                );
+
+                await _notificationService.EnqueueAsync(
+                    eventType: "HotelBookingSuccess",
+                    channel: "SMS",
+                    recipient: reservation.GuestPhone ?? "",
+                    templateKey: "HOTEL_BOOKING_CONFIRMED_SMS",
+                    payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName }
+                );
 
                 await _dbContext.SaveChangesAsync();
 
@@ -860,6 +913,14 @@ namespace PickNBook.Api.Services.Implementations
                     if (failedRes != null) failedRes.Status = "Failed";
                 }
 
+                await _notificationService.EnqueueAsync(
+                    eventType: "FlightBookingFailed",
+                    channel: "Email",
+                    recipient: requestPassengers?.FirstOrDefault()?.Email ?? payment.UserId,
+                    templateKey: "FLIGHT_BOOKING_FAILED",
+                    payload: new { Reason = payment.FailureReason, Amount = payment.FinalPayableAmount }
+                );
+
                 await _dbContext.SaveChangesAsync();
                 return (false, payment.FailureReason);
             }
@@ -915,6 +976,23 @@ namespace PickNBook.Api.Services.Implementations
                 payment.BookingReferenceId = reservation.Id;
 
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Flight");
+                
+                await _notificationService.EnqueueAsync(
+                    eventType: "FlightBookingSuccess",
+                    channel: "Email",
+                    recipient: reservation.PassengerEmail ?? payment.UserId,
+                    templateKey: "FLIGHT_BOOKING_CONFIRMED",
+                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName, Amount = payment.FinalPayableAmount }
+                );
+
+                await _notificationService.EnqueueAsync(
+                    eventType: "FlightBookingSuccess",
+                    channel: "SMS",
+                    recipient: reservation.PassengerPhone ?? "",
+                    templateKey: "FLIGHT_BOOKING_CONFIRMED_SMS",
+                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName }
+                );
+
                 await _dbContext.SaveChangesAsync();
             }
 

@@ -131,6 +131,11 @@ namespace PickNBook.Api.Data
         // Cancellations and Refunds
         public DbSet<BookingCancellation> BookingCancellations => Set<BookingCancellation>();
 
+        // Centralized Notification Architecture DbSets
+        public DbSet<NotificationTemplate> NotificationTemplates => Set<NotificationTemplate>();
+        public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
+        public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);

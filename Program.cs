@@ -126,10 +126,19 @@ builder.Services.Configure<PickNBook.Api.Models.Config.RefundPolicyOptions>(
     builder.Configuration.GetSection("RefundPolicy"));
 
 builder.Services.AddScoped<IEmailService, EmailService>();
+builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.IEmailProvider, EmailService>();
 builder.Services.AddScoped<IEmailTemplateService, EmailTemplateService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.EmailReminderHostedService>();
 builder.Services.AddHttpClient<IWhatsAppService, WhatsAppService>();
 builder.Services.AddHttpClient<ISmsService, SmsService>();
+
+// Centralized Notification Architecture DI
+builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.INotificationService, PickNBook.Api.Services.Notifications.Implementations.NotificationService>();
+builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.IOtpService, PickNBook.Api.Services.Notifications.Implementations.OtpService>();
+builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.MockSmsProvider>();
+builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IWhatsAppProvider, PickNBook.Api.Services.Notifications.Providers.MockWhatsAppProvider>();
+builder.Services.AddHostedService<PickNBook.Api.Services.Background.NotificationOutboxWorker>();
+
 builder.Services.AddScoped<IExclusiveOfferSubscriptionService, ExclusiveOfferSubscriptionService>();
 builder.Services.AddScoped<ITicketPdfService, TicketPdfService>();
 builder.Services.AddScoped<ITicketEmailService, TicketEmailService>();

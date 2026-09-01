@@ -11,17 +11,20 @@ namespace PickNBook.Api.Services.Implementations
         private readonly ICashfreeService _cashfreeService;
         private readonly ILogger<PaymentService> _logger;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
 
         public PaymentService(
             AppDbContext dbContext,
             ICashfreeService cashfreeService,
             ILogger<PaymentService> logger,
-            IServiceScopeFactory scopeFactory)
+            IServiceScopeFactory scopeFactory,
+            PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService)
         {
             _dbContext = dbContext;
             _cashfreeService = cashfreeService;
             _logger = logger;
             _scopeFactory = scopeFactory;
+            _notificationService = notificationService;
         }
 
         public async Task<Payment> CreatePaymentAsync(
@@ -108,6 +111,27 @@ namespace PickNBook.Api.Services.Implementations
         {
             var payment = await _dbContext.Payments.FindAsync(paymentId);
             if (payment == null) return;
+
+            if (status == PaymentStatus.Success && payment.Status != PaymentStatus.Success)
+            {
+                await _notificationService.EnqueueAsync(
+                    eventType: "PaymentSuccess",
+                    channel: "Email",
+                    recipient: payment.UserId, // Assuming we send it to UserId as email, or we have User info
+                    templateKey: "PAYMENT_SUCCESS",
+                    payload: new { Amount = payment.FinalPayableAmount, OrderId = payment.CashfreeOrderId }
+                );
+            }
+            else if (status == PaymentStatus.Failed && payment.Status != PaymentStatus.Failed)
+            {
+                await _notificationService.EnqueueAsync(
+                    eventType: "PaymentFailed",
+                    channel: "Email",
+                    recipient: payment.UserId,
+                    templateKey: "PAYMENT_FAILED",
+                    payload: new { Amount = payment.FinalPayableAmount, OrderId = payment.CashfreeOrderId, Reason = failureReason ?? "Unknown Error" }
+                );
+            }
 
             payment.Status = status;
             payment.UpdatedAt = DateTime.UtcNow;
@@ -259,15 +283,45 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (refundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (refundRecord.Status != "Completed")
+                    {
+                        await _notificationService.EnqueueAsync(
+                            eventType: "RefundCompleted",
+                            channel: "Email",
+                            recipient: refundRecord.UserId,
+                            templateKey: "REFUND_COMPLETED",
+                            payload: new { Amount = refundRecord.CustomerRefundAmount, BookingId = refundRecord.BookingReference }
+                        );
+                    }
                     refundRecord.Status = "Completed";
                     refundRecord.CompletedAtUtc = DateTime.UtcNow;
                 }
                 else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (refundRecord.Status != "RefundFailed")
+                    {
+                        await _notificationService.EnqueueAsync(
+                            eventType: "RefundFailed",
+                            channel: "Email",
+                            recipient: refundRecord.UserId,
+                            templateKey: "REFUND_FAILED",
+                            payload: new { Amount = refundRecord.CustomerRefundAmount, BookingId = refundRecord.BookingReference }
+                        );
+                    }
                     refundRecord.Status = "RefundFailed";
                 }
                 else if (refundStatus.Equals("PENDING", StringComparison.OrdinalIgnoreCase))
                 {
+                    if (refundRecord.Status != "RefundInitiated")
+                    {
+                        await _notificationService.EnqueueAsync(
+                            eventType: "RefundInitiated",
+                            channel: "Email",
+                            recipient: refundRecord.UserId,
+                            templateKey: "REFUND_INITIATED",
+                            payload: new { Amount = refundRecord.CustomerRefundAmount, BookingId = refundRecord.BookingReference }
+                        );
+                    }
                     refundRecord.Status = "RefundInitiated";
                 }
                 else
