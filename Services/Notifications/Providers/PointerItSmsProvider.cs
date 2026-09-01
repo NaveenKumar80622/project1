@@ -38,23 +38,36 @@ namespace PickNBook.Api.Services.Notifications.Providers
                     ? _settings.Url.Substring(0, _settings.Url.Length - 10) 
                     : _settings.Url;
 
-                var parameters = new Dictionary<string, string>
+                var builder = new UriBuilder(baseUrl);
+                var query = HttpUtility.ParseQueryString(builder.Query);
+
+                query["username"] = _settings.Username;
+                query["password"] = _settings.Password;
+                query["unicode"] = "false";
+                query["from"] = _settings.SenderId;
+                
+                string formattedRecipient = recipient.Trim();
+                if (formattedRecipient.StartsWith("+"))
                 {
-                    { "username", _settings.Username },
-                    { "password", _settings.Password },
-                    { "unicode", "false" },
-                    { "from", _settings.SenderId },
-                    { "to", recipient },
-                    { "dltPrincipalEntityId", _settings.PrincipalEntityId },
-                    { "dltContentId", _settings.ContentId },
-                    { "text", content }
-                };
+                    formattedRecipient = formattedRecipient.Substring(1); // PointerIT expects numbers without +
+                }
+                
+                query["to"] = formattedRecipient;
+                query["dltPrincipalEntityId"] = _settings.PrincipalEntityId;
+                query["dltContentId"] = _settings.ContentId;
+                query["text"] = content;
 
-                var formContent = new FormUrlEncodedContent(parameters);
+                builder.Query = query.ToString();
+                var requestUrl = builder.ToString();
 
-                // Send POST with FormUrlEncodedContent instead of query string to prevent 
-                // HttpClient from automatically logging the password and OTP in the URL.
-                var response = await client.PostAsync(baseUrl, formContent);
+                // Sanitized log (Masking password and text)
+                var logQuery = HttpUtility.ParseQueryString(builder.Query);
+                logQuery["password"] = "*****";
+                logQuery["text"] = "*****";
+                var logBuilder = new UriBuilder(baseUrl) { Query = logQuery.ToString() };
+                _logger.LogInformation($"PointerIT SMS request: POST {logBuilder}");
+
+                var response = await client.PostAsync(requestUrl, null);
                 var responseContent = await response.Content.ReadAsStringAsync();
                 
                 if (!response.IsSuccessStatusCode)

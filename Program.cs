@@ -141,7 +141,8 @@ builder.Services.Configure<PickNBook.Api.Models.Config.NotificationRoutingSettin
 builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.INotificationService, PickNBook.Api.Services.Notifications.Implementations.NotificationService>();
 builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.IOtpService, PickNBook.Api.Services.Notifications.Implementations.OtpService>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.MockSmsProvider>();
-builder.Services.AddHttpClient(nameof(PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider));
+builder.Services.AddHttpClient(nameof(PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider))
+    .RemoveAllLoggers();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IWhatsAppProvider, PickNBook.Api.Services.Notifications.Providers.MockWhatsAppProvider>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.NotificationOutboxWorker>();
