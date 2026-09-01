@@ -90,7 +90,9 @@ namespace PickNBook.Api.Controllers
                 _context.OTPs.RemoveRange(oldOtps);
                 await _context.SaveChangesAsync();
 
-                await _otpService.GenerateAndSendOtpAsync(normalizedPhone, channel, OtpPurposes.Registration);
+                var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedPhone, channel, OtpPurposes.Registration);
+
+                if (!isSent) return BadRequest(new { success = false, message = "Unable to send registration OTP.", error = errorMessage ?? "SMS provider rejected the request." });
 
                 return Ok(new { success = true, message = "OTP sent successfully" });
             }
@@ -113,7 +115,9 @@ namespace PickNBook.Api.Controllers
                 _context.OTPs.RemoveRange(oldOtps);
                 await _context.SaveChangesAsync();
 
-                await _otpService.GenerateAndSendOtpAsync(normalizedEmail, channel, OtpPurposes.Registration);
+                var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, channel, OtpPurposes.Registration);
+
+                if (!isSent) return BadRequest(new { success = false, message = "Unable to send registration OTP.", error = errorMessage ?? "Email provider rejected the request." });
 
                 return Ok(new { success = true, message = "OTP sent successfully" });
             }
@@ -194,7 +198,9 @@ namespace PickNBook.Api.Controllers
             _context.OTPs.RemoveRange(oldOtps);
             await _context.SaveChangesAsync();
 
-            await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", OtpPurposes.PasswordReset, user.Id);
+            var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", OtpPurposes.PasswordReset, user.Id);
+
+            if (!isSent) return BadRequest(new { success = false, message = "Unable to send OTP.", error = errorMessage ?? "Email provider rejected the request." });
 
             return Ok(new { success = true, message = "OTP sent successfully" });
         }
@@ -271,7 +277,9 @@ namespace PickNBook.Api.Controllers
             _context.OTPs.RemoveRange(oldOtps);
             await _context.SaveChangesAsync();
 
-            await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", OtpPurposes.PasswordReset, user.Id);
+            var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", OtpPurposes.PasswordReset, user.Id);
+
+            if (!isSent) return BadRequest(new { success = false, message = "Unable to send OTP.", error = errorMessage ?? "Email provider rejected the request." });
 
             return Ok(new { success = true, message = "OTP sent successfully" });
         }
@@ -535,7 +543,12 @@ namespace PickNBook.Api.Controllers
                     !o.IsUsed)
                 .ExecuteUpdateAsync(setters => setters.SetProperty(o => o.IsUsed, true));
 
-            await _otpService.GenerateAndSendOtpAsync(normalizedPhone, "SMS", OtpPurposes.Login, user.Id);
+            var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedPhone, "SMS", OtpPurposes.Login, user.Id);
+
+            if (!isSent)
+            {
+                return BadRequest(new { success = false, message = "Unable to send login OTP.", error = errorMessage ?? "SMS provider rejected the request." });
+            }
 
             return Ok(new { success = true, message = "Login OTP sent successfully." });
         }
@@ -627,7 +640,12 @@ namespace PickNBook.Api.Controllers
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(o => o.IsUsed, true));
 
-            var (isSent, challengeId) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", AdminLoginOtpPurpose, user.Id);
+            var (isSent, challengeId, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", AdminLoginOtpPurpose, user.Id);
+
+            if (!isSent)
+            {
+                return BadRequest(new { success = false, message = "Unable to send admin OTP.", error = errorMessage ?? "Email provider rejected the request." });
+            }
 
             return Ok(new
             {
@@ -716,7 +734,12 @@ namespace PickNBook.Api.Controllers
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(o => o.IsUsed, true));
 
-            await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", AdminPasswordResetOtpPurpose, user.Id);
+            var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", AdminPasswordResetOtpPurpose, user.Id);
+
+            if (!isSent)
+            {
+                return BadRequest(new { success = false, message = "Unable to send admin OTP.", error = errorMessage ?? "Email provider rejected the request." });
+            }
 
             return Ok("If the email is registered, an OTP has been sent.");
         }

@@ -13,6 +13,6 @@ namespace PickNBook.Api.Services.Notifications.Interfaces
         /// <summary>
         /// Sends a notification immediately bypassing the outbox. Used for OTPs.
         /// </summary>
-        Task<bool> SendImmediateAsync(string eventType, string channel, string recipient, string templateKey, object payload);
+        Task<(bool IsSuccess, string? ErrorMessage)> SendImmediateAsync(string eventType, string channel, string recipient, string templateKey, object payload);
     }
 }

@@ -43,7 +43,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             return Task.CompletedTask;
         }
 
-        public async Task<bool> SendImmediateAsync(string eventType, string channel, string recipient, string templateKey, object payload)
+        public async Task<(bool IsSuccess, string? ErrorMessage)> SendImmediateAsync(string eventType, string channel, string recipient, string templateKey, object payload)
         {
             var template = await _dbContext.NotificationTemplates
                 .FirstOrDefaultAsync(t => t.TemplateKey == templateKey && t.Channel == channel && t.IsActive);
@@ -83,7 +83,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 provider = _serviceProvider.GetService<IEmailProvider>();
             }
 
-            if (provider == null) return false;
+            if (provider == null) return (false, "No provider found");
 
             var result = await provider.SendAsync(recipient, content, subject);
             
@@ -104,7 +104,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             _dbContext.NotificationLogs.Add(log);
             await _dbContext.SaveChangesAsync();
 
-            return result.IsSuccess;
+            return (result.IsSuccess, result.ErrorMessage);
         }
 
         private string ReplaceVariables(string templateBody, object payload)

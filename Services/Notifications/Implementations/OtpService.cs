@@ -19,7 +19,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             _notificationService = notificationService;
         }
 
-        public async Task<(bool IsSuccess, string ChallengeId)> GenerateAndSendOtpAsync(string recipient, string channel, string purpose, int? userId = null)
+        public async Task<(bool IsSuccess, string ChallengeId, string? ErrorMessage)> GenerateAndSendOtpAsync(string recipient, string channel, string purpose, int? userId = null)
         {
             // Simple random OTP
             string otpCode = new Random().Next(100000, 999999).ToString();
@@ -64,7 +64,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 _ => "GENERIC_OTP"
             };
 
-            var isSent = await _notificationService.SendImmediateAsync(
+            var (isSent, errorMessage) = await _notificationService.SendImmediateAsync(
                 eventType: purpose,
                 channel: channel,
                 recipient: recipient,
@@ -72,7 +72,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 payload: payload
             );
 
-            return (isSent, challengeId);
+            return (isSent, challengeId, errorMessage);
         }
 
         public async Task<(bool IsValid, string Message)> VerifyOtpAsync(string recipient, string purpose, string otpCode)

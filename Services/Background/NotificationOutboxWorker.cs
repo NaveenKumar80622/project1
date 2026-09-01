@@ -61,7 +61,7 @@ namespace PickNBook.Api.Services.Background
                 try
                 {
                     var payload = JsonSerializer.Deserialize<object>(outbox.PayloadJson) ?? new object();
-                    bool success = await notificationService.SendImmediateAsync(
+                    var (success, errorMessage) = await notificationService.SendImmediateAsync(
                         outbox.EventType,
                         outbox.Channel,
                         outbox.Recipient,
@@ -77,6 +77,7 @@ namespace PickNBook.Api.Services.Background
                     else
                     {
                         outbox.Status = "Failed";
+                        outbox.LastError = errorMessage ?? "Unknown provider error";
                         outbox.RetryCount++;
                         outbox.NextRetryAt = DateTime.UtcNow.AddMinutes(Math.Pow(2, outbox.RetryCount));
                     }
