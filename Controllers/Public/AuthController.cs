@@ -523,9 +523,11 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(ModelState);
 
             var normalizedPhone = request.PhoneNumber.Trim();
-            
+
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.PhoneNumber == normalizedPhone);
+     .FirstOrDefaultAsync(u =>
+         u.PhoneNumber == normalizedPhone &&
+         u.Role == "User");
 
             if (user == null)
                 return Unauthorized(new { success = false, message = "Mobile number not registered." });
@@ -567,7 +569,9 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(new { success = false, message = message });
 
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.PhoneNumber == normalizedPhone);
+     .FirstOrDefaultAsync(u =>
+         u.PhoneNumber == normalizedPhone &&
+         u.Role == "User");
 
             if (user == null)
                 return Unauthorized(new { success = false, message = "User not found." });
