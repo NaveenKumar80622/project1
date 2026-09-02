@@ -60,12 +60,6 @@ namespace PickNBook.Api.Services.Notifications.Providers
                 builder.Query = query.ToString();
                 var requestUrl = builder.ToString();
 
-                // Sanitized log (Masking password and text)
-                var logQuery = HttpUtility.ParseQueryString(builder.Query);
-                logQuery["password"] = "*****";
-                logQuery["text"] = "*****";
-                var logBuilder = new UriBuilder(baseUrl) { Query = logQuery.ToString() };
-                _logger.LogInformation($"PointerIT SMS request: POST {logBuilder}");
 
                 var response = await client.PostAsync(requestUrl, null);
                 var responseContent = await response.Content.ReadAsStringAsync();
@@ -86,11 +80,9 @@ namespace PickNBook.Api.Services.Notifications.Providers
 
                 if (statusCode == 200 && state == "SUBMIT_ACCEPTED")
                 {
-                    _logger.LogInformation($"PointerIT SMS dispatched. TX: {txId}");
                     return (true, txId, null);
                 }
 
-                _logger.LogWarning($"PointerIT Provider Rejected: State={state}, Desc={description}");
                 return (false, null, description);
             }
             catch (Exception ex)

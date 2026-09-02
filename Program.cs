@@ -51,6 +51,14 @@ Log.Logger = new LoggerConfiguration()
              ctx.ToString().Contains("SrdvHotelLoggingHandler")))
         .WriteTo.Async(a => a.File("Logs/hotel-api-.txt", rollingInterval: RollingInterval.Day), blockWhenFull: false)
     )
+    .WriteTo.Logger(lc =>
+        // Dedicated SMS OTP log file — clean, shareable, no noise
+        lc.Filter.ByIncludingOnly(evt =>
+            evt.Properties.TryGetValue("SourceContext", out var ctx) &&
+            (ctx.ToString().Contains("SmsOtpRequestLoggingMiddleware") ||
+             ctx.ToString().Contains("PointerItLoggingHandler")))
+        .WriteTo.Async(a => a.File("Logs/sms-api-.txt", rollingInterval: RollingInterval.Day), blockWhenFull: false)
+    )
     .CreateLogger();
 
 builder.Host.UseSerilog();
@@ -141,8 +149,10 @@ builder.Services.Configure<PickNBook.Api.Models.Config.NotificationRoutingSettin
 builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.INotificationService, PickNBook.Api.Services.Notifications.Implementations.NotificationService>();
 builder.Services.AddScoped<PickNBook.Api.Services.Notifications.Interfaces.IOtpService, PickNBook.Api.Services.Notifications.Implementations.OtpService>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.MockSmsProvider>();
+builder.Services.AddTransient<PickNBook.Api.Infrastructure.Logging.PointerItLoggingHandler>();
 builder.Services.AddHttpClient(nameof(PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider))
-    .RemoveAllLoggers();
+    .RemoveAllLoggers()
+    .AddHttpMessageHandler<PickNBook.Api.Infrastructure.Logging.PointerItLoggingHandler>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IWhatsAppProvider, PickNBook.Api.Services.Notifications.Providers.MockWhatsAppProvider>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.NotificationOutboxWorker>();
@@ -349,6 +359,12 @@ app.UseWhen(context => context.Request.Path.StartsWithSegments("/api/flight", St
 app.UseWhen(context => context.Request.Path.StartsWithSegments("/api/hotels", StringComparison.OrdinalIgnoreCase), appBuilder =>
 {
     appBuilder.UseMiddleware<PickNBook.Api.Middleware.HotelRequestLoggingMiddleware>();
+});
+
+// SMS OTP Logging Middleware — captures clean T1/T4 log for /api/Auth/send-login-otp
+app.UseWhen(context => context.Request.Path.StartsWithSegments("/api/Auth/send-login-otp", StringComparison.OrdinalIgnoreCase), appBuilder =>
+{
+    appBuilder.UseMiddleware<PickNBook.Api.Middleware.SmsOtpRequestLoggingMiddleware>();
 });
 
 
