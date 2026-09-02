@@ -36,7 +36,7 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 ```
 
 **SMS/WhatsApp Template**
-*Body*: `Dear User, your OTP for login to ShyamAgro is {OtpCode}. This OTP is valid for 10 minutes. Do not share it with anyone`
+*Body*: `Dear User, your OTP for login to ${var1}  is ${var2} . This OTP is valid for 10 minutes. Do not share it with anyone - PITSOP`
 
 ---
 

@@ -12,11 +12,13 @@ namespace PickNBook.Api.Services.Notifications.Implementations
     {
         private readonly AppDbContext _dbContext;
         private readonly INotificationService _notificationService;
+        private readonly PickNBook.Api.Models.Config.NotificationRoutingSettings _routingSettings;
 
-        public OtpService(AppDbContext dbContext, INotificationService notificationService)
+        public OtpService(AppDbContext dbContext, INotificationService notificationService, Microsoft.Extensions.Options.IOptions<PickNBook.Api.Models.Config.NotificationRoutingSettings> routingOptions)
         {
             _dbContext = dbContext;
             _notificationService = notificationService;
+            _routingSettings = routingOptions.Value;
         }
 
         public async Task<(bool IsSuccess, string ChallengeId, string? ErrorMessage)> GenerateAndSendOtpAsync(string recipient, string channel, string purpose, int? userId = null)
@@ -51,7 +53,20 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             _dbContext.OTPs.Add(otpRecord);
             await _dbContext.SaveChangesAsync();
 
-            var payload = new { OtpCode = otpCode };
+            object payload;
+            if (purpose == "Login" && channel == "SMS")
+            {
+                payload = new
+                {
+                    OtpCode = otpCode, // kept for backward compat / email channel
+                    Var1 = _routingSettings.LoginOtpAppName ?? "ShyamAgro", // DLT ${var1}
+                    Var2 = otpCode // DLT ${var2}
+                };
+            }
+            else
+            {
+                payload = new { OtpCode = otpCode };
+            }
 
             // Determine template based on purpose
             string templateKey = purpose switch

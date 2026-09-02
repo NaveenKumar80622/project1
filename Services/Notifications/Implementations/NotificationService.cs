@@ -120,6 +120,18 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 {
                     result = result.Replace($"{{{kvp.Key}}}", kvp.Value.ToString());
                 }
+
+                // Also handle DLT provider-style ${varN} placeholders
+                foreach (var kvp in dict)
+                {
+                    if (kvp.Key.StartsWith("Var", StringComparison.OrdinalIgnoreCase) &&
+                        kvp.Key.Length > 3 &&
+                        int.TryParse(kvp.Key.AsSpan(3), out _))
+                    {
+                        string placeholder = "${" + kvp.Key.ToLowerInvariant() + "}"; // e.g. ${var1}
+                        result = result.Replace(placeholder, kvp.Value.ToString());
+                    }
+                }
                 return result;
             } 
             catch 
