@@ -676,41 +676,36 @@ namespace PickNBook.Api.Controllers
                     .Where(x => x.TraceId == traceId)
                     .ToListAsync();
 
-                var seatPreviews = new List<PickNBook.Api.Models.DTOs.SeatPreviewDto>();
-                foreach (var p in request.Seats.Where(s => !string.IsNullOrWhiteSpace(s.SeatCode)))
+                var missingBlockedSeats = seatCodes
+                    .Where(seat => !blockedSeats.Any(b => b.SeatName.Equals(seat, StringComparison.OrdinalIgnoreCase) && b.BaseFare > 0))
+                    .ToList();
+
+                if (missingBlockedSeats.Any())
                 {
-                    var seatCode = p.SeatCode.Trim();
-                    var blockedSeat = blockedSeats
-                        .OrderByDescending(b => b.Id)
-                        .FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
-
-                    var layoutSeat = layoutMap![seatCode];
-
-                    decimal baseFare = 0m;
-                    if (blockedSeat != null && blockedSeat.BaseFare > 0)
-                    {
-                        baseFare = blockedSeat.BaseFare;
-                    }
-                    else if (layoutSeat.BaseFare > 0)
-                    {
-                        baseFare = layoutSeat.BaseFare;
-                    }
-
-                    if (baseFare <= 0)
-                    {
-                        return BadRequest(new { message = $"Authoritative seat pricing is unavailable for seat '{seatCode}'. Please refresh the seat layout." });
-                    }
-
-                    decimal gstAmount = (blockedSeat != null && blockedSeat.GstAmount > 0) ? blockedSeat.GstAmount : 0m;
-
-                    seatPreviews.Add(new PickNBook.Api.Models.DTOs.SeatPreviewDto 
-                    { 
-                        SeatCode = seatCode, 
-                        BaseFare = baseFare, 
-                        SeatType = layoutSeat.SeatType, // 100% authoritative from layout
-                        ExternalGst = gstAmount 
+                    return BadRequest(new { 
+                        message = $"Authoritative blocked seat pricing is unavailable for seat(s): {string.Join(", ", missingBlockedSeats)}. Please refresh and block the seats again." 
                     });
                 }
+
+                var seatPreviews = request.Seats
+                    .Where(p => !string.IsNullOrWhiteSpace(p.SeatCode))
+                    .Select(p => {
+                        var seatCode = p.SeatCode.Trim();
+                        var blockedSeat = blockedSeats
+                            .OrderByDescending(b => b.Id)
+                            .First(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
+
+                        var layoutSeat = layoutMap![seatCode];
+
+                        return new PickNBook.Api.Models.DTOs.SeatPreviewDto 
+                        { 
+                            SeatCode = seatCode, 
+                            BaseFare = blockedSeat.BaseFare, 
+                            SeatType = layoutSeat.SeatType, // 100% authoritative from layout
+                            ExternalGst = blockedSeat.GstAmount 
+                        };
+                    })
+                    .ToList();
 
                 var dummyBus = new BusBooking
                 {

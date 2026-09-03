@@ -92,12 +92,6 @@ namespace PickNBook.Api.Services
                     context.TravelDate = travelDate;
                     context.DayOfWeek = travelDate.DayOfWeek;
                 }
-                else if (fallbackBus != null && fallbackBus.DepartureTime != default)
-                {
-                    var istDeparture = DateTime.SpecifyKind(fallbackBus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
-                    context.TravelDate = istDeparture;
-                    context.DayOfWeek = istDeparture.DayOfWeek;
-                }
                 else
                 {
                     throw new InvalidOperationException("Authoritative journey date (DepartDate) could not be resolved from bus search data.");
