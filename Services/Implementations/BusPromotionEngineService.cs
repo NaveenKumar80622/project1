@@ -334,7 +334,32 @@ namespace PickNBook.Api.Services
             List<SeatPreviewDto> seats)
         {
             var istDeparture = DateTime.SpecifyKind(bus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
-            var preDiscountFare = seats.Sum(s => s.BaseFare);
+
+            var allMarkups = _db.BusMarkupSettings
+                .AsNoTracking()
+                .Where(x => x.Status == "Active")
+                .ToList();
+
+            decimal preDiscountFare = 0m;
+            foreach (var seat in seats)
+            {
+                var isSleeper = (seat.SeatType ?? "").Contains("sleeper", StringComparison.OrdinalIgnoreCase);
+                var normalizedSeatType = isSleeper ? "Sleeper" : "Seater";
+
+                var markup = allMarkups.FirstOrDefault(x =>
+                    x.SeatType.Equals(normalizedSeatType, StringComparison.OrdinalIgnoreCase));
+
+                decimal markupAmount = 0m;
+                if (markup != null && seat.BaseFare > 0)
+                {
+                    markupAmount = markup.MarkupType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
+                        ? seat.BaseFare * markup.Value / 100m
+                        : markup.Value;
+                }
+
+                preDiscountFare += (seat.BaseFare + markupAmount);
+            }
+
             if (preDiscountFare <= 0 && bus.PriceInr > 0)
             {
                 preDiscountFare = bus.PriceInr;

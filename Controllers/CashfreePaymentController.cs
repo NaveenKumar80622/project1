@@ -9,6 +9,7 @@ using PickNBook.Api.Services.Interfaces;
 using PickNBook.Api.Services;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace PickNBook.Api.Controllers
 {
@@ -26,6 +27,7 @@ namespace PickNBook.Api.Controllers
         private readonly IFlightPricingService _flightPricingService;
         private readonly IHotelMarkupService _hotelMarkupService;
         private readonly AppDbContext _dbContext;
+        private readonly IMemoryCache _cache;
 
         public CashfreePaymentController(
             IOptions<CashfreeSettings> settings,
@@ -37,7 +39,8 @@ namespace PickNBook.Api.Controllers
             IBusCouponContextBuilder busCouponContextBuilder,
             IFlightPricingService flightPricingService,
             IHotelMarkupService hotelMarkupService,
-            AppDbContext dbContext)
+            AppDbContext dbContext,
+            IMemoryCache cache)
         {
             _settings = settings.Value;
             _cashfreeService = cashfreeService;
@@ -49,6 +52,7 @@ namespace PickNBook.Api.Controllers
             _flightPricingService = flightPricingService;
             _hotelMarkupService = hotelMarkupService;
             _dbContext = dbContext;
+            _cache = cache;
         }
 
         [HttpPost("create-order")]
@@ -88,6 +92,28 @@ namespace PickNBook.Api.Controllers
                             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         if (payload == null) return BadRequest(new { message = "Invalid Bus Payload" });
 
+                        var passengerSeats = payload.Passengers?
+                            .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
+                            .Select(p => p.SeatNumber!.Trim())
+                            .ToList() ?? new List<string>();
+
+                        if (!passengerSeats.Any())
+                        {
+                            return BadRequest(new { message = "At least one passenger with a valid seat number is required." });
+                        }
+
+                        // Reject duplicate passenger seat numbers
+                        var duplicateSeats = passengerSeats
+                            .GroupBy(s => s, StringComparer.OrdinalIgnoreCase)
+                            .Where(g => g.Count() > 1)
+                            .Select(g => g.Key)
+                            .ToList();
+
+                        if (duplicateSeats.Any())
+                        {
+                            return BadRequest(new { message = $"Duplicate seat number(s) detected: {string.Join(", ", duplicateSeats)}. Each passenger must be assigned a unique seat." });
+                        }
+
                         var traceId = payload.TraceId ?? string.Empty;
                         var blockedSeats = await _dbContext.BusBlockedSeatPrices
                             .Where(x => x.TraceId == traceId)
@@ -98,19 +124,51 @@ namespace PickNBook.Api.Controllers
                             return BadRequest(new { message = "No active seat block found for this TraceId. Please try booking again." });
                         }
 
-                        var seatPreviews = payload.Passengers?
+                        // Strict check: every passenger seat must have an authoritative blocked price record with BaseFare > 0
+                        var missingBlockedSeats = passengerSeats
+                            .Where(seat => !blockedSeats.Any(b => b.SeatName.Equals(seat, StringComparison.OrdinalIgnoreCase) && b.BaseFare > 0))
+                            .ToList();
+
+                        if (missingBlockedSeats.Any())
+                        {
+                            return BadRequest(new { message = $"Authoritative blocked seat pricing is unavailable for seat(s): {string.Join(", ", missingBlockedSeats)}. Please refresh and block the seats again." });
+                        }
+
+                        // Authoritative seat layout resolution for SeatType
+                        Dictionary<string, BusSeatLayoutItemContext>? layoutMap = null;
+                        if (!string.IsNullOrEmpty(payload.TraceId) && !string.IsNullOrEmpty(payload.ResultIndex))
+                        {
+                            _cache.TryGetValue($"bus_seats_{payload.TraceId}_{payload.ResultIndex}", out layoutMap);
+                        }
+
+                        var seatPreviews = payload.Passengers!
                             .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
                             .Select(p => {
-                                var blockedSeat = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(p.SeatNumber, StringComparison.OrdinalIgnoreCase));
+                                var blockedSeat = blockedSeats
+                                    .OrderByDescending(b => b.Id)
+                                    .First(b => b.SeatName.Equals(p.SeatNumber!.Trim(), StringComparison.OrdinalIgnoreCase));
+
+                                // Authoritative SeatType: use authoritative SRDV/backend seat type where available.
+                                // Do NOT use BusType as a substitute for SeatType.
+                                string resolvedSeatType = "";
+                                if (layoutMap != null && layoutMap.TryGetValue(p.SeatNumber!.Trim(), out var layoutSeat) && !string.IsNullOrWhiteSpace(layoutSeat.SeatType))
+                                {
+                                    resolvedSeatType = layoutSeat.SeatType;
+                                }
+                                else if (!string.IsNullOrWhiteSpace(p.SeatType))
+                                {
+                                    resolvedSeatType = p.SeatType;
+                                }
+
                                 return new SeatPreviewDto 
                                 { 
-                                    SeatCode = p.SeatNumber!, 
-                                    BaseFare = blockedSeat?.BaseFare > 0 ? blockedSeat.BaseFare : p.BaseFare, 
-                                    SeatType = !string.IsNullOrWhiteSpace(p.SeatType) ? p.SeatType : (payload.BusType ?? "Unknown"),
-                                    ExternalGst = blockedSeat?.GstAmount > 0 ? blockedSeat.GstAmount : p.ExternalGst 
+                                    SeatCode = p.SeatNumber!.Trim(), 
+                                    BaseFare = blockedSeat.BaseFare, 
+                                    SeatType = resolvedSeatType,
+                                    ExternalGst = blockedSeat.GstAmount 
                                 };
                             })
-                            .ToList() ?? new List<SeatPreviewDto>();
+                            .ToList();
 
                         // Ensure pricing parity including dynamically applied checkout coupons/promotions
                         var dummyBus = new PickNBook.Api.Models.BusBooking
