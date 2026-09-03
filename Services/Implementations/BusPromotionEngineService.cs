@@ -74,19 +74,7 @@ namespace PickNBook.Api.Services
                 var currentBaseFare = seat.BaseFare;
                 totalExternalGst += seat.ExternalGst;
 
-                var isSleeper = seat.SeatType.Contains("sleeper", StringComparison.OrdinalIgnoreCase);
-                var normalizedSeatType = isSleeper ? "Sleeper" : "Seater";
-
-                var markup = allMarkups.FirstOrDefault(x =>
-                    x.SeatType.Equals(normalizedSeatType, StringComparison.OrdinalIgnoreCase));
-
-                decimal markupAmount = 0m;
-                if (markup != null)
-                {
-                    markupAmount = markup.MarkupType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
-                        ? currentBaseFare * markup.Value / 100m
-                        : markup.Value;
-                }
+                decimal markupAmount = ResolveApplicableMarkup(currentBaseFare, seat.SeatType, allMarkups);
 
                 var fareBeforeTax = currentBaseFare + markupAmount;
                 subtotal += fareBeforeTax;
@@ -328,6 +316,27 @@ namespace PickNBook.Api.Services
             return response;
         }
 
+        public static decimal ResolveApplicableMarkup(
+            decimal baseFare,
+            string? seatType,
+            IEnumerable<BusMarkupSetting> activeMarkups)
+        {
+            var isSleeper = (seatType ?? "").Contains("sleeper", StringComparison.OrdinalIgnoreCase);
+            var normalizedSeatType = isSleeper ? "Sleeper" : "Seater";
+
+            var markup = activeMarkups.FirstOrDefault(x =>
+                x.SeatType.Equals(normalizedSeatType, StringComparison.OrdinalIgnoreCase));
+
+            if (markup != null && baseFare > 0)
+            {
+                return markup.MarkupType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
+                    ? baseFare * markup.Value / 100m
+                    : markup.Value;
+            }
+
+            return 0m;
+        }
+
         public bool ValidateCouponConditions(
             IEnumerable<BusCouponCondition>? conditions,
             BusBooking bus,
@@ -343,20 +352,7 @@ namespace PickNBook.Api.Services
             decimal preDiscountFare = 0m;
             foreach (var seat in seats)
             {
-                var isSleeper = (seat.SeatType ?? "").Contains("sleeper", StringComparison.OrdinalIgnoreCase);
-                var normalizedSeatType = isSleeper ? "Sleeper" : "Seater";
-
-                var markup = allMarkups.FirstOrDefault(x =>
-                    x.SeatType.Equals(normalizedSeatType, StringComparison.OrdinalIgnoreCase));
-
-                decimal markupAmount = 0m;
-                if (markup != null && seat.BaseFare > 0)
-                {
-                    markupAmount = markup.MarkupType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
-                        ? seat.BaseFare * markup.Value / 100m
-                        : markup.Value;
-                }
-
+                var markupAmount = ResolveApplicableMarkup(seat.BaseFare, seat.SeatType, allMarkups);
                 preDiscountFare += (seat.BaseFare + markupAmount);
             }
 
@@ -402,20 +398,53 @@ namespace PickNBook.Api.Services
                 }
 
                 var trimmedVal1 = condition.Value1.Trim();
+                var op = string.IsNullOrWhiteSpace(condition.ConditionOperator) ? "Equals" : condition.ConditionOperator.Trim();
 
                 switch (condition.ConditionType)
                 {
                     case "OperatorName":
-                        if (!string.Equals(context.OperatorName, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        switch (op)
                         {
-                            return false;
+                            case "Equals":
+                            case "=":
+                            case "==":
+                                if (!string.Equals(context.OperatorName, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (string.Equals(context.OperatorName, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "Contains":
+                                if (context.OperatorName == null || !context.OperatorName.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
                     case "BusType":
-                        if (!string.Equals(context.BusType, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        switch (op)
                         {
-                            return false;
+                            case "Equals":
+                            case "=":
+                            case "==":
+                                if (!string.Equals(context.BusType, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (string.Equals(context.BusType, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "Contains":
+                                if (context.BusType == null || !context.BusType.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
@@ -426,35 +455,96 @@ namespace PickNBook.Api.Services
                             return false;
                         }
 
-                        bool allSeatsMatch = context.SelectedSeats.All(s =>
-                            s.SeatType != null &&
-                            s.SeatType.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase));
-
-                        if (!allSeatsMatch)
+                        switch (op)
                         {
-                            return false;
+                            case "Equals":
+                            case "=":
+                            case "==":
+                                if (!context.SelectedSeats.All(s => string.Equals(s.SeatType, trimmedVal1, StringComparison.OrdinalIgnoreCase)))
+                                    return false;
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (!context.SelectedSeats.All(s => !string.Equals(s.SeatType, trimmedVal1, StringComparison.OrdinalIgnoreCase)))
+                                    return false;
+                                break;
+                            case "Contains":
+                                if (!context.SelectedSeats.All(s => s.SeatType != null && s.SeatType.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase)))
+                                    return false;
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
                     case "SourceCity":
-                        if (!string.Equals(context.SourceCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        switch (op)
                         {
-                            return false;
+                            case "Equals":
+                            case "=":
+                            case "==":
+                                if (!string.Equals(context.SourceCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (string.Equals(context.SourceCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "Contains":
+                                if (context.SourceCity == null || !context.SourceCity.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
                     case "DestinationCity":
-                        if (!string.Equals(context.DestinationCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        switch (op)
                         {
-                            return false;
+                            case "Equals":
+                            case "=":
+                            case "==":
+                                if (!string.Equals(context.DestinationCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (string.Equals(context.DestinationCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "Contains":
+                                if (context.DestinationCity == null || !context.DestinationCity.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
                     case "DayOfWeek":
-                        if (context.DayOfWeek == null ||
-                            !string.Equals(context.DayOfWeek.Value.ToString(), trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        if (context.DayOfWeek == null)
                         {
                             return false;
+                        }
+
+                        var dayName = context.DayOfWeek.Value.ToString();
+                        switch (op)
+                        {
+                            case "Equals":
+                            case "=":
+                            case "==":
+                                if (!string.Equals(dayName, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (string.Equals(dayName, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                                    return false;
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
@@ -464,18 +554,50 @@ namespace PickNBook.Api.Services
                             return false;
                         }
 
-                        var depDate = context.TravelDate.Value.Date;
-                        if (DateTime.TryParse(trimmedVal1, out var date1))
+                        // Configured condition date must be parseable; if not, reject
+                        if (!DateTime.TryParse(trimmedVal1, out var date1))
                         {
-                            if (string.IsNullOrWhiteSpace(condition.Value2) ||
-                                string.Equals(condition.Value2.Trim(), "ALL", StringComparison.OrdinalIgnoreCase))
-                            {
+                            return false;
+                        }
+
+                        var depDate = context.TravelDate.Value.Date;
+                        switch (op)
+                        {
+                            case "Equals":
+                            case "=":
+                            case "==":
                                 if (depDate != date1.Date) return false;
-                            }
-                            else if (DateTime.TryParse(condition.Value2.Trim(), out var date2))
-                            {
+                                break;
+                            case "NotEquals":
+                            case "!=":
+                                if (depDate == date1.Date) return false;
+                                break;
+                            case ">":
+                            case "GreaterThan":
+                                if (depDate <= date1.Date) return false;
+                                break;
+                            case ">=":
+                            case "GreaterThanOrEqual":
+                                if (depDate < date1.Date) return false;
+                                break;
+                            case "<":
+                            case "LessThan":
+                                if (depDate >= date1.Date) return false;
+                                break;
+                            case "<=":
+                            case "LessThanOrEqual":
+                                if (depDate > date1.Date) return false;
+                                break;
+                            case "Between":
+                                if (string.IsNullOrWhiteSpace(condition.Value2) ||
+                                    !DateTime.TryParse(condition.Value2.Trim(), out var date2))
+                                {
+                                    return false;
+                                }
                                 if (depDate < date1.Date || depDate > date2.Date) return false;
-                            }
+                                break;
+                            default:
+                                return false; // Unsupported operator
                         }
                         break;
 
@@ -483,38 +605,44 @@ namespace PickNBook.Api.Services
                         decimal currentFare = context.BookingFare;
                         if (!decimal.TryParse(trimmedVal1, out var val1))
                         {
-                            break;
+                            return false; // Malformed MinimumFare condition
                         }
 
-                        decimal val2 = 0m;
-                        if (!string.IsNullOrWhiteSpace(condition.Value2) &&
-                            !string.Equals(condition.Value2.Trim(), "ALL", StringComparison.OrdinalIgnoreCase))
-                        {
-                            decimal.TryParse(condition.Value2.Trim(), out val2);
-                        }
-
-                        switch (condition.ConditionOperator)
+                        switch (op)
                         {
                             case ">":
+                            case "GreaterThan":
                                 if (!(currentFare > val1)) return false;
                                 break;
                             case ">=":
+                            case "GreaterThanOrEqual":
+                            case "Equals":
+                            case "=":
                                 if (!(currentFare >= val1)) return false;
                                 break;
                             case "<":
+                            case "LessThan":
                                 if (!(currentFare < val1)) return false;
                                 break;
                             case "<=":
+                            case "LessThanOrEqual":
                                 if (!(currentFare <= val1)) return false;
                                 break;
                             case "Between":
+                                if (string.IsNullOrWhiteSpace(condition.Value2) ||
+                                    !decimal.TryParse(condition.Value2.Trim(), out var val2))
+                                {
+                                    return false;
+                                }
                                 if (!(currentFare >= val1 && currentFare <= val2)) return false;
                                 break;
                             default:
-                                if (currentFare < val1) return false;
-                                break;
+                                return false; // Unsupported operator
                         }
                         break;
+
+                    default:
+                        return false; // Unknown/unsupported condition type must NEVER silently pass
                 }
             }
 

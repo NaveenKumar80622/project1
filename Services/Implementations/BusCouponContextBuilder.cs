@@ -159,20 +159,7 @@ namespace PickNBook.Api.Services
             decimal preDiscountQualifyingFare = 0m;
             foreach (var seat in context.SelectedSeats)
             {
-                var isSleeper = (seat.SeatType ?? "").Contains("sleeper", StringComparison.OrdinalIgnoreCase);
-                var normalizedSeatType = isSleeper ? "Sleeper" : "Seater";
-
-                var markup = allMarkups.FirstOrDefault(x =>
-                    x.SeatType.Equals(normalizedSeatType, StringComparison.OrdinalIgnoreCase));
-
-                decimal markupAmount = 0m;
-                if (markup != null && seat.Fare > 0)
-                {
-                    markupAmount = markup.MarkupType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
-                        ? seat.Fare * markup.Value / 100m
-                        : markup.Value;
-                }
-
+                var markupAmount = BusPromotionEngineService.ResolveApplicableMarkup(seat.Fare, seat.SeatType, allMarkups);
                 preDiscountQualifyingFare += (seat.Fare + markupAmount);
             }
 

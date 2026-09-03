@@ -49,65 +49,76 @@ namespace PickNBook.Api.Controllers
             [FromQuery] string? resultIndex = null,
             [FromQuery] string? seatCodes = null)
         {
-            var today = DateOnly.FromDateTime(
-                DateTime.UtcNow.AddHours(5.5));
-
-            var query = dbContext.BusCoupons
-                .Include(x => x.Conditions)
-                .AsNoTracking()
-                .Where(x =>
-                    x.Status == "Active" &&
-                    x.StartDate <= today &&
-                    x.ExpiryDate >= today &&
-                    (x.UseLimit == 0 || x.UsedCount < x.UseLimit));
-
-            if (!string.IsNullOrWhiteSpace(category))
+            try
             {
-                query = query.Where(x => x.PromotionCategory == category);
-            }
+                var today = DateOnly.FromDateTime(
+                    DateTime.UtcNow.AddHours(5.5));
 
-            var coupons = await query
-                .OrderBy(x => x.ExpiryDate)
-                .ToListAsync();
+                var query = dbContext.BusCoupons
+                    .Include(x => x.Conditions)
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.Status == "Active" &&
+                        x.StartDate <= today &&
+                        x.ExpiryDate >= today &&
+                        (x.UseLimit == 0 || x.UsedCount < x.UseLimit));
 
-            BusCouponValidationContext? validationContext = null;
-            if (!string.IsNullOrWhiteSpace(traceId) && !string.IsNullOrWhiteSpace(resultIndex))
-            {
-                var seatsList = !string.IsNullOrWhiteSpace(seatCodes)
-                    ? seatCodes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
-                    : new List<string>();
-
-                validationContext = await _couponContextBuilder.BuildContextAsync(traceId, resultIndex, seatsList);
-            }
-
-            var response = coupons.Select(x =>
-            {
-                bool isEligible = true;
-                if (validationContext != null)
+                if (!string.IsNullOrWhiteSpace(category))
                 {
-                    isEligible = _promotionEngine.ValidateCouponConditions(x.Conditions, validationContext);
+                    query = query.Where(x => x.PromotionCategory == category);
                 }
 
-                return new
-                {
-                    x.Id,
-                    x.CouponCode,
-                    x.CouponType,
-                    x.Value,
-                    x.MaxDiscountAmount,
-                    x.MinBookingAmount,
-                    x.MaxUsagePerUser,
-                    x.ExpiryDate,
-                    PromotionCategory = x.PromotionCategory,
-                    Title = x.Title ?? x.CouponCode,
-                    Description = x.Description ?? x.Remark,
-                    x.IsAutoApply,
-                    x.IsExclusive,
-                    IsEligible = isEligible
-                };
-            }).ToList();
+                var coupons = await query
+                    .OrderBy(x => x.ExpiryDate)
+                    .ToListAsync();
 
-            return Ok(response);
+                BusCouponValidationContext? validationContext = null;
+                if (!string.IsNullOrWhiteSpace(traceId) && !string.IsNullOrWhiteSpace(resultIndex))
+                {
+                    var seatsList = !string.IsNullOrWhiteSpace(seatCodes)
+                        ? seatCodes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
+                        : new List<string>();
+
+                    validationContext = await _couponContextBuilder.BuildContextAsync(traceId, resultIndex, seatsList);
+                }
+
+                var response = coupons.Select(x =>
+                {
+                    bool isEligible = true;
+                    if (validationContext != null)
+                    {
+                        isEligible = _promotionEngine.ValidateCouponConditions(x.Conditions, validationContext);
+                    }
+
+                    return new
+                    {
+                        x.Id,
+                        x.CouponCode,
+                        x.CouponType,
+                        x.Value,
+                        x.MaxDiscountAmount,
+                        x.MinBookingAmount,
+                        x.MaxUsagePerUser,
+                        x.ExpiryDate,
+                        PromotionCategory = x.PromotionCategory,
+                        Title = x.Title ?? x.CouponCode,
+                        Description = x.Description ?? x.Remark,
+                        x.IsAutoApply,
+                        x.IsExclusive,
+                        IsEligible = isEligible
+                    };
+                }).ToList();
+
+                return Ok(response);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
         }
 
         [HttpGet("search-cities")]
@@ -737,6 +748,10 @@ namespace PickNBook.Api.Controllers
 
                 return Ok(pricing);
             }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
+            }
             catch (Exception ex)
             {
                 return BadRequest(new { message = ex.Message });
@@ -1217,6 +1232,10 @@ namespace PickNBook.Api.Controllers
      executionResult.Response
  );
 
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
             }
             catch (Exception ex)
             {
