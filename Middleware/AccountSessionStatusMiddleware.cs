@@ -72,7 +72,7 @@ namespace PickNBook.Api.Middleware
                         if (role == "ADMIN" || role == "SUPER_ADMIN")
                         {
                             var session = await db.AdminSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId);
-                            if (session != null && session.Status == "ACTIVE" && session.ExpiresAt > now)
+                            if (session != null && session.Status == "ACTIVE" )
                             {
                                 isSessionValid = true;
                                 session.LastActivityAt = now;
@@ -84,7 +84,7 @@ namespace PickNBook.Api.Middleware
                         else
                         {
                             var session = await db.UserSessions.FirstOrDefaultAsync(s => s.SessionId == sessionId);
-                            if (session != null && session.Status == "ACTIVE" && session.ExpiresAt > now)
+                            if (session != null && session.Status == "ACTIVE" )
                             {
                                 isSessionValid = true;
                                 session.LastActivityAt = now;
