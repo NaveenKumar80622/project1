@@ -172,7 +172,9 @@ namespace PickNBook.Api.Services
                 }
 
                 // Authoritative Blocked Fare resolution (supersedes layout fare if block occurred)
-                var blocked = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
+                var blocked = blockedSeats
+                    .OrderByDescending(b => b.Id)
+                    .FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
                 if (blocked != null && blocked.BaseFare > 0)
                 {
                     seatCtx.Fare = blocked.BaseFare;

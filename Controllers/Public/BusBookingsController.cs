@@ -840,18 +840,29 @@ namespace PickNBook.Api.Controllers
                             .Where(x => x.TraceId == traceId)
                             .ToListAsync();
 
+                        var missingBlockedSeats = requestedSeatCodes
+                            .Where(seat => !blockedSeats.Any(b => b.SeatName.Equals(seat, StringComparison.OrdinalIgnoreCase) && b.BaseFare > 0))
+                            .ToList();
+
+                        if (missingBlockedSeats.Any())
+                        {
+                            throw new InvalidOperationException($"Authoritative blocked seat pricing is unavailable for seat(s): {string.Join(", ", missingBlockedSeats)}. Please refresh and block the seats again.");
+                        }
+
                         var seatPreviews = request.Passengers
                             .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
                             .Select(p => {
                                 var seatCode = p.SeatNumber!.Trim();
-                                var blockedSeat = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
+                                var blockedSeat = blockedSeats
+                                    .OrderByDescending(b => b.Id)
+                                    .First(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
                                 var layoutSeat = layoutMap![seatCode];
                                 return new PickNBook.Api.Models.DTOs.SeatPreviewDto 
                                 { 
                                     SeatCode = seatCode, 
-                                    BaseFare = blockedSeat?.BaseFare > 0 ? blockedSeat.BaseFare : p.BaseFare, 
+                                    BaseFare = blockedSeat.BaseFare, 
                                     SeatType = layoutSeat.SeatType, // 100% authoritative from layout
-                                    ExternalGst = blockedSeat?.GstAmount > 0 ? blockedSeat.GstAmount : p.ExternalGst 
+                                    ExternalGst = blockedSeat.GstAmount 
                                 };
                             })
                             .ToList();
