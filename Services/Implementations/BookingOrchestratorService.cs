@@ -251,7 +251,7 @@ namespace PickNBook.Api.Services.Implementations
                     .Where(x => x.TraceId == request.TraceId)
                     .ToListAsync();
 
-                var authoritativeBlockedSeats = (request.Passengers ?? new List<BusPassengerDto>())
+                var authoritativeBlockedSeats = (request.Passengers ?? new List<CreateBusPassengerDto>())
                     .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
                     .Select(p =>
                     {
