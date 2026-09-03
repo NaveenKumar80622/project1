@@ -135,16 +135,34 @@ namespace PickNBook.Api.Services
 
             if (string.IsNullOrWhiteSpace(request.RequestType) && !string.IsNullOrWhiteSpace(request.CityId))
             {
-                var cacheSvc = _serviceProvider.GetService<HotelCityCacheService>();
-                if (cacheSvc != null)
+                try
                 {
-                    if (cacheSvc.SpecialCityIds.Contains(request.CityId))
+                    using var scope = _serviceProvider.CreateScope();
+                    var db = scope.ServiceProvider.GetService<AppDbContext>();
+                    if (db != null)
                     {
-                        request.RequestType = "Special";
+                        var match = db.HotelCities.AsNoTracking().FirstOrDefault(h => h.CityCode == request.CityId && h.IsActive);
+                        if (match != null && !string.IsNullOrWhiteSpace(match.RequestType))
+                        {
+                            request.RequestType = match.RequestType;
+                        }
                     }
-                    else if (cacheSvc.InternationalCityIds.Contains(request.CityId))
+                }
+                catch { }
+
+                if (string.IsNullOrWhiteSpace(request.RequestType))
+                {
+                    var cacheSvc = _serviceProvider.GetService<HotelCityCacheService>();
+                    if (cacheSvc != null)
                     {
-                        request.RequestType = "International";
+                        if (cacheSvc.SpecialCityIds.Contains(request.CityId))
+                        {
+                            request.RequestType = "Special";
+                        }
+                        else if (cacheSvc.InternationalCityIds.Contains(request.CityId))
+                        {
+                            request.RequestType = "International";
+                        }
                     }
                 }
             }

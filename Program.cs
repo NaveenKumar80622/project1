@@ -123,6 +123,14 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddScoped<IFlightAnalyticsService, FlightAnalyticsService>();
 builder.Services.AddScoped<IFeaturedOffersService, FeaturedOffersService>();
+
+// SRDV Master Data Ingestion & Optimized Places Service
+builder.Services.Configure<PickNBook.Api.Models.Config.SrdvMasterDataSettings>(
+    builder.Configuration.GetSection("SrdvMasterData"));
+builder.Services.AddHttpClient<PickNBook.Api.Services.Interfaces.ISrdvMasterDataDownloader, PickNBook.Api.Services.Implementations.SrdvMasterDataDownloader>();
+builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.ISrdvSqlDumpParser, PickNBook.Api.Services.Implementations.SrdvSqlDumpParser>();
+builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.ISrdvMasterDataImporter, PickNBook.Api.Services.Implementations.SrdvMasterDataImporter>();
+builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.IPlacesService, PickNBook.Api.Services.Implementations.PlacesService>();
 // Email Settings
 builder.Services.Configure<EmailSettings>(
     builder.Configuration.GetSection("EmailSettings"));

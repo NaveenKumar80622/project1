@@ -42,6 +42,9 @@ namespace PickNBook.Api.Data
         public DbSet<FlightRouteStat> FlightRouteStats => Set<FlightRouteStat>();
         public DbSet<BusRouteStat> BusRouteStats => Set<BusRouteStat>();
         public DbSet<PlaceSearchStat> PlaceSearchStats => Set<PlaceSearchStat>();
+        public DbSet<BusCity> BusCities => Set<BusCity>();
+        public DbSet<HotelCity> HotelCities => Set<HotelCity>();
+        public DbSet<Airport> Airports => Set<Airport>();
         public DbSet<BusDiscount> BusDiscounts => Set<BusDiscount>();
         public DbSet<BusCoupon> BusCoupons => Set<BusCoupon>();
         public DbSet<BusCouponUsage> BusCouponUsages => Set<BusCouponUsage>();
@@ -1319,6 +1322,62 @@ namespace PickNBook.Api.Data
             {
                 entity.HasIndex(x => new { x.EventType, x.CreatedAt }).HasDatabaseName("idx_audit_event");
                 entity.HasIndex(x => new { x.IpAddress, x.CreatedAt }).HasDatabaseName("idx_audit_ip");
+            });
+
+            // =============================
+            // SRDV MASTER DATA TABLES CONFIG
+            // =============================
+            modelBuilder.Entity<BusCity>(entity =>
+            {
+                entity.ToTable("bus_cities");
+                entity.Property(x => x.CityCode).HasMaxLength(50).IsRequired();
+                entity.Property(x => x.CityName).HasMaxLength(200).IsRequired();
+                entity.Property(x => x.StateName).HasMaxLength(200);
+                entity.Property(x => x.CountryName).HasMaxLength(100);
+                entity.Property(x => x.CountryCode).HasMaxLength(10);
+                entity.HasIndex(x => x.CityCode);
+                entity.HasIndex(x => x.CityName);
+                entity.HasIndex(x => x.IsActive);
+            });
+
+            modelBuilder.Entity<HotelCity>(entity =>
+            {
+                entity.ToTable("hotel_cities");
+                entity.Property(x => x.CityCode).HasMaxLength(50).IsRequired();
+                entity.Property(x => x.CityName).HasMaxLength(200).IsRequired();
+                entity.Property(x => x.CountryName).HasMaxLength(150);
+                entity.Property(x => x.CountryCode).HasMaxLength(20);
+                entity.Property(x => x.RequestType).HasMaxLength(30).IsRequired();
+                entity.HasIndex(x => new { x.RequestType, x.CityCode }).IsUnique();
+                entity.HasIndex(x => new { x.RequestType, x.CityName });
+                entity.HasIndex(x => x.CityCode);
+                entity.HasIndex(x => x.CityName);
+                entity.HasIndex(x => x.IsActive);
+            });
+
+            modelBuilder.Entity<Airport>(entity =>
+            {
+                entity.ToTable("airports");
+                entity.Property(x => x.IataCode).HasMaxLength(10).IsRequired();
+                entity.Property(x => x.IcaoCode).HasMaxLength(10);
+                entity.Property(x => x.AirportName).HasMaxLength(200).IsRequired();
+                entity.Property(x => x.CityCode).HasMaxLength(20);
+                entity.Property(x => x.CityName).HasMaxLength(200).IsRequired();
+                entity.Property(x => x.CountryCode).HasMaxLength(20);
+                entity.Property(x => x.CountryName).HasMaxLength(150);
+                entity.Property(x => x.Latitude).HasPrecision(10, 7);
+                entity.Property(x => x.Longitude).HasPrecision(10, 7);
+                entity.HasIndex(x => x.IataCode).IsUnique();
+                entity.HasIndex(x => x.CityName);
+                entity.HasIndex(x => x.AirportName);
+                entity.HasIndex(x => x.CityCode);
+                entity.HasIndex(x => x.IsActive);
+            });
+
+            modelBuilder.Entity<Airline>(entity =>
+            {
+                entity.HasIndex(x => x.Code);
+                entity.HasIndex(x => x.Name);
             });
         }
     }
