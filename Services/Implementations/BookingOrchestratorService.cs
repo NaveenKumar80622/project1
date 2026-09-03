@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
@@ -15,17 +16,20 @@ namespace PickNBook.Api.Services.Implementations
         private readonly ILogger<BookingOrchestratorService> _logger;
         private readonly IServiceProvider _serviceProvider; // Used to resolve scoped services like _srdvBusService dynamically without circular deps
         private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
+        private readonly IMemoryCache _cache;
 
         public BookingOrchestratorService(
             AppDbContext dbContext,
             ILogger<BookingOrchestratorService> logger,
             IServiceProvider serviceProvider,
-            PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService)
+            PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
+            IMemoryCache cache)
         {
             _dbContext = dbContext;
             _logger = logger;
             _serviceProvider = serviceProvider;
             _notificationService = notificationService;
+            _cache = cache;
         }
 
         public async Task<(bool Success, string? ErrorMessage)> ProcessFulfillmentAsync(int paymentId)
@@ -242,9 +246,70 @@ namespace PickNBook.Api.Services.Implementations
 
             try
             {
-                // Parse original passenger and request details
-                var passengers = request.Passengers;
-                var seatsRequired = passengers.Count;
+                // Resolve authoritative blocked-seat pricing
+                var blockedSeats = await _dbContext.BusBlockedSeatPrices
+                    .Where(x => x.TraceId == request.TraceId)
+                    .ToListAsync();
+
+                var authoritativeBlockedSeats = (request.Passengers ?? new List<BusPassengerDto>())
+                    .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
+                    .Select(p =>
+                    {
+                        var seatCode = p.SeatNumber!.Trim();
+
+                        var blockedSeat = blockedSeats
+                            .Where(b =>
+                                !string.IsNullOrWhiteSpace(b.SeatName) &&
+                                b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase) &&
+                                b.BaseFare > 0)
+                            .OrderByDescending(b => b.Id)
+                            .FirstOrDefault();
+
+                        return new
+                        {
+                            Passenger = p,
+                            SeatCode = seatCode,
+                            BlockedSeat = blockedSeat
+                        };
+                    })
+                    .ToList();
+
+                var missingSeats = authoritativeBlockedSeats
+                    .Where(x => x.BlockedSeat == null)
+                    .Select(x => x.SeatCode)
+                    .ToList();
+
+                if (missingSeats.Any())
+                {
+                    return (false,
+                        $"Authoritative blocked seat pricing is unavailable for seat(s): {string.Join(", ", missingSeats)}. Please refresh and block the seats again.");
+                }
+
+                // Resolve authoritative SeatType from SRDV layout cache
+                Dictionary<string, BusSeatLayoutItemContext>? layoutMap = null;
+
+                if (!string.IsNullOrEmpty(request.TraceId) &&
+                    !string.IsNullOrEmpty(request.ResultIndex))
+                {
+                    _cache.TryGetValue(
+                        $"bus_seats_{request.TraceId}_{request.ResultIndex}",
+                        out layoutMap);
+                }
+
+                var missingLayoutSeats = authoritativeBlockedSeats
+                    .Where(x => layoutMap == null ||
+                                !layoutMap.TryGetValue(x.SeatCode, out var layoutSeat) ||
+                                string.IsNullOrWhiteSpace(layoutSeat.SeatType))
+                    .Select(x => x.SeatCode)
+                    .ToList();
+
+                if (missingLayoutSeats.Any())
+                {
+                    return (false,
+                        $"Authoritative seat layout information is unavailable for seat(s): {string.Join(", ", missingLayoutSeats)}. Please refresh the seat layout and block again.");
+                }
+
+                var seatsRequired = authoritativeBlockedSeats.Count;
 
                 var depTime = DateTime.Parse(request.DepartureTime).ToUniversalTime();
                 var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : DateTime.Parse(request.ArrivalTime).ToUniversalTime();
@@ -273,7 +338,9 @@ namespace PickNBook.Api.Services.Implementations
                     IsIdProofRequired = false
                 };
 
-                var contactName = string.IsNullOrWhiteSpace(request.PassengerName) ? passengers[0].FullName : request.PassengerName.Trim();
+                var contactName = string.IsNullOrWhiteSpace(request.PassengerName) 
+                    ? (authoritativeBlockedSeats.FirstOrDefault()?.Passenger.FullName ?? "Passenger") 
+                    : request.PassengerName.Trim();
 
                 // Generate PNR
                 string pnr = await GenerateUniqueBusPnrAsync();
@@ -311,16 +378,19 @@ namespace PickNBook.Api.Services.Implementations
                 };
 
                 var dbPassengers = new List<BusReservationPassenger>();
-                foreach (var p in passengers)
+                foreach (var item in authoritativeBlockedSeats)
                 {
+                    var p = item.Passenger;
+                    var layoutSeat = layoutMap![item.SeatCode];
+
                     dbPassengers.Add(new BusReservationPassenger
                     {
                         BusReservationId = reservation.Id,
                         FullName = p.FullName,
                         Gender = p.Gender,
-                        SeatNumber = p.SeatNumber!,
-                        BaseFareInr = p.BaseFare,
-                        SeatType = p.SeatType,
+                        SeatNumber = item.SeatCode,
+                        BaseFareInr = item.BlockedSeat!.BaseFare,
+                        SeatType = layoutSeat.SeatType,
                         Age = p.Age
                     });
                 }
