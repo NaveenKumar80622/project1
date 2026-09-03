@@ -383,25 +383,44 @@ namespace PickNBook.Api.Services
                 BoardingPointId = request.BoardingPointId,
                 DroppingPointId = request.DroppingPointId,
                 RefId = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
-                Passengers = request.Passengers.Select((p, idx) => new
+                Passengers = request.Passengers.Select((p, idx) =>
                 {
-                    Title = p.Title,
-                    FirstName = p.FirstName,
-                    LastName = p.LastName,
-                    Gender = p.Gender.ToString(),
-                    Age = p.Age.ToString(),
-                    Email = p.Email,
-                    PhoneNo = p.ContactNo,
-                    LeadPassenger = (idx == 0) ? "true" : "false",
-                    IdNumber = string.IsNullOrWhiteSpace(p.IdNumber) ? null : p.IdNumber,
-                    IdType = string.IsNullOrWhiteSpace(p.IdType) ? null : p.IdType,
-                    Address = string.IsNullOrWhiteSpace(p.Address) ? "Default Address" : p.Address,
-                    SeatName = p.SeatName,
-                    GSTCompanyAddress = p.GSTCompanyAddress,
-                    GSTCompanyContactNumber = p.GSTCompanyContactNumber,
-                    GSTCompanyName = p.GSTCompanyName,
-                    GSTNumber = p.GSTNumber,
-                    GSTCompanyEmail = p.GSTCompanyEmail
+                    var pax = new Dictionary<string, object?>
+                    {
+                        ["Title"] = p.Title,
+                        ["FirstName"] = p.FirstName,
+                        ["LastName"] = p.LastName,
+                        ["Gender"] = p.Gender.ToString(),
+                        ["Age"] = p.Age.ToString(),
+                        ["Email"] = p.Email,
+                        ["PhoneNo"] = p.ContactNo,
+                        ["LeadPassenger"] = (idx == 0) ? "true" : "false",
+                        ["Address"] = string.IsNullOrWhiteSpace(p.Address) ? "Default Address" : p.Address,
+                        ["SeatName"] = p.SeatName
+                    };
+
+                    if (!string.IsNullOrWhiteSpace(p.IdType))
+                    {
+                        pax["IdType"] = p.IdType.Trim();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(p.IdNumber))
+                    {
+                        pax["IdNumber"] = p.IdNumber.Trim();
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyAddress))
+                        pax["GSTCompanyAddress"] = p.GSTCompanyAddress.Trim();
+                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyContactNumber))
+                        pax["GSTCompanyContactNumber"] = p.GSTCompanyContactNumber.Trim();
+                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyName))
+                        pax["GSTCompanyName"] = p.GSTCompanyName.Trim();
+                    if (!string.IsNullOrWhiteSpace(p.GSTNumber))
+                        pax["GSTNumber"] = p.GSTNumber.Trim();
+                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyEmail))
+                        pax["GSTCompanyEmail"] = p.GSTCompanyEmail.Trim();
+
+                    return pax;
                 }).ToList()
             };
 
