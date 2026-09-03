@@ -1,8 +1,10 @@
-﻿namespace PickNBook.Api.Models
+namespace PickNBook.Api.Models
 {
     public class BusCouponUsage
     {
         public int Id { get; set; }
+        public int? BusCouponId { get; set; }
+        public BusCoupon? BusCoupon { get; set; }
         public string UserId { get; set; } = null!;
         public int BusReservationId { get; set; }
         public BusReservation? BusReservation { get; set; }

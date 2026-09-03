@@ -279,7 +279,8 @@ builder.Services.AddAuthentication(options =>
     {
         ValidateIssuer = true,
         ValidateAudience = true,
-        ValidateLifetime = true,
+        ValidateLifetime = false,
+        RequireExpirationTime = false,
         ValidateIssuerSigningKey = true,
 
         ValidIssuer = builder.Configuration["Jwt:Issuer"],

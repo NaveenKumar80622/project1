@@ -272,174 +272,7 @@ namespace PickNBook.Api.Controllers
             });
         }
 
-        [HttpGet("discounts")]
-        public async Task<IActionResult> GetDiscounts()
-        {
-            var discounts = await dbContext.BusDiscounts
-                .AsNoTracking()
-                .OrderByDescending(x => x.EntryDateUtc)
-                .ToListAsync();
 
-            var response = discounts.Select(x => new
-            {
-                x.Id,
-                x.Value,
-                x.DiscountType,
-                x.EntryDateUtc,
-                x.UpdateDateUtc,
-                x.UpdatedBy,
-                x.Remark,
-                x.Status,
-               
-                x.Priority,
-                x.IsExclusive,
-                x.MinBookingAmount,
-               
-                x.StartDateUtc,
-                x.EndDateUtc
-            });
-
-            return Ok(response);
-        }
-
-        [HttpGet("discounts/{id:int}")]
-        public async Task<IActionResult> GetDiscountById(int id)
-        {
-            var discount = await dbContext.BusDiscounts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
-            if (discount is null)
-            {
-                return NotFound("Discount not found.");
-            }
-
-            return Ok(discount);
-        }
-
-        [HttpPost("discounts")]
-        public async Task<IActionResult> CreateDiscount([FromBody] BusDiscountRequestDto request)
-        {
-            var error = ValidateDiscountRequest(request);
-            if (error is not null)
-            {
-                return BadRequest(error);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.Code))
-            {
-                var normalizedCode = request.Code.Trim();
-                var exists = await dbContext.BusDiscounts.AnyAsync(x => x.Code == normalizedCode);
-                if (exists)
-                {
-                    return BadRequest($"Discount code '{normalizedCode}' already exists.");
-                }
-            }
-
-            var now = DateTime.UtcNow;
-            var row = new BusDiscount
-            {
-                Code = request.Code?.Trim(),
-                Title = request.Title?.Trim(),
-                Description = request.Description?.Trim(),
-                Value = request.Value,
-                DiscountType = NormalizeDiscountType(request.DiscountType),
-                IsAutoApply = request.IsAutoApply,
-                IsExclusive = request.IsExclusive,
-                Priority = request.Priority,
-                MinBookingAmount = request.MinBookingAmount,
-                StartDateUtc = request.StartDateUtc,
-                EndDateUtc = request.EndDateUtc,
-                EntryDateUtc = now,
-                UpdateDateUtc = now,
-                UpdatedBy = NormalizeUpdatedBy(request.UpdatedBy),
-                Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim(),
-                Status = NormalizeStatus(request.Status)
-            };
-
-            dbContext.BusDiscounts.Add(row);
-            await dbContext.SaveChangesAsync();
-            await SyncPromotionFromDiscountAsync(row);
-
-            await dbContext.SaveChangesAsync();
-
-            return CreatedAtAction(nameof(GetDiscountById), new { id = row.Id }, row);
-        }
-
-        [HttpPut("discounts/{id:int}")]
-        public async Task<IActionResult> UpdateDiscount(int id, [FromBody] BusDiscountRequestDto request)
-        {
-            var row = await dbContext.BusDiscounts.FirstOrDefaultAsync(x => x.Id == id);
-            if (row is null)
-            {
-                return NotFound("Discount not found.");
-            }
-
-            var error = ValidateDiscountRequest(request);
-            if (error is not null)
-            {
-                return BadRequest(error);
-            }
-
-            if (!string.IsNullOrWhiteSpace(request.Code))
-            {
-                var normalizedCode = request.Code.Trim();
-                var exists = await dbContext.BusDiscounts.AnyAsync(x => x.Code == normalizedCode && x.Id != id);
-                if (exists)
-                {
-                    return BadRequest($"Discount code '{normalizedCode}' already exists.");
-                }
-            }
-
-            row.Code = request.Code?.Trim();
-            row.Title = request.Title?.Trim();
-            row.Description = request.Description?.Trim();
-            row.Value = request.Value;
-            row.DiscountType = NormalizeDiscountType(request.DiscountType);
-            row.IsAutoApply = request.IsAutoApply;
-            row.IsExclusive = request.IsExclusive;
-            row.Priority = request.Priority;
-            row.MinBookingAmount = request.MinBookingAmount;
-            row.StartDateUtc = request.StartDateUtc;
-            row.EndDateUtc = request.EndDateUtc;
-            row.UpdateDateUtc = DateTime.UtcNow;
-            row.UpdatedBy = NormalizeUpdatedBy(request.UpdatedBy);
-            row.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
-            row.Status = NormalizeStatus(request.Status);
-
-            await dbContext.SaveChangesAsync();
-            await SyncPromotionFromDiscountAsync(row);
-            await dbContext.SaveChangesAsync();
-            return Ok(row);
-        }
-
-        [HttpDelete("discounts/{id:int}")]
-        public async Task<IActionResult> DeleteDiscount(int id)
-        {
-            var discount = await dbContext.BusDiscounts
-                .FirstOrDefaultAsync(x => x.Id == id);
-
-            if (discount is null)
-            {
-                return NotFound("Discount not found.");
-            }
-
-            var linkedPromotion = await dbContext.BusPromotions
-                .FirstOrDefaultAsync(x =>
-                    x.SourceType == "Discount" &&
-                    x.SourceKey == discount.Id.ToString());
-
-            if (linkedPromotion != null)
-            {
-                linkedPromotion.IsActive = false;
-            }
-
-            dbContext.BusDiscounts.Remove(discount);
-
-            await dbContext.SaveChangesAsync();
-
-            return Ok(new
-            {
-                message = "Discount deleted."
-            });
-        }
         // GET all markup settings
         [HttpGet("markup-settings")]
         public async Task<IActionResult> GetMarkupSettings()
@@ -680,19 +513,28 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("coupons")]
-        public async Task<IActionResult> GetCoupons()
+        public async Task<IActionResult> GetCoupons([FromQuery] string? category = null)
         {
-            var coupons = await dbContext.BusCoupons
-                .AsNoTracking()
+            var query = dbContext.BusCoupons.AsNoTracking();
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                query = query.Where(x => x.PromotionCategory == category);
+            }
+
+            var coupons = await query
                 .OrderByDescending(x => x.EntryDateUtc)
                 .ToListAsync();
 
             var response = coupons.Select(x => new
             {
                 x.Id,
+                x.PromotionCategory,
+                x.Title,
+                x.Description,
                 x.Value,
                 x.CouponType,
                 x.CouponCode,
+                x.MaxDiscountAmount,
                 x.StartDate,
                 x.ExpiryDate,
                 x.UseLimit,
@@ -701,8 +543,10 @@ namespace PickNBook.Api.Controllers
                 x.EntryDateUtc,
                 x.MaxUsagePerUser,
                 x.MinBookingAmount,
+                x.IsFirstTimeUserOnly,
                 x.Remark,
                 x.Priority,
+                x.IsAutoApply,
                 x.IsExclusive
             });
 
@@ -712,7 +556,11 @@ namespace PickNBook.Api.Controllers
         [HttpGet("coupons/{id:int}")]
         public async Task<IActionResult> GetCouponById(int id)
         {
-            var coupon = await dbContext.BusCoupons.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
+            var coupon = await dbContext.BusCoupons
+                .Include(x => x.Conditions)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => x.Id == id);
+
             if (coupon is null)
             {
                 return NotFound("Coupon not found.");
@@ -753,16 +601,20 @@ namespace PickNBook.Api.Controllers
 
             var coupon = new BusCoupon
             {
+                PromotionCategory = string.IsNullOrWhiteSpace(request.PromotionCategory) ? "Coupon" : request.PromotionCategory.Trim(),
+                Title = string.IsNullOrWhiteSpace(request.Title) ? null : request.Title.Trim(),
+                Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim(),
                 Value = request.Value,
                 CouponType = NormalizeDiscountType(request.CouponType),
                 CouponCode = normalizedCode,
+                MaxDiscountAmount = request.MaxDiscountAmount,
                 StartDate = request.StartDate,
                 ExpiryDate = request.ExpiryDate,
                 UseLimit = request.UseLimit,
                 IsAutoApply = request.IsAutoApply,
                 IsExclusive = request.IsExclusive,
+                IsFirstTimeUserOnly = request.IsFirstTimeUserOnly,
                 Priority = request.Priority,
-                // ✅ NEW FIELD (per-user limit)
                 MaxUsagePerUser = request.MaxUsagePerUser,
                 MinBookingAmount = request.MinBookingAmount,
                 UsedCount = 0,
@@ -780,12 +632,9 @@ namespace PickNBook.Api.Controllers
             }
             catch (DbUpdateException)
             {
-                // Final protection (DB unique constraint will trigger here)
                 return BadRequest("Coupon code already exists (duplicate detected at database level).");
             }
-            await SyncPromotionFromCouponAsync(coupon);
-            await dbContext.SaveChangesAsync();
-            // Step 6: Return response
+
             return CreatedAtAction(nameof(GetCouponById), new { id = coupon.Id }, coupon);
         }
 
@@ -822,12 +671,15 @@ namespace PickNBook.Api.Controllers
             {
                 return BadRequest($"Coupon code '{normalizedCode}' already exists.");
             }
-           
 
             // Step 5: Update fields
+            coupon.PromotionCategory = string.IsNullOrWhiteSpace(request.PromotionCategory) ? "Coupon" : request.PromotionCategory.Trim();
+            coupon.Title = string.IsNullOrWhiteSpace(request.Title) ? null : request.Title.Trim();
+            coupon.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
             coupon.Value = request.Value;
             coupon.CouponType = NormalizeDiscountType(request.CouponType);
             coupon.CouponCode = normalizedCode;
+            coupon.MaxDiscountAmount = request.MaxDiscountAmount;
             coupon.StartDate = request.StartDate;
             coupon.ExpiryDate = request.ExpiryDate;
             coupon.UseLimit = request.UseLimit;
@@ -835,6 +687,7 @@ namespace PickNBook.Api.Controllers
             coupon.MinBookingAmount = request.MinBookingAmount;
             coupon.IsAutoApply = request.IsAutoApply;
             coupon.IsExclusive = request.IsExclusive;
+            coupon.IsFirstTimeUserOnly = request.IsFirstTimeUserOnly;
             coupon.Priority = request.Priority;
             coupon.Status = NormalizeStatus(request.Status);
             coupon.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
@@ -848,10 +701,94 @@ namespace PickNBook.Api.Controllers
             {
                 return BadRequest("Coupon code already exists (duplicate detected at database level).");
             }
-            await SyncPromotionFromCouponAsync(coupon);
-            await dbContext.SaveChangesAsync();
-            // Step 7: Return response
+
             return Ok(coupon);
+        }
+
+        // =========================================================================
+        // BUS COUPON CONDITION ENDPOINTS (Authoritative Condition Settings)
+        // =========================================================================
+        [HttpGet("coupons/{couponId:int}/conditions")]
+        public async Task<IActionResult> GetCouponConditions(int couponId)
+        {
+            var coupon = await dbContext.BusCoupons.AsNoTracking().FirstOrDefaultAsync(x => x.Id == couponId);
+            if (coupon == null)
+            {
+                return NotFound("Coupon not found.");
+            }
+
+            var conditions = await dbContext.BusCouponConditions
+                .AsNoTracking()
+                .Where(x => x.BusCouponId == couponId)
+                .ToListAsync();
+
+            return Ok(conditions);
+        }
+
+        [HttpPost("coupons/{couponId:int}/conditions")]
+        public async Task<IActionResult> CreateCouponCondition(int couponId, [FromBody] CreateBusCouponConditionDto request)
+        {
+            var coupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.Id == couponId);
+            if (coupon == null)
+            {
+                return NotFound("Coupon not found.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
+            {
+                return BadRequest("ConditionType and Value1 are required.");
+            }
+
+            var condition = new BusCouponCondition
+            {
+                BusCouponId = couponId,
+                ConditionType = request.ConditionType.Trim(),
+                ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim(),
+                Value1 = request.Value1.Trim(),
+                Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim()
+            };
+
+            dbContext.BusCouponConditions.Add(condition);
+            await dbContext.SaveChangesAsync();
+
+            return Ok(condition);
+        }
+
+        [HttpPut("coupons/conditions/{conditionId:int}")]
+        public async Task<IActionResult> UpdateCouponCondition(int conditionId, [FromBody] UpdateBusCouponConditionDto request)
+        {
+            var condition = await dbContext.BusCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
+            if (condition == null)
+            {
+                return NotFound("Coupon condition not found.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
+            {
+                return BadRequest("ConditionType and Value1 are required.");
+            }
+
+            condition.ConditionType = request.ConditionType.Trim();
+            condition.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
+            condition.Value1 = request.Value1.Trim();
+            condition.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
+
+            await dbContext.SaveChangesAsync();
+            return Ok(condition);
+        }
+
+        [HttpDelete("coupons/conditions/{conditionId:int}")]
+        public async Task<IActionResult> DeleteCouponCondition(int conditionId)
+        {
+            var condition = await dbContext.BusCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
+            if (condition == null)
+            {
+                return NotFound("Coupon condition not found.");
+            }
+
+            dbContext.BusCouponConditions.Remove(condition);
+            await dbContext.SaveChangesAsync();
+            return Ok(new { message = "Condition deleted successfully." });
         }
 
         [HttpDelete("coupons/{id:int}")]
@@ -863,16 +800,6 @@ namespace PickNBook.Api.Controllers
             if (coupon is null)
             {
                 return NotFound("Coupon not found.");
-            }
-
-            var linkedPromotion = await dbContext.BusPromotions
-                .FirstOrDefaultAsync(x =>
-                    x.SourceType == "Coupon" &&
-                    x.SourceId == coupon.Id);
-
-            if (linkedPromotion != null)
-            {
-                linkedPromotion.IsActive = false;
             }
 
             dbContext.BusCoupons.Remove(coupon);
@@ -1123,30 +1050,7 @@ namespace PickNBook.Api.Controllers
             return null;
         }
 
-        private static string? ValidateDiscountRequest(BusDiscountRequestDto request)
-        {
-            if (request is null)
-            {
-                return "Request body is required.";
-            }
 
-            if (request.Value <= 0)
-            {
-                return "Value must be greater than 0.";
-            }
-
-            if (string.IsNullOrWhiteSpace(request.DiscountType))
-            {
-                return "DiscountType is required.";
-            }
-
-            if (!AllowedDiscountTypes.Contains(request.DiscountType.Trim(), StringComparer.OrdinalIgnoreCase))
-            {
-                return $"DiscountType must be one of: {string.Join(", ", AllowedDiscountTypes)}.";
-            }
-
-            return null;
-        }
 
         private static string? ValidateCouponRequest(BusCouponRequestDto request)
         {
@@ -1226,416 +1130,7 @@ namespace PickNBook.Api.Controllers
         {
             return DateTime.SpecifyKind(utcDateTime, DateTimeKind.Utc).Add(IndiaOffset);
         }
-        private async Task SyncPromotionFromCouponAsync(
-    BusCoupon coupon)
-        {
-            var promo =
-                await dbContext.BusPromotions
-                    .FirstOrDefaultAsync(x =>
-                        x.SourceType == "Coupon" &&
-                       x.SourceId == coupon.Id);
 
-            if (promo == null)
-            {
-                promo = new BusPromotion();
-
-                dbContext.BusPromotions.Add(promo);
-            }
-
-            promo.Code = coupon.CouponCode;
-
-            promo.Title = coupon.CouponCode;
-
-            promo.Description = coupon.Remark;
-
-            promo.PromotionType = "Coupon";
-
-            promo.DiscountType = coupon.CouponType;
-
-            promo.DiscountValue = coupon.Value;
-
-            promo.IsActive =
-                coupon.Status == "Active";
-
-            promo.IsExclusive =
-                coupon.IsExclusive;
-
-            promo.IsAutoApply =
-                coupon.IsAutoApply;
-
-            promo.Priority =
-                coupon.Priority;
-
-            promo.MaxUsage =
-                coupon.UseLimit;
-
-            promo.UsedCount =
-                coupon.UsedCount;
-
-            promo.MaxUsagePerUser =
-                coupon.MaxUsagePerUser;
-
-            promo.StartDateUtc =
-                coupon.StartDate.ToDateTime(
-                    TimeOnly.MinValue);
-
-            promo.EndDateUtc =
-                coupon.ExpiryDate.ToDateTime(
-                    TimeOnly.MaxValue);
-
-            promo.SourceType = "Coupon";
-
-            promo.SourceKey =
-                coupon.CouponCode;
-            promo.SourceId =
-    coupon.Id;
-        }
-        private async Task SyncPromotionFromDiscountAsync( BusDiscount discount)
-        {
-            var promo =
-                await dbContext.BusPromotions
-                    .FirstOrDefaultAsync(x =>
-                        x.SourceType == "Discount" &&
-                        x.SourceKey ==
-                            discount.Id.ToString());
-
-            if (promo == null)
-            {
-                promo = new BusPromotion();
-
-                dbContext.BusPromotions.Add(promo);
-            }
-
-            promo.Code =
-                discount.Code ??
-                $"DISC-{discount.Id}";
-
-            promo.Title =
-                discount.Title ??
-                $"Discount {discount.Id}";
-
-            promo.Description =
-                discount.Description;
-
-            promo.PromotionType =
-                "Discount";
-
-            promo.DiscountType =
-                discount.DiscountType;
-
-            promo.DiscountValue =
-                discount.Value;
-
-            promo.IsActive =
-                discount.Status == "Active";
-
-            promo.IsExclusive =
-                discount.IsExclusive;
-
-            promo.IsAutoApply =
-                discount.IsAutoApply;
-
-            promo.Priority =
-                discount.Priority;
-
-            promo.MinBookingAmount =
-                discount.MinBookingAmount;
-
-            promo.StartDateUtc =
-                discount.StartDateUtc ??
-                DateTime.UtcNow;
-
-            promo.EndDateUtc =
-                discount.EndDateUtc ??
-                DateTime.UtcNow.AddYears(10);
-
-            promo.SourceType =
-                "Discount";
-
-            promo.SourceKey =
-                discount.Id.ToString();
-
-            promo.SourceId =
-                discount.Id;
-        }
-        [HttpPost("discounts/{discountId}/conditions")]
-        public async Task<IActionResult>
-    AddDiscountCondition(
-        int discountId,
-        [FromBody]
-        CreateBusDiscountConditionDto request)
-        {
-            if (request is null)
-            {
-                return BadRequest("Request body is required.");
-            }
-
-            var discount =
-                await dbContext.BusDiscounts
-                    .FirstOrDefaultAsync(x =>
-                        x.Id == discountId);
-
-            if (discount == null)
-            {
-                return NotFound(
-                    "Discount not found.");
-            }
-
-            var discountCondition =
-                new BusDiscountCondition
-                {
-                    BusDiscountId = discountId,
-
-                    ConditionType =
-                        request.ConditionType,
-
-                    ConditionOperator =
-                        request.ConditionOperator,
-
-                    Value1 = request.Value1,
-
-                    Value2 = request.Value2
-                };
-
-            dbContext.BusDiscountConditions
-                .Add(discountCondition);
-
-            await dbContext.SaveChangesAsync();
-
-            // IMPORTANT
-            // SYNC INTO PROMOTION CONDITIONS
-
-            var promotion =
-                await dbContext.BusPromotions
-                    .FirstOrDefaultAsync(x =>
-                        x.SourceType == "Discount" &&
-                        x.SourceKey ==
-                            discount.Id.ToString());
-
-            if (promotion != null)
-            {
-                var promotionCondition =
-                    new BusPromotionCondition
-                    {
-                        BusPromotionId =
-                            promotion.Id,
-
-                        ConditionType =
-                            request.ConditionType,
-
-                        ConditionOperator =
-                            request.ConditionOperator,
-
-                        Value1 =
-                            request.Value1,
-
-                        Value2 =
-                            request.Value2
-                    };
-
-                dbContext.BusPromotionConditions
-                    .Add(promotionCondition);
-
-                await dbContext.SaveChangesAsync();
-            }
-
-            return Ok(
-                new
-                {
-                    message =
-                        "Discount condition added successfully."
-                });
-        }
-        [HttpGet("discounts/{discountId}/conditions")]
-        public async Task<IActionResult>
-    GetDiscountConditions(
-        int discountId)
-        {
-            var conditions =
-                await dbContext.BusDiscountConditions
-                    .Where(x =>
-                        x.BusDiscountId == discountId)
-                    .ToListAsync();
-
-            return Ok(conditions);
-        }
-        [HttpDelete(
-    "discounts/conditions/{conditionId}")]
-        public async Task<IActionResult>
-    DeleteDiscountCondition(
-        int conditionId)
-        {
-            var condition =
-                await dbContext.BusDiscountConditions
-                    .FirstOrDefaultAsync(x =>
-                        x.Id == conditionId);
-
-            if (condition == null)
-            {
-                return NotFound(
-                    "Condition not found.");
-            }
-
-            // REMOVE LINKED PROMOTION CONDITION
-
-            var discount =
-                await dbContext.BusDiscounts
-                    .FirstOrDefaultAsync(x =>
-                        x.Id ==
-                            condition.BusDiscountId);
-
-            if (discount != null)
-            {
-                var promotion =
-                    await dbContext.BusPromotions
-                        .FirstOrDefaultAsync(x =>
-                            x.SourceType == "Discount" &&
-                            x.SourceKey ==
-                                discount.Id.ToString());
-
-                if (promotion != null)
-                {
-                    var promoCondition =
-                        await dbContext
-                            .BusPromotionConditions
-                            .FirstOrDefaultAsync(x =>
-                                x.BusPromotionId ==
-                                    promotion.Id &&
-                                x.ConditionType ==
-                                    condition.ConditionType &&
-                                x.Value1 ==
-                                    condition.Value1);
-
-                    if (promoCondition != null)
-                    {
-                        dbContext
-                            .BusPromotionConditions
-                            .Remove(promoCondition);
-                    }
-                }
-            }
-
-            dbContext.BusDiscountConditions
-                .Remove(condition);
-
-            await dbContext.SaveChangesAsync();
-
-            return Ok(
-                new
-                {
-                    message =
-                        "Condition deleted successfully."
-                });
-        }
-        [HttpPut(
-    "discounts/conditions/{conditionId}")]
-        public async Task<IActionResult>
-    UpdateDiscountCondition(
-        int conditionId,
-        [FromBody]
-        UpdateBusDiscountConditionDto request)
-        {
-            if (request is null)
-            {
-                return BadRequest("Request body is required.");
-            }
-
-            var condition =
-                await dbContext.BusDiscountConditions
-                    .FirstOrDefaultAsync(x =>
-                        x.Id == conditionId);
-
-            if (condition == null)
-            {
-                return NotFound(
-                    "Condition not found.");
-            }
-
-            // STORE OLD VALUES
-            // Needed to update synced promotion condition
-
-            var oldConditionType =
-                condition.ConditionType;
-
-            var oldValue1 =
-                condition.Value1;
-
-            // UPDATE DISCOUNT CONDITION
-
-            condition.ConditionType =
-                request.ConditionType;
-
-            condition.ConditionOperator =
-                request.ConditionOperator;
-
-            condition.Value1 =
-                request.Value1;
-
-            condition.Value2 =
-                request.Value2;
-
-            // FIND DISCOUNT
-
-            var discount =
-                await dbContext.BusDiscounts
-                    .FirstOrDefaultAsync(x =>
-                        x.Id ==
-                            condition.BusDiscountId);
-
-            if (discount != null)
-            {
-                // FIND LINKED PROMOTION
-
-                var promotion =
-                    await dbContext.BusPromotions
-                        .FirstOrDefaultAsync(x =>
-                            x.SourceType == "Discount" &&
-                            x.SourceKey ==
-                                discount.Id.ToString());
-
-                if (promotion != null)
-                {
-                    // FIND LINKED PROMOTION CONDITION
-
-                    var promoCondition =
-                        await dbContext
-                            .BusPromotionConditions
-                            .FirstOrDefaultAsync(x =>
-                                x.BusPromotionId ==
-                                    promotion.Id &&
-                                x.ConditionType ==
-                                    oldConditionType &&
-                                x.Value1 ==
-                                    oldValue1);
-
-                    if (promoCondition != null)
-                    {
-                        // UPDATE PROMOTION CONDITION
-
-                        promoCondition.ConditionType =
-                            request.ConditionType;
-
-                        promoCondition.ConditionOperator =
-                            request.ConditionOperator;
-
-                        promoCondition.Value1 =
-                            request.Value1;
-
-                        promoCondition.Value2 =
-                            request.Value2;
-                    }
-                }
-            }
-
-            await dbContext.SaveChangesAsync();
-
-            return Ok(
-                new
-                {
-                    message =
-                        "Condition updated successfully."
-                });
-        }
         [HttpGet("bookings/all")]
         public async Task<IActionResult> GetAllBusBookings(
      [FromQuery] string? passengerPhone,

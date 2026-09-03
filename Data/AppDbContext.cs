@@ -45,8 +45,9 @@ namespace PickNBook.Api.Data
         public DbSet<BusCity> BusCities => Set<BusCity>();
         public DbSet<HotelCity> HotelCities => Set<HotelCity>();
         public DbSet<Airport> Airports => Set<Airport>();
-        public DbSet<BusDiscount> BusDiscounts => Set<BusDiscount>();
+
         public DbSet<BusCoupon> BusCoupons => Set<BusCoupon>();
+        public DbSet<BusCouponCondition> BusCouponConditions => Set<BusCouponCondition>();
         public DbSet<BusCouponUsage> BusCouponUsages => Set<BusCouponUsage>();
         public DbSet<BusConvenienceFee> BusConvenienceFees => Set<BusConvenienceFee>();
         public DbSet<BusSearchLog> BusSearchLogs => Set<BusSearchLog>();
@@ -65,22 +66,16 @@ namespace PickNBook.Api.Data
         public DbSet<PopularDestination> PopularDestinations => Set<PopularDestination>();
         public DbSet<FlightCancellationRequest> FlightCancellationRequests => Set<FlightCancellationRequest>();
         public DbSet<FlightAmendmentRequest> FlightAmendmentRequests => Set<FlightAmendmentRequest>();
-        public DbSet<BusPromotion> BusPromotions => Set<BusPromotion>();
+
         public DbSet<HotelReservation> HotelReservations => Set<HotelReservation>();
         public DbSet<HotelBlockedPrice> HotelBlockedPrices => Set<HotelBlockedPrice>();
         public DbSet<BusBookingSummary> BusBookingSummaries => Set<BusBookingSummary>();
         
         public DbSet<BusBlockedSeatPrice> BusBlockedSeatPrices => Set<BusBlockedSeatPrice>();
-
-        public DbSet<BusPromotionCondition> BusPromotionConditions => Set<BusPromotionCondition>();
-
-        public DbSet<BusPromotionUsage> BusPromotionUsages => Set<BusPromotionUsage>();
-
         public DbSet<FeaturedOfferCondition> FeaturedOfferConditions => Set<FeaturedOfferCondition>();
-
         public DbSet<FeaturedOfferUsage> FeaturedOfferUsages => Set<FeaturedOfferUsage>();
 
-        public DbSet<BusDiscountCondition> BusDiscountConditions => Set<BusDiscountCondition>();
+
 
         public DbSet<FlightPromotion> FlightPromotions => Set<FlightPromotion>();
         public DbSet<FlightPromotionCondition> FlightPromotionConditions => Set<FlightPromotionCondition>();
@@ -256,17 +251,7 @@ namespace PickNBook.Api.Data
                 entity.ToView("v_BusBookingSummary");
             });
 
-            modelBuilder.Entity<BusPromotion>()
-                .ToTable("buspromotions");
 
-            modelBuilder.Entity<BusPromotionCondition>()
-                .ToTable("buspromotionconditions");
-
-            modelBuilder.Entity<BusPromotionUsage>()
-                .ToTable("buspromotionusages");
-
-            modelBuilder.Entity<BusDiscountCondition>()
-                .ToTable("busdiscountconditions");
 
             modelBuilder.Entity<FlightDiscountCondition>()
                 .ToTable("flightdiscountconditions");
@@ -458,30 +443,7 @@ namespace PickNBook.Api.Data
                     .OnDelete(DeleteBehavior.Cascade);
             });
 
-            // =============================
-            // BusPromotionUsage Configuration
-            // =============================
-            modelBuilder.Entity<BusPromotionUsage>(entity =>
-            {
-                entity.ToTable("buspromotionusages");
-                entity.HasKey(x => x.Id);
-                entity.Property(x => x.UserId).HasMaxLength(50).IsRequired();
-                entity.Property(x => x.PromotionCode).HasMaxLength(40).IsRequired();
-                entity.Property(x => x.PromotionType).HasMaxLength(20).IsRequired();
-                entity.Property(x => x.BookingStatus).HasMaxLength(20).IsRequired();
-                entity.Property(x => x.DiscountAmountInr).HasPrecision(10, 2);
-                entity.Property(x => x.BookingTotalInr).HasPrecision(10, 2);
 
-                entity.HasOne(x => x.Promotion)
-                    .WithMany()
-                    .HasForeignKey(x => x.BusPromotionId)
-                    .OnDelete(DeleteBehavior.Restrict);
-
-                entity.HasOne(x => x.BusReservation)
-                    .WithMany()
-                    .HasForeignKey(x => x.BusReservationId)
-                    .OnDelete(DeleteBehavior.Cascade);
-            });
 
             // =============================
             // CouponRedemption Configuration
@@ -880,16 +842,7 @@ namespace PickNBook.Api.Data
                 entity.Property(x => x.SelectionCount).HasColumnName("selection_count");
                 entity.HasIndex(x => new { x.CityName, x.TripType }).IsUnique();
             });
-            modelBuilder.Entity<BusDiscount>(entity =>
-            {
-                entity.ToTable("bus_discounts");
-                entity.HasKey(x => x.Id);
-                entity.Property(x => x.DiscountType).HasMaxLength(20).IsRequired();
-                entity.Property(x => x.Value).HasPrecision(10, 2);
-                entity.Property(x => x.UpdatedBy).HasMaxLength(120).IsRequired();
-                entity.Property(x => x.Remark).HasMaxLength(300);
-                entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
-            });
+
             modelBuilder.Entity<BusBlockedSeatPrice>(entity =>
             {
                 entity.HasIndex(x => x.TraceId);
@@ -898,6 +851,10 @@ namespace PickNBook.Api.Data
             modelBuilder.Entity<BusCoupon>(entity =>
             {
                 entity.ToTable("bus_coupons");
+                entity.Property(x => x.PromotionCategory).HasMaxLength(20).HasDefaultValue("Coupon");
+                entity.Property(x => x.Title).HasMaxLength(150);
+                entity.Property(x => x.Description).HasMaxLength(1000);
+                entity.Property(x => x.MaxDiscountAmount).HasPrecision(10, 2);
                 entity.Property(x => x.MinBookingAmount).HasPrecision(10, 2).HasDefaultValue(0);
                 entity.Property(x => x.MaxUsagePerUser).IsRequired().HasDefaultValue(1);
                 entity.HasKey(x => x.Id);
@@ -907,6 +864,23 @@ namespace PickNBook.Api.Data
                 entity.Property(x => x.Status).HasMaxLength(20).IsRequired();
                 entity.Property(x => x.Remark).HasMaxLength(300);
                 entity.HasIndex(x => x.CouponCode).IsUnique();
+                entity.HasIndex(x => x.PromotionCategory);
+            });
+
+            modelBuilder.Entity<BusCouponCondition>(entity =>
+            {
+                entity.ToTable("bus_coupon_conditions");
+                entity.HasKey(x => x.Id);
+                entity.Property(x => x.ConditionType).HasMaxLength(50).IsRequired();
+                entity.Property(x => x.ConditionOperator).HasMaxLength(20).IsRequired();
+                entity.Property(x => x.Value1).HasMaxLength(255).IsRequired();
+                entity.Property(x => x.Value2).HasMaxLength(255);
+                entity.HasIndex(x => x.BusCouponId);
+                entity.HasIndex(x => x.ConditionType);
+                entity.HasOne(x => x.Coupon)
+                    .WithMany(x => x.Conditions)
+                    .HasForeignKey(x => x.BusCouponId)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
 
             modelBuilder.Entity<BusCouponUsage>(entity =>

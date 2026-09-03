@@ -9,7 +9,7 @@ public interface IBusPromotionEngineService
         BusBooking bus,
         List<SeatPreviewDto> seats,
         string? couponCode,
-        int? promotionId,
+        int? promotionId = null,
         int? userId = null,
-         int? selectedFeaturedOfferId = null);
+        int? selectedFeaturedOfferId = null);
 }

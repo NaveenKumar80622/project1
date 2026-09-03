@@ -522,28 +522,29 @@ namespace PickNBook.Api.Services.Implementations
             
             if (bookingType == "Bus")
             {
-                int rows = await _dbContext.BusPromotions
-                    .Where(x => x.Code == normalizedCoupon && x.UsedCount < (x.MaxUsage ?? 999999))
+                int rows = await _dbContext.BusCoupons
+                    .Where(x => x.CouponCode == normalizedCoupon && (x.UseLimit == 0 || x.UsedCount < x.UseLimit))
                     .ExecuteUpdateAsync(s => s.SetProperty(p => p.UsedCount, p => p.UsedCount + 1));
                     
                 if (rows > 0)
                 {
-                    var promo = await _dbContext.BusPromotions.FirstOrDefaultAsync(x => x.Code == normalizedCoupon);
-                    if (promo != null)
+                    var coupon = await _dbContext.BusCoupons.FirstOrDefaultAsync(x => x.CouponCode == normalizedCoupon);
+                    if (coupon != null)
                     {
-                        var manualUsage = new BusPromotionUsage
+                        var manualUsage = new BusCouponUsage
                         {
-                            BusPromotionId = promo.Id,
+                            BusCouponId = coupon.Id,
                             BusReservationId = reservationId,
                             UserId = userId,
-                            PromotionCode = promo.Code,
-                            PromotionType = promo.PromotionType,
-                            DiscountAmountInr = discountAmount,
-                            BookingTotalInr = bookingTotal,
+                            CouponCode = coupon.CouponCode,
+                            CouponType = coupon.CouponType,
+                            CouponValue = coupon.Value,
+                            CouponAmountInr = discountAmount,
+                            TotalFareInr = bookingTotal,
                             BookingStatus = "Booked",
                             UsedAtUtc = DateTime.UtcNow
                         };
-                        _dbContext.BusPromotionUsages.Add(manualUsage);
+                        _dbContext.BusCouponUsages.Add(manualUsage);
                     }
                 }
             }

@@ -40,18 +40,25 @@ namespace PickNBook.Api.Controllers
 
         [HttpGet("user/available")]
         [AllowAnonymous]
-        public async Task<IActionResult> GetAvailableCoupons()
+        public async Task<IActionResult> GetAvailableCoupons([FromQuery] string? category = null)
         {
             var today = DateOnly.FromDateTime(
                 DateTime.UtcNow.AddHours(5.5));
 
-            var coupons = await dbContext.BusCoupons
+            var query = dbContext.BusCoupons
                 .AsNoTracking()
                 .Where(x =>
                     x.Status == "Active" &&
-                       x.StartDate <= today &&
+                    x.StartDate <= today &&
                     x.ExpiryDate >= today &&
-                    (x.UseLimit == 0 || x.UsedCount < x.UseLimit))
+                    (x.UseLimit == 0 || x.UsedCount < x.UseLimit));
+
+            if (!string.IsNullOrWhiteSpace(category))
+            {
+                query = query.Where(x => x.PromotionCategory == category);
+            }
+
+            var coupons = await query
                 .OrderBy(x => x.ExpiryDate)
                 .Select(x => new
                 {
@@ -59,10 +66,15 @@ namespace PickNBook.Api.Controllers
                     x.CouponCode,
                     x.CouponType,
                     x.Value,
+                    x.MaxDiscountAmount,
                     x.MinBookingAmount,
                     x.MaxUsagePerUser,
                     x.ExpiryDate,
-                    Description = x.Remark
+                    PromotionCategory = x.PromotionCategory,
+                    Title = x.Title ?? x.CouponCode,
+                    Description = x.Description ?? x.Remark,
+                    x.IsAutoApply,
+                    x.IsExclusive
                 })
                 .ToListAsync();
 
@@ -551,106 +563,9 @@ namespace PickNBook.Api.Controllers
 
             try
             {
-                // ========================================
-                // UNIFIED PROMOTION VALIDATION
-                // ========================================
-                BusPromotion? promotionToApply = null;
-                FeaturedOffer? selectedFeaturedOffer = null;
 
-                if (request.SelectedFeaturedOfferId.HasValue)
-                {
-                    selectedFeaturedOffer = await dbContext.FeaturedOffers
-                        .Include(x => x.Conditions)
-                        .FirstOrDefaultAsync(x => x.Id == request.SelectedFeaturedOfferId.Value && x.IsActive);
 
-                    if (selectedFeaturedOffer == null)
-                        throw new Exception("Selected offer is invalid or inactive.");
 
-                    if (!string.IsNullOrWhiteSpace(request.CouponCode))
-                    {
-                        throw new Exception("Featured offers cannot stack with manual coupons.");
-                    }
-                    if (request.PromotionId.HasValue)
-                    {
-                        throw new Exception("Only one manual promotion/offer can be applied.");
-                    }
-                }
-                else if (!string.IsNullOrWhiteSpace(request.CouponCode))
-                {
-                    var normalizedCoupon = request.CouponCode.Trim().ToUpperInvariant();
-                    var promoByCode = await dbContext.BusPromotions
-                        .Include(x => x.Conditions)
-                        .FirstOrDefaultAsync(x => x.Code == normalizedCoupon && x.IsActive && !x.IsAutoApply);
-
-                    if (promoByCode == null)
-                    {
-                        throw new Exception("Invalid or inactive coupon code.");
-                    }
-
-                    if (request.PromotionId.HasValue && request.PromotionId.Value != promoByCode.Id)
-                    {
-                        throw new Exception("Only one manual promotion/offer can be applied.");
-                    }
-
-                    promotionToApply = promoByCode;
-                }
-                else if (request.PromotionId.HasValue)
-                {
-                    var promoById = await dbContext.BusPromotions
-                        .Include(x => x.Conditions)
-                        .FirstOrDefaultAsync(x => x.Id == request.PromotionId.Value && x.IsActive && !x.IsAutoApply);
-
-                    if (promoById == null)
-                    {
-                        throw new Exception("Invalid or inactive promotion.");
-                    }
-
-                    promotionToApply = promoById;
-                }
-
-                if (selectedFeaturedOffer != null)
-                {
-                    var nowUtc = DateTime.UtcNow;
-
-                    if (selectedFeaturedOffer.StartDateUtc.HasValue && selectedFeaturedOffer.StartDateUtc.Value > nowUtc)
-                        throw new Exception("Featured offer has not started yet.");
-
-                    if (selectedFeaturedOffer.EndDateUtc.HasValue && selectedFeaturedOffer.EndDateUtc.Value < nowUtc)
-                        throw new Exception("Featured offer has expired.");
-
-                    if (selectedFeaturedOffer.MaxUsage.HasValue && selectedFeaturedOffer.UsedCount >= selectedFeaturedOffer.MaxUsage.Value)
-                        throw new Exception("Featured offer usage limit reached.");
-                }
-                else if (promotionToApply != null)
-                {
-                    var nowUtc = DateTime.UtcNow;
-
-                    if (promotionToApply.StartDateUtc.HasValue && promotionToApply.StartDateUtc.Value > nowUtc)
-                        throw new Exception("Promotion has not started yet.");
-
-                    if (promotionToApply.EndDateUtc.HasValue && promotionToApply.EndDateUtc.Value < nowUtc)
-                        throw new Exception("Promotion has expired.");
-
-                    if (promotionToApply.MaxUsage.HasValue && promotionToApply.UsedCount >= promotionToApply.MaxUsage.Value)
-                        throw new Exception("Promotion usage limit reached.");
-
-                    if (promotionToApply.MaxUsagePerUser > 0 && userIdStr != null)
-                    {
-                        var userPromoUsageCount = await dbContext.BusPromotionUsages
-                            .CountAsync(x => x.BusPromotionId == promotionToApply.Id && x.UserId == userIdStr && x.BookingStatus == "Booked");
-
-                        if (userPromoUsageCount >= promotionToApply.MaxUsagePerUser)
-                            throw new Exception("Your usage limit for this promotion has been reached.");
-                    }
-
-                    if (promotionToApply.IsFirstTimeUserOnly && userIdStr != null)
-                    {
-                        var userBookingHistoryService = HttpContext.RequestServices.GetRequiredService<IUserBookingHistoryService>();
-                        var hasPrior = await userBookingHistoryService.HasPriorBookingAsync(userIdStr, null);
-                        if (hasPrior)
-                            throw new Exception("This promotion is only valid for your first booking.");
-                    }
-                }
 
                 // ========================================
                 // CENTRALIZED PRICING ENGINE
@@ -788,123 +703,6 @@ namespace PickNBook.Api.Controllers
                         }
 
                         // ========================================
-                        // UNIFIED PROMOTION VALIDATION
-                        // ========================================
-                        BusPromotion? promotionToApply = null;
-                        FeaturedOffer? selectedFeaturedOffer = null;
-
-                        if (request.SelectedFeaturedOfferId.HasValue)
-                        {
-                            selectedFeaturedOffer = await dbContext.FeaturedOffers
-                                .Include(x => x.Conditions)
-                                .FirstOrDefaultAsync(x => x.Id == request.SelectedFeaturedOfferId.Value && x.IsActive);
-
-                            if (selectedFeaturedOffer == null)
-                                throw new Exception("Selected offer is invalid or inactive.");
-
-                            if (!string.IsNullOrWhiteSpace(request.CouponCode))
-                            {
-                                throw new Exception("Featured offers cannot stack with manual coupons.");
-                            }
-                            if (request.PromotionId.HasValue)
-                            {
-                                throw new Exception("Only one manual promotion/offer can be applied.");
-                            }
-                        }
-                        else if (!string.IsNullOrWhiteSpace(request.CouponCode))
-                        {
-                            var normalizedCoupon = request.CouponCode.Trim().ToUpperInvariant();
-                            var promoByCode = await dbContext.BusPromotions
-                                .Include(x => x.Conditions)
-                                .FirstOrDefaultAsync(x => x.Code == normalizedCoupon && x.IsActive && !x.IsAutoApply);
-
-                            if (promoByCode == null)
-                            {
-                                throw new Exception("Invalid or inactive coupon code.");
-                            }
-
-                            if (request.PromotionId.HasValue && request.PromotionId.Value != promoByCode.Id)
-                            {
-                                throw new Exception("Only one manual promotion/offer can be applied.");
-                            }
-
-                            promotionToApply = promoByCode;
-                        }
-                        else if (request.PromotionId.HasValue)
-                        {
-                            var promoById = await dbContext.BusPromotions
-                                .Include(x => x.Conditions)
-                                .FirstOrDefaultAsync(x => x.Id == request.PromotionId.Value && x.IsActive && !x.IsAutoApply);
-
-                            if (promoById == null)
-                            {
-                                throw new Exception("Invalid or inactive promotion.");
-                            }
-
-                            promotionToApply = promoById;
-                        }
-
-                        if (selectedFeaturedOffer != null)
-                        {
-                            var nowUtc = DateTime.UtcNow;
-
-                            if (selectedFeaturedOffer.StartDateUtc.HasValue && selectedFeaturedOffer.StartDateUtc.Value > nowUtc)
-                            {
-                                throw new Exception("Featured offer has not started yet.");
-                            }
-
-                            if (selectedFeaturedOffer.EndDateUtc.HasValue && selectedFeaturedOffer.EndDateUtc.Value < nowUtc)
-                            {
-                                throw new Exception("Featured offer has expired.");
-                            }
-
-                            if (selectedFeaturedOffer.MaxUsage.HasValue && selectedFeaturedOffer.UsedCount >= selectedFeaturedOffer.MaxUsage.Value)
-                            {
-                                throw new Exception("Featured offer usage limit reached.");
-                            }
-                        }
-                        else if (promotionToApply != null)
-                        {
-                            var nowUtc = DateTime.UtcNow;
-
-                            if (promotionToApply.StartDateUtc.HasValue && promotionToApply.StartDateUtc.Value > nowUtc)
-                            {
-                                throw new Exception("Promotion has not started yet.");
-                            }
-
-                            if (promotionToApply.EndDateUtc.HasValue && promotionToApply.EndDateUtc.Value < nowUtc)
-                            {
-                                throw new Exception("Promotion has expired.");
-                            }
-
-                            if (promotionToApply.MaxUsage.HasValue && promotionToApply.UsedCount >= promotionToApply.MaxUsage.Value)
-                            {
-                                throw new Exception("Promotion usage limit reached.");
-                            }
-
-                            if (promotionToApply.MaxUsagePerUser > 0)
-                            {
-                                var userPromoUsageCount = await dbContext.BusPromotionUsages
-                                    .CountAsync(x => x.BusPromotionId == promotionToApply.Id && x.UserId == userId && x.BookingStatus == "Booked");
-
-                                if (userPromoUsageCount >= promotionToApply.MaxUsagePerUser)
-                                {
-                                    throw new Exception("Your usage limit for this promotion has been reached.");
-                                }
-                            }
-
-                            if (promotionToApply.IsFirstTimeUserOnly)
-                            {
-                                var userBookingHistoryService = HttpContext.RequestServices.GetRequiredService<IUserBookingHistoryService>();
-                                var hasPrior = await userBookingHistoryService.HasPriorBookingAsync(userId, request.PassengerPhone);
-                                if (hasPrior)
-                                {
-                                    throw new Exception("This promotion is only valid for your first booking.");
-                                }
-                            }
-                        }
-
-                        // ========================================
                         // CENTRALIZED PRICING ENGINE
                         // ========================================
                         var traceId = request.TraceId ?? string.Empty;
@@ -954,16 +752,16 @@ namespace PickNBook.Api.Controllers
                             TaxableFareInr = pricing.TaxableFare,
                             GstPercent = pricing.GstPercent,
                             GstAmountInr = pricing.GstAmount,
-                            DiscountAmountInr = pricing.AutoDiscountAmount + pricing.CouponDiscountAmount + pricing.ManualDiscountAmount,
+                            DiscountAmountInr = pricing.TotalDiscount,
                             ConvenienceFeeInr = pricing.ConvenienceFee,
-                            CouponCode = string.IsNullOrWhiteSpace(request.CouponCode) ? null : request.CouponCode.Trim().ToUpperInvariant(),
-                            AppliedPromotionId = promotionToApply?.Id,
+                            CouponCode = pricing.AppliedPromotionCode ?? pricing.AutoPromotionCode,
+                            AppliedPromotionId = null,
                             AppliedPromotionCode = pricing.AppliedPromotionCode,
                             AppliedPromotionType = pricing.AppliedPromotionType ?? pricing.DiscountSource,
-                            AppliedFeaturedOfferId = request.SelectedFeaturedOfferId,
-                            AppliedFeaturedOfferTitle = selectedFeaturedOffer?.Title,
-                            FeaturedOfferDiscountAmount = selectedFeaturedOffer != null ? pricing.ManualDiscountAmount : 0m,
-                            AutoPromotionId = pricing.AutoPromotionCode != null ? (await dbContext.BusPromotions.Where(x => x.Code == pricing.AutoPromotionCode).Select(x => (int?)x.Id).FirstOrDefaultAsync()) : null,
+                            AppliedFeaturedOfferId = null,
+                            AppliedFeaturedOfferTitle = null,
+                            FeaturedOfferDiscountAmount = 0m,
+                            AutoPromotionId = null,
                             AutoPromotionCode = pricing.AutoPromotionCode,
                             DiscountSource = pricing.DiscountSource,
                             Status = "Booked",
@@ -983,89 +781,58 @@ namespace PickNBook.Api.Controllers
                         // ========================================
                         if (pricing.AutoDiscountAmount > 0 && !string.IsNullOrEmpty(pricing.AutoPromotionCode))
                         {
-                            var autoPromo = await dbContext.BusPromotions.FirstOrDefaultAsync(x => x.Code == pricing.AutoPromotionCode);
-                            if (autoPromo != null)
+                            var autoCoupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.CouponCode == pricing.AutoPromotionCode);
+                            var autoUsage = new BusCouponUsage
                             {
-                                var autoUsage = new BusPromotionUsage
-                                {
-                                    BusPromotionId = autoPromo.Id,
-                                    FeaturedOfferId = null,
-                                    BusReservationId = reservation.Id,
-                                    UserId = userId!,
-                                    PromotionCode = autoPromo.Code,
-                                    PromotionType = autoPromo.PromotionType,
-                                    DiscountAmountInr = pricing.AutoDiscountAmount,
-                                    BookingTotalInr = pricing.GrandTotal,
-                                    BookingStatus = "Booked",
-                                    UsedAtUtc = DateTime.UtcNow
-                                };
-                                dbContext.BusPromotionUsages.Add(autoUsage);
-
-                                var autoRows = await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
-                                    UPDATE buspromotions
-                                    SET UsedCount = UsedCount + 1
-                                    WHERE Id = {autoPromo.Id}
-                                    AND (MaxUsage IS NULL OR UsedCount < MaxUsage)
-                                ");
-                                if (autoRows == 0 && autoPromo.MaxUsage.HasValue)
-                                {
-                                    throw new Exception($"Auto-promotion '{autoPromo.Code}' usage limit reached concurrently.");
-                                }
-                            }
-                        }
-
-                        if (selectedFeaturedOffer != null)
-                        {
-                            var featuredUsage = new FeaturedOfferUsage
-                            {
-                                FeaturedOfferId = selectedFeaturedOffer.Id,
+                                BusCouponId = autoCoupon?.Id,
                                 BusReservationId = reservation.Id,
                                 UserId = userId!,
-                                DiscountAmount = pricing.ManualDiscountAmount,
-                                UsedAtUtc = DateTime.UtcNow
-                            };
-                            dbContext.FeaturedOfferUsages.Add(featuredUsage);
-
-                            var rowsUpdated = await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
-                                UPDATE featuredoffers
-                                SET UsedCount = UsedCount + 1
-                                WHERE Id = {selectedFeaturedOffer.Id}
-                                AND (MaxUsage IS NULL OR UsedCount < MaxUsage)
-                            ");
-                            if (rowsUpdated == 0 && selectedFeaturedOffer.MaxUsage.HasValue)
-                            {
-                                throw new Exception("Featured offer usage limit reached concurrently.");
-                            }
-                        }
-                        else if (promotionToApply != null)
-                        {
-                            var discountAmt = promotionToApply.PromotionType.Equals("Coupon", StringComparison.OrdinalIgnoreCase)
-                                ? pricing.CouponDiscountAmount
-                                : pricing.ManualDiscountAmount;
-
-                            var manualUsage = new BusPromotionUsage
-                            {
-                                BusPromotionId = promotionToApply.Id,
-                                BusReservationId = reservation.Id,
-                                UserId = userId!,
-                                PromotionCode = promotionToApply.Code,
-                                PromotionType = promotionToApply.PromotionType,
-                                DiscountAmountInr = discountAmt,
-                                BookingTotalInr = pricing.GrandTotal,
+                                CouponCode = pricing.AutoPromotionCode,
+                                CouponType = autoCoupon?.CouponType ?? "Fixed",
+                                CouponValue = autoCoupon?.Value ?? pricing.AutoDiscountAmount,
+                                CouponAmountInr = pricing.AutoDiscountAmount,
+                                TotalFareInr = pricing.GrandTotal,
                                 BookingStatus = "Booked",
                                 UsedAtUtc = DateTime.UtcNow
                             };
-                            dbContext.BusPromotionUsages.Add(manualUsage);
+                            dbContext.BusCouponUsages.Add(autoUsage);
 
-                            var manualRows = await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
-                                UPDATE buspromotions
+                            await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
+                                UPDATE bus_coupons
                                 SET UsedCount = UsedCount + 1
-                                WHERE Id = {promotionToApply.Id}
-                                AND (MaxUsage IS NULL OR UsedCount < MaxUsage)
+                                WHERE CouponCode = {pricing.AutoPromotionCode}
+                                AND (UseLimit = 0 OR UsedCount < UseLimit)
                             ");
-                            if (manualRows == 0 && promotionToApply.MaxUsage.HasValue)
+                        }
+
+                        if ((pricing.CouponDiscountAmount > 0 || pricing.ManualDiscountAmount > 0) && !string.IsNullOrEmpty(pricing.AppliedPromotionCode))
+                        {
+                            var manualDiscountAmt = pricing.CouponDiscountAmount > 0 ? pricing.CouponDiscountAmount : pricing.ManualDiscountAmount;
+                            var manualCoupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.CouponCode == pricing.AppliedPromotionCode);
+                            var manualUsage = new BusCouponUsage
                             {
-                                throw new Exception("Promotion usage limit reached concurrently.");
+                                BusCouponId = manualCoupon?.Id,
+                                BusReservationId = reservation.Id,
+                                UserId = userId!,
+                                CouponCode = pricing.AppliedPromotionCode,
+                                CouponType = manualCoupon?.CouponType ?? "Fixed",
+                                CouponValue = manualCoupon?.Value ?? manualDiscountAmt,
+                                CouponAmountInr = manualDiscountAmt,
+                                TotalFareInr = pricing.GrandTotal,
+                                BookingStatus = "Booked",
+                                UsedAtUtc = DateTime.UtcNow
+                            };
+                            dbContext.BusCouponUsages.Add(manualUsage);
+
+                            var rows = await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
+                                UPDATE bus_coupons
+                                SET UsedCount = UsedCount + 1
+                                WHERE CouponCode = {pricing.AppliedPromotionCode}
+                                AND (UseLimit = 0 OR UsedCount < UseLimit)
+                            ");
+                            if (rows == 0 && manualCoupon != null && manualCoupon.UseLimit > 0)
+                            {
+                                throw new Exception($"Coupon '{pricing.AppliedPromotionCode}' usage limit reached concurrently.");
                             }
                         }
 
@@ -1568,26 +1335,6 @@ namespace PickNBook.Api.Controllers
     ");
                         }
 
-                        // Unified promotion cancellation handling:
-                        var unifiedUsages = await dbContext.BusPromotionUsages
-                            .Where(x => x.BusReservationId == booking.Id && x.BookingStatus == "Booked")
-                            .ToListAsync();
-
-                        foreach (var u in unifiedUsages)
-                        {
-                            u.BookingStatus = "Cancelled";
-                            u.UsedAtUtc = DateTime.UtcNow;
-
-                            // Decrement atomic promotion usage
-                            await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
-                                UPDATE buspromotions
-                                SET UsedCount = CASE 
-                                    WHEN UsedCount > 0 THEN UsedCount - 1 
-                                    ELSE 0 
-                                END
-                                WHERE Id = {u.BusPromotionId}
-                            ");
-                        }
                     }
 
                     // 🔥 validation
@@ -1957,26 +1704,6 @@ namespace PickNBook.Api.Controllers
                             ");
                         }
 
-                        // Unified promotion cancellation handling:
-                        var unifiedUsages = await dbContext.BusPromotionUsages
-                            .Where(x => x.BusReservationId == booking.Id && x.BookingStatus == "Booked")
-                            .ToListAsync();
-
-                        foreach (var u in unifiedUsages)
-                        {
-                            u.BookingStatus = "Cancelled";
-                            u.UsedAtUtc = DateTime.UtcNow;
-
-                            // Decrement atomic promotion usage
-                            await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
-                                UPDATE buspromotions
-                                SET UsedCount = CASE 
-                                    WHEN UsedCount > 0 THEN UsedCount - 1 
-                                    ELSE 0 
-                                END
-                                WHERE Id = {u.BusPromotionId}
-                            ");
-                        }
                     }
 
 
