@@ -158,11 +158,17 @@ namespace PickNBook.Api.Services
                     SeatName = seatCode
                 };
 
-                // Authoritative SeatType resolution
-                if (layoutMap != null && layoutMap.TryGetValue(seatCode, out var layoutSeat))
+                // Authoritative SeatType resolution: strictly from backend layoutMap
+                if (layoutMap != null && 
+                    layoutMap.TryGetValue(seatCode, out var layoutSeat) && 
+                    !string.IsNullOrWhiteSpace(layoutSeat.SeatType))
                 {
                     seatCtx.SeatType = layoutSeat.SeatType;
                     seatCtx.Fare = layoutSeat.BaseFare;
+                }
+                else
+                {
+                    throw new InvalidOperationException($"Authoritative seat layout information is unavailable for seat '{seatCode}'. Please refresh the seat layout and block again.");
                 }
 
                 // Authoritative Blocked Fare resolution (supersedes layout fare if block occurred)
@@ -170,20 +176,6 @@ namespace PickNBook.Api.Services
                 if (blocked != null && blocked.BaseFare > 0)
                 {
                     seatCtx.Fare = blocked.BaseFare;
-                }
-
-                // Fallback to DTO values if cache expired
-                if (fallbackSeats != null)
-                {
-                    var fallback = fallbackSeats.FirstOrDefault(f => f.SeatCode.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
-                    if (fallback != null)
-                    {
-                        if (string.IsNullOrWhiteSpace(seatCtx.SeatType))
-                            seatCtx.SeatType = fallback.SeatType;
-
-                        if (seatCtx.Fare <= 0)
-                            seatCtx.Fare = fallback.BaseFare;
-                    }
                 }
 
                 context.SelectedSeats.Add(seatCtx);

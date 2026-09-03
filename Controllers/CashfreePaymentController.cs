@@ -141,30 +141,34 @@ namespace PickNBook.Api.Controllers
                             _cache.TryGetValue($"bus_seats_{payload.TraceId}_{payload.ResultIndex}", out layoutMap);
                         }
 
+                        var missingLayoutSeats = passengerSeats
+                            .Where(seat => layoutMap == null || 
+                                           !layoutMap.TryGetValue(seat, out var layoutSeat) || 
+                                           string.IsNullOrWhiteSpace(layoutSeat.SeatType))
+                            .ToList();
+
+                        if (missingLayoutSeats.Any())
+                        {
+                            return BadRequest(new { 
+                                message = $"Authoritative seat layout information is unavailable for seat(s): {string.Join(", ", missingLayoutSeats)}. Please refresh the seat layout and block again." 
+                            });
+                        }
+
                         var seatPreviews = payload.Passengers!
                             .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
                             .Select(p => {
+                                var seatCode = p.SeatNumber!.Trim();
                                 var blockedSeat = blockedSeats
                                     .OrderByDescending(b => b.Id)
-                                    .First(b => b.SeatName.Equals(p.SeatNumber!.Trim(), StringComparison.OrdinalIgnoreCase));
+                                    .First(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
 
-                                // Authoritative SeatType: use authoritative SRDV/backend seat type where available.
-                                // Do NOT use BusType as a substitute for SeatType.
-                                string resolvedSeatType = "";
-                                if (layoutMap != null && layoutMap.TryGetValue(p.SeatNumber!.Trim(), out var layoutSeat) && !string.IsNullOrWhiteSpace(layoutSeat.SeatType))
-                                {
-                                    resolvedSeatType = layoutSeat.SeatType;
-                                }
-                                else if (!string.IsNullOrWhiteSpace(p.SeatType))
-                                {
-                                    resolvedSeatType = p.SeatType;
-                                }
+                                var layoutSeat = layoutMap![seatCode];
 
                                 return new SeatPreviewDto 
                                 { 
-                                    SeatCode = p.SeatNumber!.Trim(), 
+                                    SeatCode = seatCode, 
                                     BaseFare = blockedSeat.BaseFare, 
-                                    SeatType = resolvedSeatType,
+                                    SeatType = layoutSeat.SeatType, // 100% authoritative from SRDV layout cache
                                     ExternalGst = blockedSeat.GstAmount 
                                 };
                             })
@@ -403,6 +407,10 @@ namespace PickNBook.Api.Controllers
                 await _paymentService.AssociateCashfreeOrderAsync(payment.Id, cfResponse.OrderId, cfResponse.CfOrderId, cfResponse.PaymentSessionId);
 
                 return Ok(cfResponse);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { message = ex.Message });
             }
             catch (Exception ex)
             {

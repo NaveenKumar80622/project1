@@ -638,6 +638,36 @@ namespace PickNBook.Api.Controllers
 
 
 
+                var seatCodes = request.Seats
+                    .Where(p => !string.IsNullOrWhiteSpace(p.SeatCode))
+                    .Select(p => p.SeatCode.Trim())
+                    .ToList();
+
+                if (!seatCodes.Any())
+                {
+                    return BadRequest(new { message = "At least one seat is required for pricing preview." });
+                }
+
+                // Mandatory upfront layout check for SeatType
+                Dictionary<string, BusSeatLayoutItemContext>? layoutMap = null;
+                if (!string.IsNullOrEmpty(request.TraceId) && !string.IsNullOrEmpty(request.ResultIndex))
+                {
+                    _cache.TryGetValue($"bus_seats_{request.TraceId}_{request.ResultIndex}", out layoutMap);
+                }
+
+                var missingLayoutSeats = seatCodes
+                    .Where(seat => layoutMap == null || 
+                                   !layoutMap.TryGetValue(seat, out var layoutSeat) || 
+                                   string.IsNullOrWhiteSpace(layoutSeat.SeatType))
+                    .ToList();
+
+                if (missingLayoutSeats.Any())
+                {
+                    return BadRequest(new { 
+                        message = $"Authoritative seat layout information is unavailable for seat(s): {string.Join(", ", missingLayoutSeats)}. Please refresh the seat layout and try again." 
+                    });
+                }
+
                 // ========================================
                 // CENTRALIZED PRICING ENGINE
                 // ========================================
@@ -649,12 +679,14 @@ namespace PickNBook.Api.Controllers
                 var seatPreviews = request.Seats
                     .Where(p => !string.IsNullOrWhiteSpace(p.SeatCode))
                     .Select(p => {
-                        var blockedSeat = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(p.SeatCode, StringComparison.OrdinalIgnoreCase));
+                        var seatCode = p.SeatCode.Trim();
+                        var blockedSeat = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
+                        var layoutSeat = layoutMap![seatCode];
                         return new PickNBook.Api.Models.DTOs.SeatPreviewDto 
                         { 
-                            SeatCode = p.SeatCode, 
-                            BaseFare = blockedSeat?.BaseFare > 0 ? blockedSeat.BaseFare : p.BaseFare, 
-                            SeatType = p.SeatType,
+                            SeatCode = seatCode, 
+                            BaseFare = blockedSeat?.BaseFare > 0 ? blockedSeat.BaseFare : (layoutSeat.BaseFare > 0 ? layoutSeat.BaseFare : p.BaseFare), 
+                            SeatType = layoutSeat.SeatType, // 100% authoritative from layout
                             ExternalGst = blockedSeat?.GstAmount > 0 ? blockedSeat.GstAmount : p.ExternalGst 
                         };
                     })
@@ -675,7 +707,7 @@ namespace PickNBook.Api.Controllers
                     GstCategory = "AC"
                 };
 
-                var seatCodes = seatPreviews.Select(s => s.SeatCode).ToList();
+                seatCodes = seatPreviews.Select(s => s.SeatCode).ToList();
                 var validationContext = await _couponContextBuilder.BuildContextAsync(
                     request.TraceId,
                     request.ResultIndex,
@@ -782,6 +814,24 @@ namespace PickNBook.Api.Controllers
                             throw new Exception("Seat selection is mandatory for all passengers.");
                         }
 
+                        // Mandatory upfront layout check for SeatType
+                        Dictionary<string, BusSeatLayoutItemContext>? layoutMap = null;
+                        if (!string.IsNullOrEmpty(bus.TraceId) && !string.IsNullOrEmpty(bus.ResultIndex))
+                        {
+                            _cache.TryGetValue($"bus_seats_{bus.TraceId}_{bus.ResultIndex}", out layoutMap);
+                        }
+
+                        var missingLayoutSeats = requestedSeatCodes
+                            .Where(seat => layoutMap == null || 
+                                           !layoutMap.TryGetValue(seat, out var layoutSeat) || 
+                                           string.IsNullOrWhiteSpace(layoutSeat.SeatType))
+                            .ToList();
+
+                        if (missingLayoutSeats.Any())
+                        {
+                            throw new InvalidOperationException($"Authoritative seat layout information is unavailable for seat(s): {string.Join(", ", missingLayoutSeats)}. Please refresh the seat layout and block again.");
+                        }
+
                         // ========================================
                         // CENTRALIZED PRICING ENGINE
                         // ========================================
@@ -793,13 +843,14 @@ namespace PickNBook.Api.Controllers
                         var seatPreviews = request.Passengers
                             .Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber))
                             .Select(p => {
-                                // Match using case-insensitive check in case frontend modified case, but frontend is instructed not to modify it.
-                                var blockedSeat = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(p.SeatNumber, StringComparison.OrdinalIgnoreCase));
+                                var seatCode = p.SeatNumber!.Trim();
+                                var blockedSeat = blockedSeats.FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
+                                var layoutSeat = layoutMap![seatCode];
                                 return new PickNBook.Api.Models.DTOs.SeatPreviewDto 
                                 { 
-                                    SeatCode = p.SeatNumber!, 
+                                    SeatCode = seatCode, 
                                     BaseFare = blockedSeat?.BaseFare > 0 ? blockedSeat.BaseFare : p.BaseFare, 
-                                    SeatType = p.SeatType,
+                                    SeatType = layoutSeat.SeatType, // 100% authoritative from layout
                                     ExternalGst = blockedSeat?.GstAmount > 0 ? blockedSeat.GstAmount : p.ExternalGst 
                                 };
                             })
@@ -1143,7 +1194,7 @@ namespace PickNBook.Api.Controllers
             }
             catch (Exception ex)
             {
-                return BadRequest(ex.Message);
+                return BadRequest(new { message = ex.Message });
             }
         }
 
