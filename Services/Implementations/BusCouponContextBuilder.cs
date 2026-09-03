@@ -53,66 +53,39 @@ namespace PickNBook.Api.Services
                 _cache.TryGetValue($"bus_ctx_{normalizedTraceId}_{normalizedResultIndex}", out searchItem);
             }
 
-            if (searchItem != null)
+            if (searchItem == null || string.IsNullOrWhiteSpace(searchItem.DepartDate))
             {
-                context.OperatorName = searchItem.OperatorName;
-                context.BusType = searchItem.BusType;
-
-                // Resolve city names from city codes if applicable
-                var fromName = _srdvBusService.MapCityCodeToName(searchItem.FromCity);
-                context.SourceCity = !string.IsNullOrWhiteSpace(fromName) ? fromName : searchItem.FromCity;
-
-                var toName = _srdvBusService.MapCityCodeToName(searchItem.ToCity);
-                context.DestinationCity = !string.IsNullOrWhiteSpace(toName) ? toName : searchItem.ToCity;
-
-                DateTime travelDate = default;
-                bool dateResolved = false;
-
-                // Derive strictly from DepartDate (dd/MM/yyyy, yyyy-MM-dd, etc.)
-                if (!string.IsNullOrWhiteSpace(searchItem.DepartDate))
-                {
-                    if (DateTime.TryParseExact(searchItem.DepartDate.Trim(),
-                            new[] { "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "yyyy/MM/dd" },
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            System.Globalization.DateTimeStyles.None,
-                            out var parsedDepartDate))
-                    {
-                        travelDate = parsedDepartDate;
-                        dateResolved = true;
-                    }
-                }
-
-                if (dateResolved)
-                {
-                    if (!string.IsNullOrWhiteSpace(searchItem.DepartureTime) &&
-                        TimeSpan.TryParse(searchItem.DepartureTime.Trim(), out var timePart))
-                    {
-                        travelDate = travelDate.Date.Add(timePart);
-                    }
-                    context.TravelDate = travelDate;
-                    context.DayOfWeek = travelDate.DayOfWeek;
-                }
-                else
-                {
-                    throw new InvalidOperationException("Authoritative journey date (DepartDate) could not be resolved from bus search data.");
-                }
+                throw new InvalidOperationException("Authoritative journey date (DepartDate) could not be resolved from bus search data.");
             }
-            else if (fallbackBus != null)
+
+            context.OperatorName = searchItem.OperatorName;
+            context.BusType = searchItem.BusType;
+
+            // Resolve city names from city codes if applicable
+            var fromName = _srdvBusService.MapCityCodeToName(searchItem.FromCity);
+            context.SourceCity = !string.IsNullOrWhiteSpace(fromName) ? fromName : searchItem.FromCity;
+
+            var toName = _srdvBusService.MapCityCodeToName(searchItem.ToCity);
+            context.DestinationCity = !string.IsNullOrWhiteSpace(toName) ? toName : searchItem.ToCity;
+
+            DateTime travelDate;
+            if (!DateTime.TryParseExact(searchItem.DepartDate.Trim(),
+                    new[] { "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "yyyy/MM/dd" },
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None,
+                    out travelDate))
             {
-                // Fallback to BusBooking values if cache has expired
-                context.OperatorName = fallbackBus.OperatorName;
-                context.BusType = fallbackBus.BusType;
-
-                var fromName = _srdvBusService.MapCityCodeToName(fallbackBus.FromCity);
-                context.SourceCity = !string.IsNullOrWhiteSpace(fromName) ? fromName : fallbackBus.FromCity;
-
-                var toName = _srdvBusService.MapCityCodeToName(fallbackBus.ToCity);
-                context.DestinationCity = !string.IsNullOrWhiteSpace(toName) ? toName : fallbackBus.ToCity;
-
-                var istDeparture = DateTime.SpecifyKind(fallbackBus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
-                context.TravelDate = istDeparture;
-                context.DayOfWeek = istDeparture.DayOfWeek;
+                throw new InvalidOperationException("Authoritative journey date (DepartDate) could not be resolved from bus search data.");
             }
+
+            if (!string.IsNullOrWhiteSpace(searchItem.DepartureTime) &&
+                TimeSpan.TryParse(searchItem.DepartureTime.Trim(), out var timePart))
+            {
+                travelDate = travelDate.Date.Add(timePart);
+            }
+
+            context.TravelDate = travelDate;
+            context.DayOfWeek = travelDate.DayOfWeek;
 
             // ---------------------------------------------------------
             // 2. Resolve Seat Layout Context (SeatType, BaseFare)
