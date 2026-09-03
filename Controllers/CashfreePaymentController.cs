@@ -147,11 +147,14 @@ namespace PickNBook.Api.Controllers
                             payload.SelectedFeaturedOfferId,
                             validationContext);
 
-                        providerAmount = blockedSeats.Sum(x => x.BaseFare) + blockedSeats.Sum(x => x.GstAmount);
+                        // Authoritative customer charge directly consumed from centralized pricing engine
+                        calculatedFinalAmount = pricing.FinalAmount;
+
+                        // Provider settlement / reconciliation amount for accounting only (never charged to customer)
+                        providerAmount = pricing.Seats.Sum(s => s.BaseFare) + pricing.GstAmount;
                         markupAmount = pricing.Seats.Sum(s => s.MarkupAmount);
                         discountAmount = pricing.TotalDiscount;
-                        convenienceFee = 0m;
-                        calculatedFinalAmount = pricing.GrandTotal;
+                        convenienceFee = pricing.ConvenienceFee;
                     }
                     else if (request.BookingType == BookingType.Hotel)
                     {

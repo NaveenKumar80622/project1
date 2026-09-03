@@ -334,6 +334,12 @@ namespace PickNBook.Api.Services
             List<SeatPreviewDto> seats)
         {
             var istDeparture = DateTime.SpecifyKind(bus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
+            var preDiscountFare = seats.Sum(s => s.BaseFare);
+            if (preDiscountFare <= 0 && bus.PriceInr > 0)
+            {
+                preDiscountFare = bus.PriceInr;
+            }
+
             var context = new BusCouponValidationContext
             {
                 OperatorName = bus.OperatorName,
@@ -342,7 +348,7 @@ namespace PickNBook.Api.Services
                 DestinationCity = bus.ToCity,
                 TravelDate = istDeparture,
                 DayOfWeek = istDeparture.DayOfWeek,
-                BookingFare = seats.Sum(s => s.BaseFare),
+                BookingFare = preDiscountFare,
                 SelectedSeats = seats.Select(s => new BusCouponSeatContext
                 {
                     SeatName = s.SeatCode,

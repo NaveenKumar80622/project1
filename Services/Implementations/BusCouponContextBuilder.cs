@@ -65,15 +65,44 @@ namespace PickNBook.Api.Services
                 var toName = _srdvBusService.MapCityCodeToName(searchItem.ToCity);
                 context.DestinationCity = !string.IsNullOrWhiteSpace(toName) ? toName : searchItem.ToCity;
 
-                if (DateTime.TryParse(searchItem.DepartureTime, out var parsedDep))
+                DateTime travelDate = default;
+                bool dateResolved = false;
+
+                // Priority 1: Derive from DepartDate (dd/MM/yyyy, yyyy-MM-dd, etc.)
+                if (!string.IsNullOrWhiteSpace(searchItem.DepartDate))
                 {
+                    if (DateTime.TryParseExact(searchItem.DepartDate.Trim(),
+                            new[] { "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "yyyy/MM/dd" },
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None,
+                            out var parsedDepartDate))
+                    {
+                        travelDate = parsedDepartDate;
+                        dateResolved = true;
+                    }
+                    else if (DateTime.TryParse(searchItem.DepartDate.Trim(), out var parsedGeneralDate))
+                    {
+                        travelDate = parsedGeneralDate;
+                        dateResolved = true;
+                    }
+                }
+
+                if (dateResolved)
+                {
+                    if (!string.IsNullOrWhiteSpace(searchItem.DepartureTime) &&
+                        TimeSpan.TryParse(searchItem.DepartureTime.Trim(), out var timePart))
+                    {
+                        travelDate = travelDate.Date.Add(timePart);
+                    }
+                    context.TravelDate = travelDate;
+                    context.DayOfWeek = travelDate.DayOfWeek;
+                }
+                else if (!string.IsNullOrWhiteSpace(searchItem.DepartureTime) &&
+                         DateTime.TryParse(searchItem.DepartureTime.Trim(), out var parsedDep))
+                {
+                    // Fallback only if DepartDate was completely missing
                     context.TravelDate = parsedDep;
                     context.DayOfWeek = parsedDep.DayOfWeek;
-                }
-                else if (DateTime.TryParse(searchItem.DepartDate, out var parsedDepartDate))
-                {
-                    context.TravelDate = parsedDepartDate;
-                    context.DayOfWeek = parsedDepartDate.DayOfWeek;
                 }
             }
             else if (fallbackBus != null)
@@ -117,7 +146,6 @@ namespace PickNBook.Api.Services
             // ---------------------------------------------------------
             // 4. Build SelectedSeats with Authoritative Data
             // ---------------------------------------------------------
-            decimal totalFare = 0m;
             var distinctSeatCodes = seatCodes
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -158,12 +186,39 @@ namespace PickNBook.Api.Services
                     }
                 }
 
-                totalFare += seatCtx.Fare;
                 context.SelectedSeats.Add(seatCtx);
             }
 
-            // Set BookingFare
-            context.BookingFare = totalFare > 0 ? totalFare : (fallbackBus?.PriceInr ?? 0m);
+            // ---------------------------------------------------------
+            // 5. Pre-Discount Qualifying Fare (Base Fare + Markup)
+            // ---------------------------------------------------------
+            var allMarkups = await _db.BusMarkupSettings
+                .AsNoTracking()
+                .Where(x => x.Status == "Active")
+                .ToListAsync();
+
+            decimal preDiscountQualifyingFare = 0m;
+            foreach (var seat in context.SelectedSeats)
+            {
+                var isSleeper = (seat.SeatType ?? "").Contains("sleeper", StringComparison.OrdinalIgnoreCase);
+                var normalizedSeatType = isSleeper ? "Sleeper" : "Seater";
+
+                var markup = allMarkups.FirstOrDefault(x =>
+                    x.SeatType.Equals(normalizedSeatType, StringComparison.OrdinalIgnoreCase));
+
+                decimal markupAmount = 0m;
+                if (markup != null && seat.Fare > 0)
+                {
+                    markupAmount = markup.MarkupType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
+                        ? seat.Fare * markup.Value / 100m
+                        : markup.Value;
+                }
+
+                preDiscountQualifyingFare += (seat.Fare + markupAmount);
+            }
+
+            // Set BookingFare to the pre-discount qualifying fare
+            context.BookingFare = preDiscountQualifyingFare > 0 ? preDiscountQualifyingFare : (fallbackBus?.PriceInr ?? 0m);
 
             return context;
         }
