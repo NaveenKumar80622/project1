@@ -68,7 +68,7 @@ namespace PickNBook.Api.Services
                 DateTime travelDate = default;
                 bool dateResolved = false;
 
-                // Priority 1: Derive from DepartDate (dd/MM/yyyy, yyyy-MM-dd, etc.)
+                // Derive strictly from DepartDate (dd/MM/yyyy, yyyy-MM-dd, etc.)
                 if (!string.IsNullOrWhiteSpace(searchItem.DepartDate))
                 {
                     if (DateTime.TryParseExact(searchItem.DepartDate.Trim(),
@@ -78,11 +78,6 @@ namespace PickNBook.Api.Services
                             out var parsedDepartDate))
                     {
                         travelDate = parsedDepartDate;
-                        dateResolved = true;
-                    }
-                    else if (DateTime.TryParse(searchItem.DepartDate.Trim(), out var parsedGeneralDate))
-                    {
-                        travelDate = parsedGeneralDate;
                         dateResolved = true;
                     }
                 }
@@ -97,12 +92,15 @@ namespace PickNBook.Api.Services
                     context.TravelDate = travelDate;
                     context.DayOfWeek = travelDate.DayOfWeek;
                 }
-                else if (!string.IsNullOrWhiteSpace(searchItem.DepartureTime) &&
-                         DateTime.TryParse(searchItem.DepartureTime.Trim(), out var parsedDep))
+                else if (fallbackBus != null && fallbackBus.DepartureTime != default)
                 {
-                    // Fallback only if DepartDate was completely missing
-                    context.TravelDate = parsedDep;
-                    context.DayOfWeek = parsedDep.DayOfWeek;
+                    var istDeparture = DateTime.SpecifyKind(fallbackBus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
+                    context.TravelDate = istDeparture;
+                    context.DayOfWeek = istDeparture.DayOfWeek;
+                }
+                else
+                {
+                    throw new InvalidOperationException("Authoritative journey date (DepartDate) could not be resolved from bus search data.");
                 }
             }
             else if (fallbackBus != null)
