@@ -120,89 +120,13 @@ namespace PickNBook.Api.Services
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Add(IndiaOffset));
 
             // =========================================================================
-            // 1. AUTO-APPLY PROMOTIONS (Direct from BusCoupon)
+            // MANUAL COUPON EVALUATION (Sole source of Bus discounts)
             // =========================================================================
-            decimal autoDiscount = 0m;
-            BusCoupon? bestAutoCoupon = null;
-            decimal bestAutoDiscount = 0m;
-
-            var autoCoupons = await _db.BusCoupons
-                .Include(x => x.Conditions)
-                .AsNoTracking()
-                .Where(x => x.Status == "Active" && x.IsAutoApply)
-                .OrderByDescending(x => x.Priority)
-                .ToListAsync();
-
-            foreach (var autoCpn in autoCoupons)
-            {
-                if (autoCpn.StartDate > today || autoCpn.ExpiryDate < today)
-                    continue;
-
-                if (autoCpn.UseLimit > 0 && autoCpn.UsedCount >= autoCpn.UseLimit)
-                    continue;
-
-                if (autoCpn.MinBookingAmount > 0m && subtotal < autoCpn.MinBookingAmount)
-                    continue;
-
-                if (autoCpn.IsFirstTimeUserOnly)
-                {
-                    var hasPrior = await _bookingHistoryService.HasPriorBookingAsync(userId?.ToString() ?? string.Empty, userPhone);
-                    if (hasPrior)
-                        continue;
-                }
-
-                if (userId.HasValue && autoCpn.MaxUsagePerUser > 0)
-                {
-                    var userCount = await _db.BusCouponUsages
-                        .CountAsync(x => x.CouponCode == autoCpn.CouponCode && x.UserId == userId.Value.ToString() && x.BookingStatus == "Booked");
-                    if (userCount >= autoCpn.MaxUsagePerUser)
-                        continue;
-                }
-
-                if (!ValidateCouponConditions(autoCpn.Conditions, validationContext))
-                    continue;
-
-                decimal amount = autoCpn.CouponType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
-                    ? subtotal * autoCpn.Value / 100m
-                    : autoCpn.Value;
-
-                if (autoCpn.MaxDiscountAmount.HasValue)
-                {
-                    amount = Math.Min(amount, autoCpn.MaxDiscountAmount.Value);
-                }
-
-                if (amount > bestAutoDiscount)
-                {
-                    bestAutoDiscount = amount;
-                    bestAutoCoupon = autoCpn;
-                }
-            }
-
-            autoDiscount = bestAutoDiscount;
-            bool skipManualCoupon = false;
-
-            if (bestAutoCoupon != null)
-            {
-                response.AutoPromotionCode = bestAutoCoupon.CouponCode;
-                if (bestAutoCoupon.IsExclusive)
-                {
-                    skipManualCoupon = true;
-                }
-            }
-
-            // =========================================================================
-            // 2. MANUAL COUPON / OFFER EVALUATION (Direct from BusCoupon)
-            // =========================================================================
-            decimal manualDiscount = 0m;
+            decimal couponDiscount = 0m;
             BusCoupon? appliedCoupon = null;
 
             if (!string.IsNullOrWhiteSpace(couponCode))
             {
-                if (skipManualCoupon)
-                {
-                    throw new Exception("An exclusive auto-applied discount is already active. Manual coupons cannot be combined.");
-                }
-
                 var normalizedCode = couponCode.Trim().ToUpperInvariant();
                 appliedCoupon = await _db.BusCoupons
                     .Include(x => x.Conditions)
@@ -257,53 +181,33 @@ namespace PickNBook.Api.Services
                     throw new Exception("Coupon conditions not met.");
                 }
 
-                manualDiscount = appliedCoupon.CouponType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
+                couponDiscount = appliedCoupon.CouponType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
                     ? subtotal * appliedCoupon.Value / 100m
                     : appliedCoupon.Value;
 
                 if (appliedCoupon.MaxDiscountAmount.HasValue)
                 {
-                    manualDiscount = Math.Min(manualDiscount, appliedCoupon.MaxDiscountAmount.Value);
+                    couponDiscount = Math.Min(couponDiscount, appliedCoupon.MaxDiscountAmount.Value);
                 }
 
-                var category = string.IsNullOrWhiteSpace(appliedCoupon.PromotionCategory) ? "Coupon" : appliedCoupon.PromotionCategory;
+                couponDiscount = Math.Min(couponDiscount, subtotal);
+                couponDiscount = decimal.Round(couponDiscount, 2, MidpointRounding.AwayFromZero);
+
                 response.AppliedPromotionCode = appliedCoupon.CouponCode;
                 response.AppliedPromotionTitle = appliedCoupon.Title ?? appliedCoupon.CouponCode;
-                response.AppliedPromotionType = category;
-                response.DiscountSource = category;
+                response.AppliedPromotionType = "Coupon";
+                response.DiscountSource = "Coupon";
                 response.DiscountLabel = appliedCoupon.Title ?? appliedCoupon.CouponCode;
-
-                if (appliedCoupon.IsExclusive)
-                {
-                    autoDiscount = 0m;
-                    response.AutoPromotionCode = null;
-                }
             }
 
-            // =========================================================================
-            // 3. ROUNDING & TOTALS
-            // =========================================================================
-            autoDiscount = decimal.Round(autoDiscount, 2, MidpointRounding.AwayFromZero);
-            manualDiscount = decimal.Round(manualDiscount, 2, MidpointRounding.AwayFromZero);
+            response.AutoPromotionCode = null;
+            response.AutoDiscountAmount = 0m;
+            response.ManualDiscountAmount = 0m;
+            response.CouponDiscountAmount = couponDiscount;
+            response.CouponAmount = couponDiscount;
+            response.TotalDiscount = couponDiscount;
 
-            response.AutoDiscountAmount = autoDiscount;
-
-            if (appliedCoupon != null && appliedCoupon.PromotionCategory.Equals("Offer", StringComparison.OrdinalIgnoreCase))
-            {
-                response.ManualDiscountAmount = manualDiscount;
-                response.CouponDiscountAmount = 0m;
-            }
-            else
-            {
-                response.CouponDiscountAmount = manualDiscount;
-                response.ManualDiscountAmount = 0m;
-            }
-
-            var totalDiscount = Math.Min(autoDiscount + manualDiscount, subtotal);
-            response.CouponAmount = totalDiscount;
-            response.TotalDiscount = totalDiscount;
-
-            var taxableFare = subtotal - totalDiscount;
+            var taxableFare = subtotal - response.TotalDiscount;
             response.TaxableFare = decimal.Round(taxableFare, 2);
 
             response.GstPercent = 0m;

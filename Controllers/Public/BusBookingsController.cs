@@ -550,7 +550,14 @@ namespace PickNBook.Api.Controllers
                                 }
 
                                 // Update the DB record with the exact breakdown, EVEN IF markup is 0
-                                var dbRecord = blockedSeatsInDb.FirstOrDefault(x => x.SeatName == seatNameStr);
+                                var dbRecord = blockedSeatsInDb
+                                    .Where(x => string.Equals(
+                                        x.SeatName,
+                                        seatNameStr,
+                                        StringComparison.OrdinalIgnoreCase))
+                                    .OrderByDescending(x => x.Id)
+                                    .FirstOrDefault();
+
                                 if (dbRecord != null)
                                 {
                                     dbRecord.MarkupAmount = finalMarkup;

@@ -83,6 +83,7 @@ namespace PickNBook.Api.Controllers
                 decimal calculatedFinalAmount = 0m;
 
                 string? pricingSnapshotJson = null;
+                string? actualCouponCode = !string.IsNullOrWhiteSpace(request.CouponCode) ? request.CouponCode.Trim() : null;
 
                 if (!string.IsNullOrEmpty(request.BookingPayloadJson) && !string.IsNullOrEmpty(request.BookingType))
                 {
@@ -189,7 +190,16 @@ namespace PickNBook.Api.Controllers
                         int? parsedUserId = null;
                         if (int.TryParse(userIdStr, out var id)) parsedUserId = id;
 
-                        string? actualCouponCode = request.CouponCode != null ? request.CouponCode : payload.CouponCode;
+                        actualCouponCode = !string.IsNullOrWhiteSpace(request.CouponCode)
+                            ? request.CouponCode.Trim()
+                            : payload.CouponCode?.Trim();
+
+                        if (payload.CouponCode != actualCouponCode)
+                        {
+                            payload.CouponCode = actualCouponCode;
+                            request.BookingPayloadJson = JsonSerializer.Serialize(payload);
+                        }
+
                         int? actualPromoId = request.PromotionId != null ? request.PromotionId : payload.PromotionId;
 
                         var seatCodes = payload.Passengers?.Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber)).Select(p => p.SeatNumber!).ToList() ?? new();
@@ -371,7 +381,7 @@ namespace PickNBook.Api.Controllers
                         ConvenienceFee = convenienceFee,
                         DiscountAmount = discountAmount,
                         SsrAmount = ssrAmount,
-                        CouponCode = request.CouponCode,
+                        CouponCode = actualCouponCode,
                         OfferCode = request.SelectedFeaturedOfferId?.ToString(),
                         FinalPayableAmount = calculatedFinalAmount,
                         CalculatedAtUtc = DateTime.UtcNow
@@ -386,7 +396,7 @@ namespace PickNBook.Api.Controllers
                 var payment = await _paymentService.CreatePaymentAsync(
                     userIdStr, request.BookingType,
                     providerAmount, markupAmount, convenienceFee, discountAmount, 
-                    request.CouponCode, request.SelectedFeaturedOfferId?.ToString(),
+                    actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
                     calculatedFinalAmount, request.OrderCurrency);
 
                 // Create Pending Booking
