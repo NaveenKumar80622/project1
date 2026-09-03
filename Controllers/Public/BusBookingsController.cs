@@ -1011,8 +1011,8 @@ namespace PickNBook.Api.Controllers
                                 FullName = p.FullName,
                                 Gender = p.Gender,
                                 SeatNumber = seatCode,
-                                BaseFareInr = blockedSeat.BaseFare,
-                                SeatType = layoutSeat.SeatType,
+                                BaseFareInr = blockedSeat!.BaseFare,
+                                SeatType = layoutSeat!.SeatType,
                                 Age = p.Age
                             });
                         }
