@@ -20,6 +20,7 @@ namespace PickNBook.Api.Controllers
     public class BusBookingsController(
     AppDbContext dbContext,
       IBusPromotionEngineService promotionEngine,
+    IBusCouponContextBuilder couponContextBuilder,
     ITicketEmailService ticketEmailService,
     IWhatsAppService whatsAppService,
     ICurrentUserService currentUserService,
@@ -31,7 +32,9 @@ namespace PickNBook.Api.Controllers
     {
         //private const string UserIdHeaderName = "X-User-Id";
         private readonly IBusPromotionEngineService _promotionEngine = promotionEngine;
+        private readonly IBusCouponContextBuilder _couponContextBuilder = couponContextBuilder;
         private readonly ISrdvBusService _srdvBusService = srdvBusService;
+        private readonly IMemoryCache _cache = cache;
 
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static readonly string[] AllowedPassengerGenders = ["Male", "Female"];
@@ -40,12 +43,17 @@ namespace PickNBook.Api.Controllers
 
         [HttpGet("user/available")]
         [AllowAnonymous]
-        public async Task<IActionResult> GetAvailableCoupons([FromQuery] string? category = null)
+        public async Task<IActionResult> GetAvailableCoupons(
+            [FromQuery] string? category = null,
+            [FromQuery] string? traceId = null,
+            [FromQuery] string? resultIndex = null,
+            [FromQuery] string? seatCodes = null)
         {
             var today = DateOnly.FromDateTime(
                 DateTime.UtcNow.AddHours(5.5));
 
             var query = dbContext.BusCoupons
+                .Include(x => x.Conditions)
                 .AsNoTracking()
                 .Where(x =>
                     x.Status == "Active" &&
@@ -60,7 +68,27 @@ namespace PickNBook.Api.Controllers
 
             var coupons = await query
                 .OrderBy(x => x.ExpiryDate)
-                .Select(x => new
+                .ToListAsync();
+
+            BusCouponValidationContext? validationContext = null;
+            if (!string.IsNullOrWhiteSpace(traceId) && !string.IsNullOrWhiteSpace(resultIndex))
+            {
+                var seatsList = !string.IsNullOrWhiteSpace(seatCodes)
+                    ? seatCodes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList()
+                    : new List<string>();
+
+                validationContext = await _couponContextBuilder.BuildContextAsync(traceId, resultIndex, seatsList);
+            }
+
+            var response = coupons.Select(x =>
+            {
+                bool isEligible = true;
+                if (validationContext != null)
+                {
+                    isEligible = _promotionEngine.ValidateCouponConditions(x.Conditions, validationContext);
+                }
+
+                return new
                 {
                     x.Id,
                     x.CouponCode,
@@ -74,11 +102,12 @@ namespace PickNBook.Api.Controllers
                     Title = x.Title ?? x.CouponCode,
                     Description = x.Description ?? x.Remark,
                     x.IsAutoApply,
-                    x.IsExclusive
-                })
-                .ToListAsync();
+                    x.IsExclusive,
+                    IsEligible = isEligible
+                };
+            }).ToList();
 
-            return Ok(coupons);
+            return Ok(response);
         }
 
         [HttpGet("search-cities")]
@@ -197,7 +226,25 @@ namespace PickNBook.Api.Controllers
                             busNode["B2CDisplayFare"] = (minimumBaseFare + markupForDisplayFare).ToString("F2");
                         }
 
-
+                        var searchTraceId = jsonNode["TraceId"]?.ToString() ?? string.Empty;
+                        var resIdx = busNode["ResultIndex"]?.ToString() ?? string.Empty;
+                        if (!string.IsNullOrEmpty(searchTraceId) && !string.IsNullOrEmpty(resIdx))
+                        {
+                            var busCtx = new BusSearchItemContext
+                            {
+                                TraceId = searchTraceId,
+                                ResultIndex = resIdx,
+                                SrdvIndex = int.TryParse(busNode["SrdvIndex"]?.ToString(), out var si) ? si : 0,
+                                OperatorName = busNode["TravelsName"]?.ToString() ?? string.Empty,
+                                BusType = busNode["BusType"]?.ToString() ?? string.Empty,
+                                FromCity = request.FromCityCode,
+                                ToCity = request.ToCityCode,
+                                DepartureTime = busNode["DepartureTime"]?.ToString() ?? string.Empty,
+                                ArrivalTime = busNode["ArrivalTime"]?.ToString() ?? string.Empty,
+                                DepartDate = request.DepartDate
+                            };
+                            _cache.Set($"bus_ctx_{searchTraceId}_{resIdx}", busCtx, TimeSpan.FromMinutes(30));
+                        }
                     }
                 }
 
@@ -354,6 +401,30 @@ namespace PickNBook.Api.Controllers
 
 
                     }
+
+                    var seatLayoutMap = new Dictionary<string, BusSeatLayoutItemContext>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var seatNode in resultNodes)
+                    {
+                        if (seatNode == null) continue;
+                        var sn = seatNode["SeatName"]?.ToString();
+                        var st = seatNode["SeatType"]?.ToString() ?? "";
+                        decimal.TryParse(seatNode["Price"]?["BaseFare"]?.ToString(), out decimal bf);
+                        decimal.TryParse(seatNode["SeatFare"]?.ToString(), out decimal sf);
+                        decimal.TryParse(seatNode["Price"]?["PublishedFare"]?.ToString(), out decimal pf);
+
+                        if (!string.IsNullOrWhiteSpace(sn))
+                        {
+                            seatLayoutMap[sn] = new BusSeatLayoutItemContext
+                            {
+                                SeatName = sn,
+                                SeatType = st,
+                                BaseFare = bf,
+                                SeatFare = sf,
+                                PublishedFare = pf
+                            };
+                        }
+                    }
+                    _cache.Set($"bus_seats_{request.TraceId}_{request.ResultIndex}", seatLayoutMap, TimeSpan.FromMinutes(30));
 
                     // Cancellation policies are returned to frontend directly inside the JSON response.
                     // Legacy code to save them to the database has been removed.
@@ -604,13 +675,22 @@ namespace PickNBook.Api.Controllers
                     GstCategory = "AC"
                 };
 
+                var seatCodes = seatPreviews.Select(s => s.SeatCode).ToList();
+                var validationContext = await _couponContextBuilder.BuildContextAsync(
+                    request.TraceId,
+                    request.ResultIndex,
+                    seatCodes,
+                    dummyBus,
+                    seatPreviews);
+
                 var pricing = await _promotionEngine.CalculateAsync(
                     dummyBus,
                     seatPreviews,
                     request.CouponCode,
                     request.PromotionId,
                     parsedUserId,
-                    request.SelectedFeaturedOfferId);
+                    request.SelectedFeaturedOfferId,
+                    validationContext);
 
                 return Ok(pricing);
             }
@@ -725,13 +805,22 @@ namespace PickNBook.Api.Controllers
                             })
                             .ToList();
 
+                        var seatCodes = requestedSeatCodes;
+                        var validationContext = await _couponContextBuilder.BuildContextAsync(
+                            bus.TraceId,
+                            bus.ResultIndex,
+                            seatCodes,
+                            bus,
+                            seatPreviews);
+
                         var pricing = await _promotionEngine.CalculateAsync(
                             bus,
                             seatPreviews,
                             request.CouponCode,
                             request.PromotionId,
                             int.Parse(userId!),
-                            request.SelectedFeaturedOfferId);
+                            request.SelectedFeaturedOfferId,
+                            validationContext);
 
                         var pnr = await GenerateUniqueBusPnrAsync();
                         var reservation = new BusReservation

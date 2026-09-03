@@ -11,5 +11,15 @@ public interface IBusPromotionEngineService
         string? couponCode,
         int? promotionId = null,
         int? userId = null,
-        int? selectedFeaturedOfferId = null);
+        int? selectedFeaturedOfferId = null,
+        BusCouponValidationContext? validationContext = null);
+
+    bool ValidateCouponConditions(
+        IEnumerable<BusCouponCondition>? conditions,
+        BusCouponValidationContext context);
+
+    bool ValidateCouponConditions(
+        IEnumerable<BusCouponCondition>? conditions,
+        BusBooking bus,
+        List<SeatPreviewDto> seats);
 }

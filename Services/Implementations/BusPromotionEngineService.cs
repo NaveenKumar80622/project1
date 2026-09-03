@@ -35,7 +35,8 @@ namespace PickNBook.Api.Services
             string? couponCode,
             int? promotionId = null,
             int? userId = null,
-            int? selectedFeaturedOfferId = null)
+            int? selectedFeaturedOfferId = null,
+            BusCouponValidationContext? validationContext = null)
         {
             User? userObj = null;
             string? userPhone = null;
@@ -102,6 +103,32 @@ namespace PickNBook.Api.Services
 
             response.SubtotalBeforeCoupon = decimal.Round(subtotal, 2);
 
+            // Ensure validationContext is constructed and booking fare matches current subtotal
+            if (validationContext == null)
+            {
+                var istDeparture = DateTime.SpecifyKind(bus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
+                validationContext = new BusCouponValidationContext
+                {
+                    OperatorName = bus.OperatorName,
+                    BusType = bus.BusType,
+                    SourceCity = bus.FromCity,
+                    DestinationCity = bus.ToCity,
+                    TravelDate = istDeparture,
+                    DayOfWeek = istDeparture.DayOfWeek,
+                    BookingFare = subtotal,
+                    SelectedSeats = seats.Select(s => new BusCouponSeatContext
+                    {
+                        SeatName = s.SeatCode,
+                        SeatType = s.SeatType,
+                        Fare = s.BaseFare
+                    }).ToList()
+                };
+            }
+            else
+            {
+                validationContext.BookingFare = subtotal;
+            }
+
             var today = DateOnly.FromDateTime(DateTime.UtcNow.Add(IndiaOffset));
 
             // =========================================================================
@@ -144,7 +171,7 @@ namespace PickNBook.Api.Services
                         continue;
                 }
 
-                if (!ValidateCouponConditions(autoCpn.Conditions, bus, seats))
+                if (!ValidateCouponConditions(autoCpn.Conditions, validationContext))
                     continue;
 
                 decimal amount = autoCpn.CouponType.Equals("Percentage", StringComparison.OrdinalIgnoreCase)
@@ -237,7 +264,7 @@ namespace PickNBook.Api.Services
                     throw new Exception($"Minimum booking amount of INR {appliedCoupon.MinBookingAmount} is required.");
                 }
 
-                if (!ValidateCouponConditions(appliedCoupon.Conditions, bus, seats))
+                if (!ValidateCouponConditions(appliedCoupon.Conditions, validationContext))
                 {
                     throw new Exception("Coupon conditions not met.");
                 }
@@ -306,66 +333,133 @@ namespace PickNBook.Api.Services
             BusBooking bus,
             List<SeatPreviewDto> seats)
         {
+            var istDeparture = DateTime.SpecifyKind(bus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
+            var context = new BusCouponValidationContext
+            {
+                OperatorName = bus.OperatorName,
+                BusType = bus.BusType,
+                SourceCity = bus.FromCity,
+                DestinationCity = bus.ToCity,
+                TravelDate = istDeparture,
+                DayOfWeek = istDeparture.DayOfWeek,
+                BookingFare = seats.Sum(s => s.BaseFare),
+                SelectedSeats = seats.Select(s => new BusCouponSeatContext
+                {
+                    SeatName = s.SeatCode,
+                    SeatType = s.SeatType,
+                    Fare = s.BaseFare
+                }).ToList()
+            };
+
+            return ValidateCouponConditions(conditions, context);
+        }
+
+        public bool ValidateCouponConditions(
+            IEnumerable<BusCouponCondition>? conditions,
+            BusCouponValidationContext context)
+        {
             if (conditions == null || !conditions.Any())
                 return true;
 
-            var istDeparture = DateTime.SpecifyKind(bus.DepartureTime, DateTimeKind.Utc).Add(IndiaOffset);
-
             foreach (var condition in conditions)
             {
+                // Unrestricted/ALL sentinel check: Short-circuit immediately without parsing
+                if (string.IsNullOrWhiteSpace(condition.Value1) ||
+                    string.Equals(condition.Value1.Trim(), "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var trimmedVal1 = condition.Value1.Trim();
+
                 switch (condition.ConditionType)
                 {
-                    case "DayOfWeek":
-                        if (!istDeparture.DayOfWeek.ToString().Equals(condition.Value1, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return false;
-                        }
-                        break;
-
-                    case "SourceCity":
-                        if (!bus.FromCity.Equals(condition.Value1, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return false;
-                        }
-                        break;
-
-                    case "DestinationCity":
-                        if (!bus.ToCity.Equals(condition.Value1, StringComparison.OrdinalIgnoreCase))
-                        {
-                            return false;
-                        }
-                        break;
-
-                    case "SeatType":
-                        if (!seats.Any(x => x.SeatType.Equals(condition.Value1, StringComparison.OrdinalIgnoreCase)))
+                    case "OperatorName":
+                        if (!string.Equals(context.OperatorName, trimmedVal1, StringComparison.OrdinalIgnoreCase))
                         {
                             return false;
                         }
                         break;
 
                     case "BusType":
-                        if (!bus.BusType.Equals(condition.Value1, StringComparison.OrdinalIgnoreCase))
+                        if (!string.Equals(context.BusType, trimmedVal1, StringComparison.OrdinalIgnoreCase))
                         {
                             return false;
                         }
                         break;
 
-                    case "OperatorName":
-                        if (!bus.OperatorName.Equals(condition.Value1, StringComparison.OrdinalIgnoreCase))
+                    case "SeatType":
+                        // Strict rule: ALL selected seats must match the configured SeatType condition
+                        if (context.SelectedSeats == null || !context.SelectedSeats.Any())
                         {
                             return false;
+                        }
+
+                        bool allSeatsMatch = context.SelectedSeats.All(s =>
+                            s.SeatType != null &&
+                            s.SeatType.Contains(trimmedVal1, StringComparison.OrdinalIgnoreCase));
+
+                        if (!allSeatsMatch)
+                        {
+                            return false;
+                        }
+                        break;
+
+                    case "SourceCity":
+                        if (!string.Equals(context.SourceCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return false;
+                        }
+                        break;
+
+                    case "DestinationCity":
+                        if (!string.Equals(context.DestinationCity, trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return false;
+                        }
+                        break;
+
+                    case "DayOfWeek":
+                        if (context.DayOfWeek == null ||
+                            !string.Equals(context.DayOfWeek.Value.ToString(), trimmedVal1, StringComparison.OrdinalIgnoreCase))
+                        {
+                            return false;
+                        }
+                        break;
+
+                    case "TravelDate":
+                        if (context.TravelDate == null)
+                        {
+                            return false;
+                        }
+
+                        var depDate = context.TravelDate.Value.Date;
+                        if (DateTime.TryParse(trimmedVal1, out var date1))
+                        {
+                            if (string.IsNullOrWhiteSpace(condition.Value2) ||
+                                string.Equals(condition.Value2.Trim(), "ALL", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (depDate != date1.Date) return false;
+                            }
+                            else if (DateTime.TryParse(condition.Value2.Trim(), out var date2))
+                            {
+                                if (depDate < date1.Date || depDate > date2.Date) return false;
+                            }
                         }
                         break;
 
                     case "MinimumFare":
-                        decimal currentFare = seats.Count * bus.PriceInr;
-                        if (!decimal.TryParse(condition.Value1, out var val1))
+                        decimal currentFare = context.BookingFare;
+                        if (!decimal.TryParse(trimmedVal1, out var val1))
+                        {
                             break;
+                        }
 
                         decimal val2 = 0m;
-                        if (!string.IsNullOrWhiteSpace(condition.Value2))
+                        if (!string.IsNullOrWhiteSpace(condition.Value2) &&
+                            !string.Equals(condition.Value2.Trim(), "ALL", StringComparison.OrdinalIgnoreCase))
                         {
-                            decimal.TryParse(condition.Value2, out val2);
+                            decimal.TryParse(condition.Value2.Trim(), out val2);
                         }
 
                         switch (condition.ConditionOperator)
@@ -388,21 +482,6 @@ namespace PickNBook.Api.Services
                             default:
                                 if (currentFare < val1) return false;
                                 break;
-                        }
-                        break;
-
-                    case "TravelDate":
-                        var depDate = istDeparture.Date;
-                        if (DateTime.TryParse(condition.Value1, out var date1))
-                        {
-                            if (string.IsNullOrWhiteSpace(condition.Value2))
-                            {
-                                if (depDate != date1.Date) return false;
-                            }
-                            else if (DateTime.TryParse(condition.Value2, out var date2))
-                            {
-                                if (depDate < date1.Date || depDate > date2.Date) return false;
-                            }
                         }
                         break;
                 }

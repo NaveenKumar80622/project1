@@ -29,6 +29,8 @@ namespace PickNBook.Api.Models.DTOs
     public class BusPricingPreviewRequestDto
     {
         public string? TraceId { get; set; }
+        public string? ResultIndex { get; set; }
+        public int? SrdvIndex { get; set; }
         public string? CouponCode { get; set; }
         public int? PromotionId { get; set; }
         public int? SelectedFeaturedOfferId { get; set; }
@@ -75,5 +77,8 @@ namespace PickNBook.Api.Models.DTOs
         public decimal ManualDiscountAmount { get; set; }
         public decimal TotalDiscount { get; set; }
         public decimal FinalAmount { get; set; }
+
+        public bool IsEligible { get; set; } = true;
+        public string? RejectionReason { get; set; }
     }
 }

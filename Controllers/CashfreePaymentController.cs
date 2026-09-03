@@ -22,6 +22,7 @@ namespace PickNBook.Api.Controllers
         private readonly ICurrentUserService _currentUserService;
         private readonly ILogger<CashfreePaymentController> _logger;
         private readonly IBusPromotionEngineService _busPricingService;
+        private readonly IBusCouponContextBuilder _busCouponContextBuilder;
         private readonly IFlightPricingService _flightPricingService;
         private readonly IHotelMarkupService _hotelMarkupService;
         private readonly AppDbContext _dbContext;
@@ -33,6 +34,7 @@ namespace PickNBook.Api.Controllers
             ICurrentUserService currentUserService,
             ILogger<CashfreePaymentController> logger,
             IBusPromotionEngineService busPricingService,
+            IBusCouponContextBuilder busCouponContextBuilder,
             IFlightPricingService flightPricingService,
             IHotelMarkupService hotelMarkupService,
             AppDbContext dbContext)
@@ -43,6 +45,7 @@ namespace PickNBook.Api.Controllers
             _currentUserService = currentUserService;
             _logger = logger;
             _busPricingService = busPricingService;
+            _busCouponContextBuilder = busCouponContextBuilder;
             _flightPricingService = flightPricingService;
             _hotelMarkupService = hotelMarkupService;
             _dbContext = dbContext;
@@ -127,13 +130,22 @@ namespace PickNBook.Api.Controllers
                         string? actualCouponCode = request.CouponCode != null ? request.CouponCode : payload.CouponCode;
                         int? actualPromoId = request.PromotionId != null ? request.PromotionId : payload.PromotionId;
 
+                        var seatCodes = payload.Passengers?.Where(p => !string.IsNullOrWhiteSpace(p.SeatNumber)).Select(p => p.SeatNumber!).ToList() ?? new();
+                        var validationContext = await _busCouponContextBuilder.BuildContextAsync(
+                            payload.TraceId,
+                            payload.ResultIndex,
+                            seatCodes,
+                            dummyBus,
+                            seatPreviews);
+
                         var pricing = await _busPricingService.CalculateAsync(
                             dummyBus,
                             seatPreviews,
                             actualCouponCode,
                             actualPromoId,
                             parsedUserId,
-                            payload.SelectedFeaturedOfferId);
+                            payload.SelectedFeaturedOfferId,
+                            validationContext);
 
                         providerAmount = blockedSeats.Sum(x => x.BaseFare) + blockedSeats.Sum(x => x.GstAmount);
                         markupAmount = pricing.Seats.Sum(s => s.MarkupAmount);

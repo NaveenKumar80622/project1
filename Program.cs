@@ -173,6 +173,7 @@ builder.Services.AddScoped< IAdminFeaturedOffersService, AdminFeaturedOffersServ
 builder.Services.AddScoped<
     IBusPromotionEngineService,
     BusPromotionEngineService>();
+builder.Services.AddScoped<IBusCouponContextBuilder, BusCouponContextBuilder>();
 builder.Services.AddScoped<IFlightMarkupService, FlightMarkupService>();
 builder.Services.AddScoped<IHotelMarkupService, HotelMarkupService>();
 builder.Services.AddScoped<IFlightPromotionEngine, FlightPromotionEngine>();

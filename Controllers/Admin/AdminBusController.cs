@@ -739,12 +739,37 @@ namespace PickNBook.Api.Controllers
                 return BadRequest("ConditionType and Value1 are required.");
             }
 
+            var trimmedType = request.ConditionType.Trim();
+            var trimmedVal1 = request.Value1.Trim();
+            var existing = await dbContext.BusCouponConditions
+                .FirstOrDefaultAsync(x => x.BusCouponId == couponId && x.ConditionType == trimmedType);
+
+            // ALL semantics: Unrestricted condition. Remove existing row if present.
+            if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                if (existing != null)
+                {
+                    dbContext.BusCouponConditions.Remove(existing);
+                    await dbContext.SaveChangesAsync();
+                }
+                return Ok(new { message = $"Condition '{trimmedType}' set to ALL (unrestricted)." });
+            }
+
+            if (existing != null)
+            {
+                existing.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
+                existing.Value1 = trimmedVal1;
+                existing.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
+                await dbContext.SaveChangesAsync();
+                return Ok(existing);
+            }
+
             var condition = new BusCouponCondition
             {
                 BusCouponId = couponId,
-                ConditionType = request.ConditionType.Trim(),
+                ConditionType = trimmedType,
                 ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim(),
-                Value1 = request.Value1.Trim(),
+                Value1 = trimmedVal1,
                 Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim()
             };
 
@@ -768,9 +793,18 @@ namespace PickNBook.Api.Controllers
                 return BadRequest("ConditionType and Value1 are required.");
             }
 
+            var trimmedVal1 = request.Value1.Trim();
+            // Changing to ALL removes the restriction completely
+            if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                dbContext.BusCouponConditions.Remove(condition);
+                await dbContext.SaveChangesAsync();
+                return Ok(new { message = $"Condition '{condition.ConditionType}' removed and set to ALL (unrestricted)." });
+            }
+
             condition.ConditionType = request.ConditionType.Trim();
             condition.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
-            condition.Value1 = request.Value1.Trim();
+            condition.Value1 = trimmedVal1;
             condition.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
 
             await dbContext.SaveChangesAsync();
