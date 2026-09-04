@@ -70,6 +70,9 @@ builder.Services.Configure<PickNBook.Api.Models.Config.SrdvSettings>(
 builder.Services.Configure<CashfreeSettings>(
     builder.Configuration.GetSection("Cashfree"));
 
+builder.Services.Configure<PickNBook.Api.Models.Config.PayloadLoggingOptions>(
+    builder.Configuration.GetSection(PickNBook.Api.Models.Config.PayloadLoggingOptions.SectionName));
+
 builder.Services.AddHttpClient<ICashfreeService, CashfreeService>();
 builder.Services.AddScoped<IPaymentService, PaymentService>();
 builder.Services.AddScoped<IBookingOrchestratorService, BookingOrchestratorService>();

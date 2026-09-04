@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PickNBook.Api.Infrastructure.Logging;
+using PickNBook.Api.Models.Config;
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -14,15 +16,22 @@ public class BusRequestLoggingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<BusRequestLoggingMiddleware> _logger;
+    private readonly IOptionsMonitor<PayloadLoggingOptions> _optionsMonitor;
 
-    public BusRequestLoggingMiddleware(RequestDelegate next, ILogger<BusRequestLoggingMiddleware> logger)
+    public BusRequestLoggingMiddleware(
+        RequestDelegate next,
+        ILogger<BusRequestLoggingMiddleware> logger,
+        IOptionsMonitor<PayloadLoggingOptions> optionsMonitor)
     {
         _next = next;
         _logger = logger;
+        _optionsMonitor = optionsMonitor;
     }
 
     public async Task InvokeAsync(HttpContext context)
     {
+        var options = _optionsMonitor.CurrentValue;
+
         // 1. Generate or retrieve Correlation ID
         var correlationId = context.Request.Headers.TryGetValue("X-Correlation-ID", out var cid) 
             ? cid.ToString() 
@@ -37,7 +46,7 @@ public class BusRequestLoggingMiddleware
         var stopwatch = Stopwatch.StartNew();
         
         // T1: Request Received
-        string formattedRequestBody = FormatJson(requestBody);
+        string formattedRequestBody = JsonPayloadFormatter.Format(requestBody, options.Mode, options.MaxPayloadLength);
         _logger.LogInformation(
             "[{CorrelationId}] [T1] Bus Request Received:\nMethod: {Method}\nPath: {Path}\nPayload:\n{Payload}\n--------------------------------------------------", 
             correlationId, context.Request.Method, context.Request.Path, formattedRequestBody);
@@ -47,10 +56,12 @@ public class BusRequestLoggingMiddleware
             (context.Request.Path.Value.Contains("search", StringComparison.OrdinalIgnoreCase) || 
              context.Request.Path.Value.Contains("seat-layout", StringComparison.OrdinalIgnoreCase));
 
+        bool shouldOmit = isLargePayloadEndpoint && options.Mode == PayloadLoggingMode.Omit;
+
         var originalBodyStream = context.Response.Body;
         MemoryStream? responseBodyStream = null;
         
-        if (!isLargePayloadEndpoint)
+        if (!shouldOmit)
         {
             responseBodyStream = new MemoryStream();
             context.Response.Body = responseBodyStream;
@@ -67,7 +78,7 @@ public class BusRequestLoggingMiddleware
             _logger.LogError(ex, "[{CorrelationId}] Exception occurred during bus request processing after {ElapsedMs}ms", 
                 correlationId, stopwatch.ElapsedMilliseconds);
             
-            if (!isLargePayloadEndpoint)
+            if (!shouldOmit)
             {
                 context.Response.Body = originalBodyStream;
             }
@@ -78,7 +89,7 @@ public class BusRequestLoggingMiddleware
         var elapsedMs = stopwatch.ElapsedMilliseconds;
         string formattedResponseBody;
 
-        if (!isLargePayloadEndpoint && responseBodyStream != null)
+        if (!shouldOmit && responseBodyStream != null)
         {
             context.Response.Body.Seek(0, SeekOrigin.Begin);
             var responseBodyText = await new StreamReader(context.Response.Body).ReadToEndAsync();
@@ -87,7 +98,7 @@ public class BusRequestLoggingMiddleware
             await responseBodyStream.CopyToAsync(originalBodyStream);
             context.Response.Body = originalBodyStream;
 
-            formattedResponseBody = FormatJson(responseBodyText);
+            formattedResponseBody = JsonPayloadFormatter.Format(responseBodyText, options.Mode, options.MaxPayloadLength);
         }
         else
         {
@@ -108,16 +119,5 @@ public class BusRequestLoggingMiddleware
         var content = await reader.ReadToEndAsync();
         stream.Position = 0;
         return content;
-    }
-
-    private static string FormatJson(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return json;
-        const int maxLength = 10000;
-        if (json.Length > maxLength)
-        {
-            return json.Substring(0, maxLength) + $"\n...[truncated, original size: {json.Length} chars]";
-        }
-        return json;
     }
 }

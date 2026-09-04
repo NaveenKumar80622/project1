@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using PickNBook.Api.Models.Config;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Threading;
@@ -10,14 +12,20 @@ namespace PickNBook.Api.Infrastructure.Logging;
 public class SrdvFlightLoggingHandler : DelegatingHandler
 {
     private readonly ILogger<SrdvFlightLoggingHandler> _logger;
+    private readonly IOptionsMonitor<PayloadLoggingOptions> _optionsMonitor;
 
-    public SrdvFlightLoggingHandler(ILogger<SrdvFlightLoggingHandler> logger)
+    public SrdvFlightLoggingHandler(
+        ILogger<SrdvFlightLoggingHandler> logger,
+        IOptionsMonitor<PayloadLoggingOptions> optionsMonitor)
     {
         _logger = logger;
+        _optionsMonitor = optionsMonitor;
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        var options = _optionsMonitor.CurrentValue;
+
         var correlationId = CorrelationIdContext.CorrelationId;
         if (string.IsNullOrEmpty(correlationId))
         {
@@ -31,7 +39,7 @@ public class SrdvFlightLoggingHandler : DelegatingHandler
         }
 
         // T2: Backend -> SRDV Request
-        string formattedRequestPayload = FormatJson(requestPayload);
+        string formattedRequestPayload = JsonPayloadFormatter.Format(requestPayload, options.Mode, options.MaxPayloadLength);
         _logger.LogInformation(
             "[{CorrelationId}] [T2] Backend -> SRDV Flight Request:\nMethod: {Method}\nURL: {Url}\nPayload:\n{Payload}\n--------------------------------------------------", 
             correlationId, request.Method, request.RequestUri, formattedRequestPayload);
@@ -65,11 +73,13 @@ public class SrdvFlightLoggingHandler : DelegatingHandler
              request.RequestUri.ToString().Contains("FareQuote", System.StringComparison.OrdinalIgnoreCase) ||
              request.RequestUri.ToString().Contains("fare-quote", System.StringComparison.OrdinalIgnoreCase));
 
+        bool shouldOmit = isLargePayloadEndpoint && options.Mode == PayloadLoggingMode.Omit;
+
         string responsePayload;
-        if (!isLargePayloadEndpoint && response.Content != null)
+        if (!shouldOmit && response.Content != null)
         {
             responsePayload = await response.Content.ReadAsStringAsync(cancellationToken);
-            responsePayload = FormatJson(responsePayload);
+            responsePayload = JsonPayloadFormatter.Format(responsePayload, options.Mode, options.MaxPayloadLength);
         }
         else
         {
@@ -82,16 +92,5 @@ public class SrdvFlightLoggingHandler : DelegatingHandler
             correlationId, response.StatusCode, stopwatch.ElapsedMilliseconds, responsePayload);
 
         return response;
-    }
-
-    private string FormatJson(string json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return json;
-        const int maxLength = 10000;
-        if (json.Length > maxLength)
-        {
-            return json.Substring(0, maxLength) + $"\n...[truncated, original size: {json.Length} chars]";
-        }
-        return json;
     }
 }
