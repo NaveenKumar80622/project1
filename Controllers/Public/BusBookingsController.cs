@@ -422,6 +422,7 @@ namespace PickNBook.Api.Controllers
                         decimal.TryParse(seatNode["Price"]?["BaseFare"]?.ToString(), out decimal bf);
                         decimal.TryParse(seatNode["SeatFare"]?.ToString(), out decimal sf);
                         decimal.TryParse(seatNode["Price"]?["PublishedFare"]?.ToString(), out decimal pf);
+                        decimal.TryParse(seatNode["Price"]?["GSTAmount"]?.ToString() ?? seatNode["Price"]?["Tax"]?.ToString() ?? seatNode["Price"]?["GstAmount"]?.ToString(), out decimal gst);
 
                         if (!string.IsNullOrWhiteSpace(sn))
                         {
@@ -431,7 +432,8 @@ namespace PickNBook.Api.Controllers
                                 SeatType = st,
                                 BaseFare = bf,
                                 SeatFare = sf,
-                                PublishedFare = pf
+                                PublishedFare = pf,
+                                GstAmount = gst
                             };
                         }
                     }
@@ -694,36 +696,47 @@ namespace PickNBook.Api.Controllers
                     .Where(x => x.TraceId == traceId)
                     .ToListAsync();
 
-                var missingBlockedSeats = seatCodes
-                    .Where(seat => !blockedSeats.Any(b => b.SeatName.Equals(seat, StringComparison.OrdinalIgnoreCase) && b.BaseFare > 0))
-                    .ToList();
-
-                if (missingBlockedSeats.Any())
+                var seatPreviews = new List<PickNBook.Api.Models.DTOs.SeatPreviewDto>();
+                foreach (var p in request.Seats.Where(s => !string.IsNullOrWhiteSpace(s.SeatCode)))
                 {
-                    return BadRequest(new { 
-                        message = $"Authoritative blocked seat pricing is unavailable for seat(s): {string.Join(", ", missingBlockedSeats)}. Please refresh and block the seats again." 
+                    var seatCode = p.SeatCode.Trim();
+                    var blockedSeat = blockedSeats
+                        .OrderByDescending(b => b.Id)
+                        .FirstOrDefault(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
+
+                    var layoutSeat = layoutMap![seatCode];
+
+                    decimal baseFare = 0m;
+                    decimal gstAmount = 0m;
+
+                    if (blockedSeat != null && blockedSeat.BaseFare > 0)
+                    {
+                        baseFare = blockedSeat.BaseFare;
+                        gstAmount = blockedSeat.GstAmount;
+                    }
+                    else
+                    {
+                        baseFare = layoutSeat.BaseFare > 0 ? layoutSeat.BaseFare : p.BaseFare;
+                        gstAmount = layoutSeat.GstAmount > 0 
+                            ? layoutSeat.GstAmount 
+                            : (p.ExternalGst > 0 ? p.ExternalGst : (layoutSeat.PublishedFare > layoutSeat.BaseFare ? layoutSeat.PublishedFare - layoutSeat.BaseFare : 0m));
+                    }
+
+                    if (baseFare <= 0)
+                    {
+                        return BadRequest(new { 
+                            message = $"Authoritative seat pricing is unavailable for seat '{seatCode}'. Please refresh the seat layout." 
+                        });
+                    }
+
+                    seatPreviews.Add(new PickNBook.Api.Models.DTOs.SeatPreviewDto 
+                    { 
+                        SeatCode = seatCode, 
+                        BaseFare = baseFare, 
+                        SeatType = layoutSeat.SeatType, // 100% authoritative from layout
+                        ExternalGst = gstAmount 
                     });
                 }
-
-                var seatPreviews = request.Seats
-                    .Where(p => !string.IsNullOrWhiteSpace(p.SeatCode))
-                    .Select(p => {
-                        var seatCode = p.SeatCode.Trim();
-                        var blockedSeat = blockedSeats
-                            .OrderByDescending(b => b.Id)
-                            .First(b => b.SeatName.Equals(seatCode, StringComparison.OrdinalIgnoreCase));
-
-                        var layoutSeat = layoutMap![seatCode];
-
-                        return new PickNBook.Api.Models.DTOs.SeatPreviewDto 
-                        { 
-                            SeatCode = seatCode, 
-                            BaseFare = blockedSeat.BaseFare, 
-                            SeatType = layoutSeat.SeatType, // 100% authoritative from layout
-                            ExternalGst = blockedSeat.GstAmount 
-                        };
-                    })
-                    .ToList();
 
                 var dummyBus = new BusBooking
                 {

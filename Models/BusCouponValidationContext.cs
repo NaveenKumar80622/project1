@@ -52,5 +52,6 @@ namespace PickNBook.Api.Models
         public decimal BaseFare { get; set; }
         public decimal SeatFare { get; set; }
         public decimal PublishedFare { get; set; }
+        public decimal GstAmount { get; set; }
     }
 }
