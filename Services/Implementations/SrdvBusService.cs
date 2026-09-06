@@ -623,19 +623,61 @@ namespace PickNBook.Api.Services
             return result;
         }
 
-        public async Task<List<SrdvSeatDto>> GetSeatLayoutAsync(string traceId, int srdvIndex, string resultIndex)
+        public static string BuildCompositeResultIndex(string? resultIndex, string? srdvIndex)
         {
-            var requestBody = new
-            {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = traceId,
-                SrdvIndex = srdvIndex.ToString(),
-                ResultIndex = resultIndex
-            };
+            var resIdx = resultIndex?.Trim() ?? string.Empty;
+            var sIdx = srdvIndex?.Trim() ?? string.Empty;
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/GetSeatLayOut", requestBody, _jsonOptions);
+            if (string.IsNullOrEmpty(sIdx) || sIdx == "0")
+            {
+                return resIdx;
+            }
+
+            if (resIdx.StartsWith($"{sIdx}_", StringComparison.OrdinalIgnoreCase))
+            {
+                return resIdx;
+            }
+
+            return $"{sIdx}_{resIdx}";
+        }
+
+        public async Task<List<SrdvSeatDto>> GetSeatLayoutAsync(
+            string traceId,
+            int srdvIndex,
+            string resultIndex,
+            string? boardingPointId = null,
+            string? droppingPointId = null)
+        {
+            var compositeResultIndex = BuildCompositeResultIndex(resultIndex, srdvIndex.ToString());
+            var parsedTraceId = long.TryParse(traceId, out var tid) ? (object)tid : traceId;
+
+            object requestBody;
+            if (!string.IsNullOrWhiteSpace(boardingPointId) && !string.IsNullOrWhiteSpace(droppingPointId))
+            {
+                requestBody = new
+                {
+                    TraceId = parsedTraceId,
+                    ResultIndex = compositeResultIndex,
+                    BoardingPointId = boardingPointId,
+                    DroppingPointId = droppingPointId
+                };
+            }
+            else
+            {
+                requestBody = new
+                {
+                    TraceId = parsedTraceId,
+                    ResultIndex = compositeResultIndex
+                };
+            }
+
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/GetSeatLayOut";
+            var response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
             response.EnsureSuccessStatusCode();
 
             using var contentStream = await response.Content.ReadAsStreamAsync();
@@ -721,19 +763,43 @@ namespace PickNBook.Api.Services
             return res;
         }
 
-        public async Task<string> GetSeatLayoutRawAsync(string traceId, int srdvIndex, string resultIndex)
+        public async Task<string> GetSeatLayoutRawAsync(
+            string traceId,
+            int srdvIndex,
+            string resultIndex,
+            string? boardingPointId = null,
+            string? droppingPointId = null)
         {
-            var requestBody = new
-            {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = traceId,
-                SrdvIndex = srdvIndex.ToString(),
-                ResultIndex = resultIndex
-            };
+            var compositeResultIndex = BuildCompositeResultIndex(resultIndex, srdvIndex.ToString());
+            var parsedTraceId = long.TryParse(traceId, out var tid) ? (object)tid : traceId;
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/GetSeatLayOut", requestBody, _jsonOptions);
+            object requestBody;
+            if (!string.IsNullOrWhiteSpace(boardingPointId) && !string.IsNullOrWhiteSpace(droppingPointId))
+            {
+                requestBody = new
+                {
+                    TraceId = parsedTraceId,
+                    ResultIndex = compositeResultIndex,
+                    BoardingPointId = boardingPointId,
+                    DroppingPointId = droppingPointId
+                };
+            }
+            else
+            {
+                requestBody = new
+                {
+                    TraceId = parsedTraceId,
+                    ResultIndex = compositeResultIndex
+                };
+            }
+
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/GetSeatLayOut";
+            var response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
             response.EnsureSuccessStatusCode();
 
             return await response.Content.ReadAsStringAsync();
@@ -741,17 +807,36 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetSeatLayoutProxyAsync(BusSeatLayoutProxyRequestDto request)
         {
-            var requestBody = new
-            {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = request.TraceId,
-                SrdvIndex = request.SrdvIndex,
-                ResultIndex = request.ResultIndex
-            };
+            var compositeResultIndex = BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex);
+            var parsedTraceId = long.TryParse(request.TraceId, out var tid) ? (object)tid : request.TraceId;
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/GetSeatLayOut", requestBody, _jsonOptions);
+            object requestBody;
+            if (!string.IsNullOrWhiteSpace(request.BoardingPointId) && !string.IsNullOrWhiteSpace(request.DroppingPointId))
+            {
+                requestBody = new
+                {
+                    TraceId = parsedTraceId,
+                    ResultIndex = compositeResultIndex,
+                    BoardingPointId = request.BoardingPointId,
+                    DroppingPointId = request.DroppingPointId
+                };
+            }
+            else
+            {
+                requestBody = new
+                {
+                    TraceId = parsedTraceId,
+                    ResultIndex = compositeResultIndex
+                };
+            }
+
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/GetSeatLayOut";
+            var response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
             return await response.Content.ReadAsStringAsync();
         }
 

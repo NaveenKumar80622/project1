@@ -266,20 +266,30 @@ namespace PickNBook.Api.Controllers
                         var resIdx = busNode["ResultIndex"]?.ToString() ?? string.Empty;
                         if (!string.IsNullOrEmpty(searchTraceId) && !string.IsNullOrEmpty(resIdx))
                         {
+                            var srdvIdx = int.TryParse(busNode["SrdvIndex"]?.ToString(), out var si) ? si : 0;
+                            var bpDpSeatLayout = busNode["BpDpSeatLayout"]?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+
                             var busCtx = new BusSearchItemContext
                             {
                                 TraceId = searchTraceId,
                                 ResultIndex = resIdx,
-                                SrdvIndex = int.TryParse(busNode["SrdvIndex"]?.ToString(), out var si) ? si : 0,
+                                SrdvIndex = srdvIdx,
                                 OperatorName = busNode["TravelsName"]?.ToString() ?? string.Empty,
                                 BusType = busNode["BusType"]?.ToString() ?? string.Empty,
                                 FromCity = request.FromCityCode.ToString(),
                                 ToCity = request.ToCityCode.ToString(),
                                 DepartureTime = busNode["DepartureTime"]?.ToString() ?? string.Empty,
                                 ArrivalTime = busNode["ArrivalTime"]?.ToString() ?? string.Empty,
-                                DepartDate = request.DepartDate
+                                DepartDate = request.DepartDate,
+                                BpDpSeatLayout = bpDpSeatLayout
                             };
                             _cache.Set($"bus_ctx_{searchTraceId}_{resIdx}", busCtx, TimeSpan.FromMinutes(30));
+
+                            var compositeResIdx = SrdvBusService.BuildCompositeResultIndex(resIdx, srdvIdx.ToString());
+                            if (!string.Equals(compositeResIdx, resIdx, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _cache.Set($"bus_ctx_{searchTraceId}_{compositeResIdx}", busCtx, TimeSpan.FromMinutes(30));
+                            }
                         }
                     }
                 }
@@ -332,11 +342,40 @@ namespace PickNBook.Api.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GetSeatLayoutProxy([FromBody] BusSeatLayoutProxyRequestDto request)
         {
-            if (string.IsNullOrWhiteSpace(request.TraceId) || 
-                string.IsNullOrWhiteSpace(request.SrdvIndex) || 
-                string.IsNullOrWhiteSpace(request.ResultIndex))
+            if (request == null)
             {
-                return BadRequest("TraceId, SrdvIndex, and ResultIndex are required.");
+                return BadRequest("Request body cannot be null.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
+            {
+                return BadRequest("TraceId must be present and greater than 0.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                return BadRequest("ResultIndex is required.");
+            }
+
+            var compositeResultIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex);
+            bool foundInCache = _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
+                || _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
+
+            if (foundInCache && busCtx != null)
+            {
+                if (string.IsNullOrWhiteSpace(request.SrdvIndex) && busCtx.SrdvIndex > 0)
+                {
+                    request.SrdvIndex = busCtx.SrdvIndex.ToString();
+                }
+            }
+
+            bool isBpDp = (busCtx != null && busCtx.BpDpSeatLayout) || (request.BpDpSeatLayout == true);
+            if (isBpDp)
+            {
+                if (string.IsNullOrWhiteSpace(request.BoardingPointId) || string.IsNullOrWhiteSpace(request.DroppingPointId))
+                {
+                    return BadRequest("BoardingPointId and DroppingPointId are required for BP-DP seat layout.");
+                }
             }
 
             try
@@ -463,6 +502,10 @@ namespace PickNBook.Api.Controllers
                         }
                     }
                     _cache.Set($"bus_seats_{request.TraceId}_{request.ResultIndex}", seatLayoutMap, TimeSpan.FromMinutes(30));
+                    if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _cache.Set($"bus_seats_{request.TraceId}_{compositeResultIndex}", seatLayoutMap, TimeSpan.FromMinutes(30));
+                    }
 
                     // Cancellation policies are returned to frontend directly inside the JSON response.
                     // Legacy code to save them to the database has been removed.

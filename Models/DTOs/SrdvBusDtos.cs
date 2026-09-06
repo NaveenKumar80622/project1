@@ -36,6 +36,9 @@ namespace PickNBook.Api.Models.DTOs
         public string TraceId { get; set; } = string.Empty;
         public string SrdvIndex { get; set; } = string.Empty;
         public string ResultIndex { get; set; } = string.Empty;
+        public string? BoardingPointId { get; set; }
+        public string? DroppingPointId { get; set; }
+        public bool? BpDpSeatLayout { get; set; }
     }
 
     public class BusBoardingPointsProxyRequestDto
