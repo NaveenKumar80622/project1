@@ -571,17 +571,22 @@ namespace PickNBook.Api.Services
 
         public async Task<SrdvBoardingDroppingDetailsDto> GetBoardingPointDetailsAsync(string traceId, int srdvIndex, string resultIndex)
         {
+            var compositeResultIndex = BuildCompositeResultIndex(resultIndex, srdvIndex.ToString());
+            var parsedTraceId = long.TryParse(traceId, out var tid) ? (object)tid : traceId;
+
             var requestBody = new
             {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = traceId,
-                SrdvIndex = srdvIndex.ToString(),
-                ResultIndex = resultIndex
+                TraceId = parsedTraceId,
+                ResultIndex = compositeResultIndex
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/GetBoardingPointDetails", requestBody, _jsonOptions);
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/GetBoardingPointDetails";
+            var response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
             response.EnsureSuccessStatusCode();
 
             using var contentStream = await response.Content.ReadAsStreamAsync();
@@ -842,17 +847,22 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetBoardingPointDetailsProxyAsync(BusBoardingPointsProxyRequestDto request)
         {
+            var compositeResultIndex = BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex);
+            var parsedTraceId = long.TryParse(request.TraceId, out var tid) ? (object)tid : request.TraceId;
+
             var requestBody = new
             {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = request.TraceId,
-                SrdvIndex = request.SrdvIndex,
-                ResultIndex = request.ResultIndex
+                TraceId = parsedTraceId,
+                ResultIndex = compositeResultIndex
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/GetBoardingPointDetails", requestBody, _jsonOptions);
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/GetBoardingPointDetails";
+            var response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
             return await response.Content.ReadAsStringAsync();
         }
 

@@ -524,11 +524,31 @@ namespace PickNBook.Api.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> GetBoardingPointsProxy([FromBody] BusBoardingPointsProxyRequestDto request)
         {
-            if (string.IsNullOrWhiteSpace(request.TraceId) || 
-                string.IsNullOrWhiteSpace(request.SrdvIndex) || 
-                string.IsNullOrWhiteSpace(request.ResultIndex))
+            if (request == null)
             {
-                return BadRequest("TraceId, SrdvIndex, and ResultIndex are required.");
+                return BadRequest("Request body cannot be null.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
+            {
+                return BadRequest("TraceId must be present and greater than 0.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                return BadRequest("ResultIndex is required.");
+            }
+
+            var compositeResultIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex);
+            bool foundInCache = _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
+                || _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
+
+            if (foundInCache && busCtx != null)
+            {
+                if (string.IsNullOrWhiteSpace(request.SrdvIndex) && busCtx.SrdvIndex > 0)
+                {
+                    request.SrdvIndex = busCtx.SrdvIndex.ToString();
+                }
             }
 
             try
