@@ -283,12 +283,12 @@ namespace PickNBook.Api.Controllers
                                 DepartDate = request.DepartDate,
                                 BpDpSeatLayout = bpDpSeatLayout
                             };
-                            _cache.Set($"bus_ctx_{searchTraceId}_{resIdx}", busCtx, TimeSpan.FromMinutes(30));
+                            _cache.Set($"bus_ctx_{searchTraceId}_{resIdx}", busCtx, TimeSpan.FromHours(1));
 
                             var compositeResIdx = SrdvBusService.BuildCompositeResultIndex(resIdx, srdvIdx.ToString());
                             if (!string.Equals(compositeResIdx, resIdx, StringComparison.OrdinalIgnoreCase))
                             {
-                                _cache.Set($"bus_ctx_{searchTraceId}_{compositeResIdx}", busCtx, TimeSpan.FromMinutes(30));
+                                _cache.Set($"bus_ctx_{searchTraceId}_{compositeResIdx}", busCtx, TimeSpan.FromHours(1));
                             }
                         }
                     }
@@ -488,6 +488,21 @@ namespace PickNBook.Api.Controllers
                         decimal.TryParse(seatNode["Price"]?["PublishedFare"]?.ToString(), out decimal pf);
                         decimal.TryParse(seatNode["Price"]?["GSTAmount"]?.ToString() ?? seatNode["Price"]?["Tax"]?.ToString() ?? seatNode["Price"]?["GstAmount"]?.ToString(), out decimal gst);
 
+                        var statusStr = seatNode["SeatStatus"]?.ToString()?.Trim() ?? "";
+                        bool isAvailable = true;
+                        if (bool.TryParse(statusStr, out var bStatus)) isAvailable = bStatus;
+                        else if (statusStr.Equals("Available", StringComparison.OrdinalIgnoreCase) || statusStr == "1") isAvailable = true;
+                        else if (statusStr.Equals("Booked", StringComparison.OrdinalIgnoreCase) || statusStr == "0" || statusStr.Equals("Unavailable", StringComparison.OrdinalIgnoreCase) || statusStr.Equals("false", StringComparison.OrdinalIgnoreCase)) isAvailable = false;
+
+                        var isLadies = seatNode["IsLadiesSeat"]?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true
+                            || seatNode["LadiesSeat"]?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true
+                            || seatNode["Gender"]?.ToString()?.Equals("Female", StringComparison.OrdinalIgnoreCase) == true
+                            || seatNode["ReservedFor"]?.ToString()?.Equals("Female", StringComparison.OrdinalIgnoreCase) == true;
+
+                        var isMales = seatNode["IsMalesSeat"]?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true
+                            || seatNode["Gender"]?.ToString()?.Equals("Male", StringComparison.OrdinalIgnoreCase) == true
+                            || seatNode["ReservedFor"]?.ToString()?.Equals("Male", StringComparison.OrdinalIgnoreCase) == true;
+
                         if (!string.IsNullOrWhiteSpace(sn))
                         {
                             seatLayoutMap[sn] = new BusSeatLayoutItemContext
@@ -497,14 +512,18 @@ namespace PickNBook.Api.Controllers
                                 BaseFare = bf,
                                 SeatFare = sf,
                                 PublishedFare = pf,
-                                GstAmount = gst
+                                GstAmount = gst,
+                                IsAvailable = isAvailable,
+                                SeatStatus = statusStr,
+                                IsLadiesSeat = isLadies,
+                                IsMalesSeat = isMales
                             };
                         }
                     }
-                    _cache.Set($"bus_seats_{request.TraceId}_{request.ResultIndex}", seatLayoutMap, TimeSpan.FromMinutes(30));
+                    _cache.Set($"bus_seats_{request.TraceId}_{request.ResultIndex}", seatLayoutMap, TimeSpan.FromHours(1));
                     if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
                     {
-                        _cache.Set($"bus_seats_{request.TraceId}_{compositeResultIndex}", seatLayoutMap, TimeSpan.FromMinutes(30));
+                        _cache.Set($"bus_seats_{request.TraceId}_{compositeResultIndex}", seatLayoutMap, TimeSpan.FromHours(1));
                     }
 
                     // Cancellation policies are returned to frontend directly inside the JSON response.
@@ -531,7 +550,7 @@ namespace PickNBook.Api.Controllers
 
             if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
             {
-                return BadRequest("TraceId must be present and greater than 0.");
+                return BadRequest("TraceId must be present, numeric, and greater than 0.");
             }
 
             if (string.IsNullOrWhiteSpace(request.ResultIndex))
@@ -543,18 +562,55 @@ namespace PickNBook.Api.Controllers
             bool foundInCache = _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
                 || _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
 
-            if (foundInCache && busCtx != null)
+            if (!foundInCache || busCtx == null)
             {
-                if (string.IsNullOrWhiteSpace(request.SrdvIndex) && busCtx.SrdvIndex > 0)
-                {
-                    request.SrdvIndex = busCtx.SrdvIndex.ToString();
-                }
+                return BadRequest(new { message = "Invalid or expired search workflow session. TraceId and ResultIndex must belong to an active search within 1 hour." });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.SrdvIndex) && busCtx.SrdvIndex > 0)
+            {
+                request.SrdvIndex = busCtx.SrdvIndex.ToString();
             }
 
             try
             {
                 var rawJson = await _srdvBusService.GetBoardingPointDetailsProxyAsync(request);
                 var jsonNode = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
+
+                if (jsonNode is System.Text.Json.Nodes.JsonObject rootObj)
+                {
+                    var bpWorkflow = new BusBoardingPointsWorkflowContext();
+                    void ExtractPoints(System.Text.Json.Nodes.JsonNode? arrNode, HashSet<string> targetSet)
+                    {
+                        if (arrNode is System.Text.Json.Nodes.JsonArray arr)
+                        {
+                            foreach (var item in arr)
+                            {
+                                if (item == null) continue;
+                                var id = item["CityPointIndex"]?.ToString()
+                                      ?? item["CityPointLocationId"]?.ToString()
+                                      ?? item["PointId"]?.ToString()
+                                      ?? item["Id"]?.ToString();
+                                if (!string.IsNullOrWhiteSpace(id))
+                                {
+                                    targetSet.Add(id.Trim());
+                                }
+                            }
+                        }
+                    }
+
+                    ExtractPoints(rootObj["BoardingPointsDetails"] ?? rootObj["BoardingPoints"], bpWorkflow.BoardingPointIds);
+                    ExtractPoints(rootObj["DroppingPointsDetails"] ?? rootObj["DroppingPoints"], bpWorkflow.DroppingPointIds);
+
+                    if (bpWorkflow.BoardingPointIds.Count > 0 || bpWorkflow.DroppingPointIds.Count > 0)
+                    {
+                        _cache.Set($"bus_bp_{request.TraceId}_{request.ResultIndex}", bpWorkflow, TimeSpan.FromHours(1));
+                        if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _cache.Set($"bus_bp_{request.TraceId}_{compositeResultIndex}", bpWorkflow, TimeSpan.FromHours(1));
+                        }
+                    }
+                }
                 
                 return Ok(jsonNode);
             }
@@ -570,31 +626,253 @@ namespace PickNBook.Api.Controllers
         [InjectClientIp]
         public async Task<IActionResult> BlockBusProxy([FromBody] SrdvBusBookingRequestDto request)
         {
-            if (string.IsNullOrWhiteSpace(request.TraceId) || 
-                string.IsNullOrWhiteSpace(request.ResultIndex))
+            if (request == null)
             {
-                return BadRequest("TraceId and ResultIndex are required.");
+                return BadRequest("Request body cannot be null.");
             }
 
-            if (request.Passengers == null || request.Passengers.Count == 0)
+            if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
             {
-                return BadRequest(new { message = "At least one passenger is required." });
+                return BadRequest("TraceId must be present, numeric, and greater than 0.");
             }
 
-            // ID Proof validation is now handled natively by the frontend reading the Search response flag,
-            // and strictly enforced by the SRDV API natively.
+            if (string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                return BadRequest("ResultIndex is required.");
+            }
+
+            var compositeResultIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex.ToString());
+            bool foundSearchCtx = _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
+                || _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
+
+            if (!foundSearchCtx || busCtx == null)
+            {
+                return BadRequest(new { message = "Invalid or expired search workflow session. TraceId and ResultIndex must belong to an active search within 1 hour." });
+            }
+
+            if (request.SrdvIndex <= 0 && busCtx.SrdvIndex > 0)
+            {
+                request.SrdvIndex = busCtx.SrdvIndex;
+            }
+
+            if (string.IsNullOrWhiteSpace(request.BoardingPointId))
+            {
+                return BadRequest(new { message = "BoardingPointId is required." });
+            }
+            if (string.IsNullOrWhiteSpace(request.DroppingPointId))
+            {
+                return BadRequest(new { message = "DroppingPointId is required." });
+            }
+
+            // Validate against retained Boarding Point workflow state if available
+            bool foundBpState = _cache.TryGetValue($"bus_bp_{request.TraceId}_{request.ResultIndex}", out BusBoardingPointsWorkflowContext? bpCtx)
+                || _cache.TryGetValue($"bus_bp_{request.TraceId}_{compositeResultIndex}", out bpCtx);
+
+            if (foundBpState && bpCtx != null)
+            {
+                if (bpCtx.BoardingPointIds.Count > 0 && !bpCtx.BoardingPointIds.Contains(request.BoardingPointId.Trim()))
+                {
+                    return BadRequest(new { message = $"BoardingPointId '{request.BoardingPointId}' does not belong to the valid boarding points for this bus." });
+                }
+                if (bpCtx.DroppingPointIds.Count > 0 && !bpCtx.DroppingPointIds.Contains(request.DroppingPointId.Trim()))
+                {
+                    return BadRequest(new { message = $"DroppingPointId '{request.DroppingPointId}' does not belong to the valid dropping points for this bus." });
+                }
+            }
+
+            if (request.Passengers == null || request.Passengers.Count < 1 || request.Passengers.Count > 10)
+            {
+                return BadRequest(new { message = "Passengers count must be between 1 and 10." });
+            }
+
+            int leadPassengerCount = request.Passengers.Count(p => p.LeadPassenger == true);
+            if (leadPassengerCount > 1)
+            {
+                return BadRequest(new { message = "Exactly one passenger must be designated as the lead passenger." });
+            }
+            else if (leadPassengerCount == 0)
+            {
+                request.Passengers[0].LeadPassenger = true;
+            }
+
+            var seatNamesSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var emailRegex = new System.Text.RegularExpressions.Regex(@"^[^@\s]+@[^@\s]+\.[^@\s]+$");
+
+            for (int i = 0; i < request.Passengers.Count; i++)
+            {
+                var p = request.Passengers[i];
+                if (string.IsNullOrWhiteSpace(p.Title) || p.Title.Trim().Length > 20)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: Title is required and must be max 20 characters." });
+                }
+                if (string.IsNullOrWhiteSpace(p.FirstName) || p.FirstName.Trim().Length > 100)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: FirstName is required and must be max 100 characters." });
+                }
+                if (string.IsNullOrWhiteSpace(p.LastName) || p.LastName.Trim().Length > 100)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: LastName is required and must be max 100 characters." });
+                }
+
+                var gStr = p.Gender.ToString().Trim();
+                if (gStr != "1" && gStr != "2" && !gStr.Equals("Male", StringComparison.OrdinalIgnoreCase) && !gStr.Equals("Female", StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: Gender must be '1' (Male) or '2' (Female)." });
+                }
+                if (gStr.Equals("Male", StringComparison.OrdinalIgnoreCase)) p.Gender = 1;
+                else if (gStr.Equals("Female", StringComparison.OrdinalIgnoreCase)) p.Gender = 2;
+
+                if (p.Age < 1 || p.Age > 120)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: Age must be between 1 and 120." });
+                }
+
+                if (string.IsNullOrWhiteSpace(p.Email) || p.Email.Length > 254 || !emailRegex.IsMatch(p.Email.Trim()))
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: A valid email (max 254 characters) is required." });
+                }
+
+                var cleanPhone = p.ContactNo?.Trim() ?? "";
+                if (cleanPhone.Length < 5 || cleanPhone.Length > 20)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: PhoneNo must be between 5 and 20 characters." });
+                }
+
+                if (!string.IsNullOrWhiteSpace(p.IdNumber) && p.IdNumber.Trim().Length > 100)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: IdNumber must be max 100 characters." });
+                }
+                if (!string.IsNullOrWhiteSpace(p.IdType) && p.IdType.Trim().Length > 50)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: IdType must be max 50 characters." });
+                }
+
+                if (string.IsNullOrWhiteSpace(p.Address))
+                {
+                    p.Address = "India";
+                }
+                else if (p.Address.Trim().Length > 500)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: Address must be max 500 characters." });
+                }
+
+                if (string.IsNullOrWhiteSpace(p.SeatName) || p.SeatName.Trim().Length > 100)
+                {
+                    return BadRequest(new { message = $"Passenger {i + 1}: SeatName is required and must be max 100 characters." });
+                }
+
+                var trimmedSeat = p.SeatName.Trim();
+                if (!seatNamesSet.Add(trimmedSeat))
+                {
+                    return BadRequest(new { message = $"Duplicate seat '{trimmedSeat}' detected in passenger list. Duplicate seats are not allowed." });
+                }
+
+                // GST validation
+                if (!string.IsNullOrWhiteSpace(p.GSTNumber))
+                {
+                    if (string.IsNullOrWhiteSpace(p.GSTCompanyName))
+                    {
+                        return BadRequest(new { message = $"Passenger {i + 1}: GSTCompanyName is required when GSTNumber is provided." });
+                    }
+                    if (string.IsNullOrWhiteSpace(p.GSTCompanyAddress))
+                    {
+                        return BadRequest(new { message = $"Passenger {i + 1}: GSTCompanyAddress is required when GSTNumber is provided." });
+                    }
+                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyEmail) && !emailRegex.IsMatch(p.GSTCompanyEmail.Trim()))
+                    {
+                        return BadRequest(new { message = $"Passenger {i + 1}: GSTCompanyEmail must be a valid email." });
+                    }
+                }
+            }
+
+            // Validate Seats against valid SeatLayout
+            bool foundSeats = _cache.TryGetValue($"bus_seats_{request.TraceId}_{request.ResultIndex}", out Dictionary<string, BusSeatLayoutItemContext>? layoutMap)
+                || _cache.TryGetValue($"bus_seats_{request.TraceId}_{compositeResultIndex}", out layoutMap);
+
+            if (foundSeats && layoutMap != null)
+            {
+                foreach (var p in request.Passengers)
+                {
+                    var seatName = p.SeatName.Trim();
+                    if (!layoutMap.TryGetValue(seatName, out var layoutSeat))
+                    {
+                        return BadRequest(new { message = $"Seat '{seatName}' does not exist in the valid seat layout for this bus." });
+                    }
+                    if (!layoutSeat.IsAvailable)
+                    {
+                        return BadRequest(new { message = $"Seat '{seatName}' is not available for booking." });
+                    }
+
+                    // RedBus forcedSeats rule check
+                    if (layoutSeat.IsLadiesSeat && p.Gender == 1)
+                    {
+                        return Ok(new
+                        {
+                            Error = new
+                            {
+                                ErrorCode = 7040,
+                                ErrorMessage = "Under the RedBus forcedSeats rule, available reserved seats for each gender must be selected first."
+                            }
+                        });
+                    }
+                }
+            }
+
+            // Idempotency check: identical payload returns retained response, different payload returns 7019
+            var payloadSignature = $"{request.BoardingPointId?.Trim()}_{request.DroppingPointId?.Trim()}_" +
+                string.Join(";", request.Passengers.OrderBy(p => p.SeatName).Select(p => $"{p.SeatName}:{p.Gender}:{p.FirstName}_{p.LastName}"));
+
+            var idempotencyKey = $"bus_block_idem_{request.TraceId}_{compositeResultIndex}";
+            if (_cache.TryGetValue(idempotencyKey, out (string SavedSignature, string SavedJson) cachedBlock))
+            {
+                if (string.Equals(cachedBlock.SavedSignature, payloadSignature, StringComparison.Ordinal))
+                {
+                    var parsedRetained = System.Text.Json.Nodes.JsonNode.Parse(cachedBlock.SavedJson);
+                    return Ok(parsedRetained);
+                }
+                else
+                {
+                    return Ok(new
+                    {
+                        Error = new
+                        {
+                            ErrorCode = 7019,
+                            ErrorMessage = "Payload mismatch on block retry."
+                        }
+                    });
+                }
+            }
 
             try
             {
                 var rawJson = await _srdvBusService.BlockBusProxyAsync(request);
                 var jsonNode = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
-                
-                // ==========================================
-                // LEGACY POLICY CAPTURE REMOVED
-                // ==========================================
+
                 if (jsonNode is System.Text.Json.Nodes.JsonObject jsonObj)
                 {
+                    var errObj = jsonObj["Error"] as System.Text.Json.Nodes.JsonObject;
+                    int errCode = -1;
+                    if (errObj != null && int.TryParse(errObj["ErrorCode"]?.ToString(), out var ec))
+                    {
+                        errCode = ec;
+                    }
+
                     var resultObj = jsonObj["Result"] as System.Text.Json.Nodes.JsonObject;
+                    var blockKeyStr = jsonObj["BlockKey"]?.ToString() ?? resultObj?["BlockKey"]?.ToString();
+
+                    if (errCode == 0)
+                    {
+                        _cache.Set(idempotencyKey, (payloadSignature, rawJson), TimeSpan.FromHours(1));
+
+                        if (!string.IsNullOrWhiteSpace(blockKeyStr))
+                        {
+                            _cache.Set($"bus_blockkey_{request.TraceId}_{request.ResultIndex}", blockKeyStr.Trim(), TimeSpan.FromHours(1));
+                            if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _cache.Set($"bus_blockkey_{request.TraceId}_{compositeResultIndex}", blockKeyStr.Trim(), TimeSpan.FromHours(1));
+                            }
+                        }
+                    }
 
                     // ==========================================
                     // INJECT MARKUP INTO BLOCK RESPONSE
@@ -663,8 +941,6 @@ namespace PickNBook.Api.Controllers
                         }
                     }
                 }
-
-
 
                 return Ok(jsonNode);
             }
@@ -1186,7 +1462,10 @@ namespace PickNBook.Api.Controllers
                                 }).ToList()
                             };
 
-                            var srdvRes = await _srdvBusService.BookBusAsync(srdvReq, request.BlockKey ?? "");
+                            var blockKeyToUse = !string.IsNullOrWhiteSpace(request.BlockKey)
+                                ? request.BlockKey
+                                : (_cache.TryGetValue($"bus_blockkey_{srdvReq.TraceId}_{srdvReq.ResultIndex}", out string? cachedBk) ? cachedBk : "");
+                            var srdvRes = await _srdvBusService.BookBusAsync(srdvReq, blockKeyToUse ?? "");
                             if (!srdvRes.Success)
                             {
                                 throw new Exception($"SRDV Booking Failed: {srdvRes.ErrorMessage}");

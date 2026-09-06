@@ -54,5 +54,15 @@ namespace PickNBook.Api.Models
         public decimal SeatFare { get; set; }
         public decimal PublishedFare { get; set; }
         public decimal GstAmount { get; set; }
+        public bool IsAvailable { get; set; } = true;
+        public string? SeatStatus { get; set; }
+        public bool IsLadiesSeat { get; set; }
+        public bool IsMalesSeat { get; set; }
+    }
+
+    public class BusBoardingPointsWorkflowContext
+    {
+        public HashSet<string> BoardingPointIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> DroppingPointIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

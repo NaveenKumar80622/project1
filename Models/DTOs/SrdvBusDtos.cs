@@ -54,6 +54,7 @@ namespace PickNBook.Api.Models.DTOs
         public int SrdvIndex { get; set; }
         public string BoardingPointId { get; set; } = string.Empty;
         public string DroppingPointId { get; set; } = string.Empty;
+        public string? RefId { get; set; }
         public string FromCity { get; set; } = string.Empty;
         public string ToCity { get; set; } = string.Empty;
         public string DepartureTime { get; set; } = string.Empty;
@@ -81,6 +82,7 @@ namespace PickNBook.Api.Models.DTOs
         public string State { get; set; } = string.Empty;
         public string ContactNo { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
+        public bool? LeadPassenger { get; set; }
         
         public string? IdType { get; set; }
         public string? IdNumber { get; set; }

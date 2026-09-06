@@ -378,61 +378,66 @@ namespace PickNBook.Api.Services
 
         public async Task<string> BlockBusProxyAsync(SrdvBusBookingRequestDto request)
         {
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp) ? "127.0.0.1" : request.EndUserIp.Trim();
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var compositeResultIndex = BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex.ToString());
+            var parsedTraceId = long.TryParse(request.TraceId, out var tid) ? (object)tid : request.TraceId;
+
+            var refId = !string.IsNullOrWhiteSpace(request.RefId)
+                ? request.RefId.Trim()
+                : $"PB-{request.TraceId}-{Guid.NewGuid():N}";
+
+            // Ensure exactly one lead passenger
+            int leadIndex = request.Passengers.FindIndex(p => p.LeadPassenger == true);
+            if (leadIndex < 0) leadIndex = 0; // Default first passenger if not explicitly marked
+
+            var passengersList = request.Passengers.Select((p, idx) =>
+            {
+                var genderStr = p.Gender.ToString().Trim();
+                if (genderStr.Equals("Male", StringComparison.OrdinalIgnoreCase) || genderStr == "1") genderStr = "1";
+                else if (genderStr.Equals("Female", StringComparison.OrdinalIgnoreCase) || genderStr == "2") genderStr = "2";
+                else genderStr = "1";
+
+                var hasGst = !string.IsNullOrWhiteSpace(p.GSTNumber);
+
+                var pax = new Dictionary<string, object?>
+                {
+                    ["Title"] = !string.IsNullOrWhiteSpace(p.Title) ? p.Title.Trim() : "Mr",
+                    ["FirstName"] = !string.IsNullOrWhiteSpace(p.FirstName) ? p.FirstName.Trim() : "Passenger",
+                    ["LastName"] = !string.IsNullOrWhiteSpace(p.LastName) ? p.LastName.Trim() : "Passenger",
+                    ["Gender"] = genderStr,
+                    ["Age"] = p.Age > 0 ? p.Age : 30,
+                    ["Email"] = !string.IsNullOrWhiteSpace(p.Email) ? p.Email.Trim() : "passenger@example.com",
+                    ["PhoneNo"] = !string.IsNullOrWhiteSpace(p.ContactNo) ? p.ContactNo.Trim() : "9876543210",
+                    ["LeadPassenger"] = (idx == leadIndex),
+                    ["IdNumber"] = p.IdNumber?.Trim() ?? string.Empty,
+                    ["IdType"] = p.IdType?.Trim() ?? string.Empty,
+                    ["Address"] = !string.IsNullOrWhiteSpace(p.Address) ? p.Address.Trim() : "India",
+                    ["SeatName"] = p.SeatName?.Trim() ?? string.Empty,
+                    ["GSTCompanyName"] = hasGst ? p.GSTCompanyName?.Trim() : null,
+                    ["GSTNumber"] = hasGst ? p.GSTNumber?.Trim() : null,
+                    ["GSTCompanyAddress"] = hasGst ? p.GSTCompanyAddress?.Trim() : null,
+                    ["GSTCompanyEmail"] = hasGst ? p.GSTCompanyEmail?.Trim() : null
+                };
+
+                return pax;
+            }).ToList();
+
             var blockRequestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = request.TraceId,
-                SrdvIndex = request.SrdvIndex.ToString(),
-                ResultIndex = request.ResultIndex,
-                BoardingPointId = request.BoardingPointId,
-                DroppingPointId = request.DroppingPointId,
-                RefId = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
-                Passengers = request.Passengers.Select((p, idx) =>
-                {
-                    var pax = new Dictionary<string, object?>
-                    {
-                        ["Title"] = p.Title,
-                        ["FirstName"] = p.FirstName,
-                        ["LastName"] = p.LastName,
-                        ["Gender"] = p.Gender.ToString(),
-                        ["Age"] = p.Age.ToString(),
-                        ["Email"] = p.Email,
-                        ["PhoneNo"] = p.ContactNo,
-                        ["LeadPassenger"] = (idx == 0) ? "true" : "false",
-                        ["Address"] = string.IsNullOrWhiteSpace(p.Address) ? "Default Address" : p.Address,
-                        ["SeatName"] = p.SeatName
-                    };
-
-                    if (!string.IsNullOrWhiteSpace(p.IdType))
-                    {
-                        pax["IdType"] = p.IdType.Trim();
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(p.IdNumber))
-                    {
-                        pax["IdNumber"] = p.IdNumber.Trim();
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyAddress))
-                        pax["GSTCompanyAddress"] = p.GSTCompanyAddress.Trim();
-                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyContactNumber))
-                        pax["GSTCompanyContactNumber"] = p.GSTCompanyContactNumber.Trim();
-                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyName))
-                        pax["GSTCompanyName"] = p.GSTCompanyName.Trim();
-                    if (!string.IsNullOrWhiteSpace(p.GSTNumber))
-                        pax["GSTNumber"] = p.GSTNumber.Trim();
-                    if (!string.IsNullOrWhiteSpace(p.GSTCompanyEmail))
-                        pax["GSTCompanyEmail"] = p.GSTCompanyEmail.Trim();
-
-                    return pax;
-                }).ToList()
+                TraceId = parsedTraceId,
+                ResultIndex = compositeResultIndex,
+                BoardingPointId = request.BoardingPointId?.Trim() ?? string.Empty,
+                DroppingPointId = request.DroppingPointId?.Trim() ?? string.Empty,
+                RefId = refId,
+                Passengers = passengersList
             };
 
-            var blockResponse = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Block", blockRequestBody, _jsonOptions);
+            var blockUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Block";
+            var blockResponse = await _httpClient.PostAsJsonAsync(blockUrl, blockRequestBody, _jsonOptions);
             blockResponse.EnsureSuccessStatusCode();
 
             var rawJson = await blockResponse.Content.ReadAsStringAsync();
