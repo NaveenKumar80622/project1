@@ -552,6 +552,7 @@ namespace PickNBook.Api.Services
             if (bookErrorCode == 0)
             {
                 dto.Success = true;
+                dto.ErrorCode = 0;
                 if (bookJson.RootElement.TryGetProperty("BookingId", out var bookingIdProp))
                 {
                     dto.SrdvBookingId = bookingIdProp.ValueKind == JsonValueKind.Number 
@@ -589,6 +590,7 @@ namespace PickNBook.Api.Services
             else
             {
                 dto.Success = false;
+                dto.ErrorCode = bookErrorCode;
                 dto.ErrorMessage = bookErrorMessage;
             }
 
@@ -1064,10 +1066,14 @@ namespace PickNBook.Api.Services
                     if (resProp.TryGetProperty("SrdvIndex", out var sIdx))
                     {
                         if (sIdx.ValueKind == JsonValueKind.Number) resultDto.SrdvIndex = sIdx.GetInt32();
-                        else if (sIdx.ValueKind == JsonValueKind.String) int.TryParse(sIdx.GetString(), out var parsedSIdx);
+                        else if (sIdx.ValueKind == JsonValueKind.String && int.TryParse(sIdx.GetString(), out var parsedSIdx)) resultDto.SrdvIndex = parsedSIdx;
                     }
                     if (resProp.TryGetProperty("ResultIndex", out var rIdx)) resultDto.ResultIndex = rIdx.GetString();
-                    if (resProp.TryGetProperty("BookingId", out var bId)) resultDto.BookingId = bId.ValueKind == JsonValueKind.Number ? bId.GetRawText() : bId.GetString();
+                    if (resProp.TryGetProperty("BookingId", out var bId))
+                    {
+                        if (bId.ValueKind == JsonValueKind.Number) resultDto.BookingId = bId.GetInt32();
+                        else if (bId.ValueKind == JsonValueKind.String && int.TryParse(bId.GetString(), out var parsedBId)) resultDto.BookingId = parsedBId;
+                    }
                     if (resProp.TryGetProperty("RefId", out var refId)) resultDto.RefId = refId.GetString();
                     if (resProp.TryGetProperty("BookingStatus", out var bStatus)) resultDto.BookingStatus = bStatus.GetString();
                     if (resProp.TryGetProperty("TicketNo", out var tNo)) resultDto.TicketNo = tNo.ValueKind == JsonValueKind.Number ? tNo.GetRawText() : tNo.GetString();
@@ -1085,7 +1091,7 @@ namespace PickNBook.Api.Services
                     if (resProp.TryGetProperty("ErrorCode", out var resErrCode))
                     {
                         if (resErrCode.ValueKind == JsonValueKind.Number) resultDto.ErrorCode = resErrCode.GetInt32();
-                        else if (resErrCode.ValueKind == JsonValueKind.String) int.TryParse(resErrCode.GetString(), out var rec);
+                        else if (resErrCode.ValueKind == JsonValueKind.String && int.TryParse(resErrCode.GetString(), out var rec)) resultDto.ErrorCode = rec;
                     }
                     if (resProp.TryGetProperty("ErrorMessage", out var resErrMsg)) resultDto.ErrorMessage = resErrMsg.GetString();
 
@@ -1104,12 +1110,12 @@ namespace PickNBook.Api.Services
                             if (px.TryGetProperty("SeatIndex", out var si))
                             {
                                 if (si.ValueKind == JsonValueKind.Number) pDto.SeatIndex = si.GetInt32();
-                                else if (si.ValueKind == JsonValueKind.String) int.TryParse(si.GetString(), out var psi);
+                                else if (si.ValueKind == JsonValueKind.String && int.TryParse(si.GetString(), out var psi)) pDto.SeatIndex = psi;
                             }
                             if (px.TryGetProperty("IsUpper", out var iu))
                             {
                                 if (iu.ValueKind == JsonValueKind.True || iu.ValueKind == JsonValueKind.False) pDto.IsUpper = iu.GetBoolean();
-                                else if (iu.ValueKind == JsonValueKind.String) bool.TryParse(iu.GetString(), out var piu);
+                                else if (iu.ValueKind == JsonValueKind.String && bool.TryParse(iu.GetString(), out var piu)) pDto.IsUpper = piu;
                             }
                             if (px.TryGetProperty("Title", out var title)) pDto.Title = title.GetString();
                             if (px.TryGetProperty("FirstName", out var fn)) pDto.FirstName = fn.GetString();
@@ -1118,12 +1124,12 @@ namespace PickNBook.Api.Services
                             if (px.TryGetProperty("Age", out var age))
                             {
                                 if (age.ValueKind == JsonValueKind.Number) pDto.Age = age.GetInt32();
-                                else if (age.ValueKind == JsonValueKind.String) int.TryParse(age.GetString(), out var page);
+                                else if (age.ValueKind == JsonValueKind.String && int.TryParse(age.GetString(), out var page)) pDto.Age = page;
                             }
                             if (px.TryGetProperty("LeadPassenger", out var lp))
                             {
                                 if (lp.ValueKind == JsonValueKind.True || lp.ValueKind == JsonValueKind.False) pDto.LeadPassenger = lp.GetBoolean();
-                                else if (lp.ValueKind == JsonValueKind.String) bool.TryParse(lp.GetString(), out var plp);
+                                else if (lp.ValueKind == JsonValueKind.String && bool.TryParse(lp.GetString(), out var plp)) pDto.LeadPassenger = plp;
                             }
                             if (px.TryGetProperty("CurrencyCode", out var cc)) pDto.CurrencyCode = cc.GetString();
                             if (px.TryGetProperty("BaseFare", out var bf))
@@ -1171,7 +1177,11 @@ namespace PickNBook.Api.Services
                         foreach (var cx in cancelArray.EnumerateArray())
                         {
                             var cDto = new SrdvBusBookingDetailsCancellationDto();
-                            if (cx.TryGetProperty("CancelId", out var cid)) cDto.CancelId = cid.ValueKind == JsonValueKind.Number ? cid.GetRawText() : cid.GetString();
+                            if (cx.TryGetProperty("CancelId", out var cid))
+                            {
+                                if (cid.ValueKind == JsonValueKind.Number) cDto.CancelId = cid.GetInt32();
+                                else if (cid.ValueKind == JsonValueKind.String && int.TryParse(cid.GetString(), out var parsedCid)) cDto.CancelId = parsedCid;
+                            }
                             if (cx.TryGetProperty("Status", out var cst)) cDto.Status = cst.GetString();
                             if (cx.TryGetProperty("CancellationType", out var ct)) cDto.CancellationType = ct.GetString();
 
@@ -1212,7 +1222,7 @@ namespace PickNBook.Api.Services
                             if (cx.TryGetProperty("ErrorCode", out var cec))
                             {
                                 if (cec.ValueKind == JsonValueKind.Number) cDto.ErrorCode = cec.GetInt32();
-                                else if (cec.ValueKind == JsonValueKind.String) int.TryParse(cec.GetString(), out var pcec);
+                                else if (cec.ValueKind == JsonValueKind.String && int.TryParse(cec.GetString(), out var pcec)) cDto.ErrorCode = pcec;
                             }
                             if (cx.TryGetProperty("ErrorMessage", out var cem)) cDto.ErrorMessage = cem.GetString();
                             if (cx.TryGetProperty("CompletedAt", out var cca))

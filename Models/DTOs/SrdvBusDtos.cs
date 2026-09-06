@@ -96,6 +96,8 @@ namespace PickNBook.Api.Models.DTOs
     public class SrdvBusBookingResponseDto
     {
         public bool Success { get; set; }
+        public int ErrorCode { get; set; }
+        public bool IsExplicitSupplierRejection => !Success && ErrorCode > 0;
         public string? SrdvBookingId { get; set; }
         public string? TicketNo { get; set; }
         public string? TravelOperatorPNR { get; set; }
@@ -164,7 +166,7 @@ namespace PickNBook.Api.Models.DTOs
     {
         public int SrdvIndex { get; set; }
         public string? ResultIndex { get; set; }
-        public string? BookingId { get; set; }
+        public int? BookingId { get; set; }
         public string? RefId { get; set; }
         public string? BookingStatus { get; set; }
         public string? TicketNo { get; set; }
@@ -204,7 +206,7 @@ namespace PickNBook.Api.Models.DTOs
 
     public class SrdvBusBookingDetailsCancellationDto
     {
-        public string? CancelId { get; set; }
+        public int? CancelId { get; set; }
         public string? Status { get; set; }
         public string? CancellationType { get; set; }
         public List<string> SeatName { get; set; } = new();

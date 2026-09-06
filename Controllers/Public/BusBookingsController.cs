@@ -1162,32 +1162,33 @@ namespace PickNBook.Api.Controllers
                 return (false, 0m, 0m);
             }
 
-            decimal totalCharge = 0m;
-            decimal totalRefund = 0m;
-            var matchedSeats = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
             if (details.Result.Cancellations != null && details.Result.Cancellations.Any())
             {
-                foreach (var c in details.Result.Cancellations)
-                {
-                    var isCancelled = string.Equals(c.Status, "Success", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                        || string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)
-                        || !string.IsNullOrWhiteSpace(c.SupplierCancelId);
-
-                    if (!isCancelled) continue;
-
-                    var intersectingSeats = c.SeatName.Where(s => seatsSet.Contains(s)).ToList();
-                    if (intersectingSeats.Any())
+                // Correlate against the single cancellation record whose SeatName matches the current operation's target seats
+                var matchingCancellation = details.Result.Cancellations
+                    .OrderByDescending(c => c.CompletedAt ?? DateTime.MinValue)
+                    .FirstOrDefault(c =>
                     {
-                        foreach (var s in intersectingSeats) matchedSeats.Add(s);
-                        totalCharge += c.CancellationCharge;
-                        totalRefund += c.RefundAmount;
-                    }
+                        var isCancelled = string.Equals(c.Status, "Success", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)
+                            || !string.IsNullOrWhiteSpace(c.SupplierCancelId);
+
+                        if (!isCancelled || c.SeatName == null || c.SeatName.Count == 0) return false;
+
+                        var cSeats = new HashSet<string>(c.SeatName.Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
+                        return cSeats.SetEquals(seatsSet);
+                    });
+
+                if (matchingCancellation != null)
+                {
+                    // Strict correlation to this specific cancellation operation; never sum historical records
+                    return (true, matchingCancellation.CancellationCharge, matchingCancellation.RefundAmount);
                 }
             }
 
-            if (matchedSeats.Count == 0 && details.Result.Passengers != null)
+            // Fallback: Check if passenger records confirm the cancellation status
+            if (details.Result.Passengers != null && details.Result.Passengers.Any())
             {
                 var cancelledPax = details.Result.Passengers
                     .Where(p => !string.IsNullOrWhiteSpace(p.SeatName) && seatsSet.Contains(p.SeatName) &&
@@ -1197,13 +1198,9 @@ namespace PickNBook.Api.Controllers
 
                 if (cancelledPax.Count == seatsSet.Count)
                 {
+                    // Confirmed cancelled on provider, but without a dedicated correlated cancellation financial record
                     return (true, 0m, 0m);
                 }
-            }
-
-            if (matchedSeats.Count == seatsSet.Count)
-            {
-                return (true, totalCharge, totalRefund);
             }
 
             return (false, 0m, 0m);
@@ -1615,48 +1612,87 @@ namespace PickNBook.Api.Controllers
                                     : (_cache.TryGetValue($"bus_blockkey_{srdvReq.TraceId}_{compositeResultIndex}", out string? cachedCompBk) ? cachedCompBk : ""));
 
                             SrdvBusBookingResponseDto? srdvRes = null;
+                            bool isAmbiguousOutcome = false;
                             try
                             {
                                 srdvRes = await _srdvBusService.BookBusAsync(srdvReq, blockKeyToUse ?? "");
                             }
                             catch (Exception bookEx)
                             {
-                                logger.LogWarning(bookEx, "SRDV BookBusAsync call failed or timed out for TraceId {TraceId}. Checking BookingDetails for authoritative status.", srdvReq.TraceId);
+                                isAmbiguousOutcome = true;
+                                logger.LogWarning(bookEx, "SRDV BookBusAsync call threw exception / timed out for TraceId {TraceId}. Ambiguous outcome detected.", srdvReq.TraceId);
                             }
 
-                            // If Book response was lost / timed out / returned failure, query BookingDetails for recovery
-                            if (srdvRes == null || !srdvRes.Success)
+                            // Case A: Explicit supplier rejection — DO NOT call BookingDetails unnecessarily; follow existing 7032 failure
+                            if (srdvRes != null && srdvRes.IsExplicitSupplierRejection)
                             {
+                                var supplierErrMsg = !string.IsNullOrWhiteSpace(srdvRes.ErrorMessage)
+                                    ? srdvRes.ErrorMessage
+                                    : "Supplier rejected booking request";
+                                throw new BusBookingException(7032, $"SRDV Booking Failed: {supplierErrMsg}");
+                            }
+
+                            // Case B: Ambiguous Book outcome (timeout, connection failure, or incomplete/malformed response without explicit rejection)
+                            if (srdvRes == null || (!srdvRes.Success && !srdvRes.IsExplicitSupplierRejection))
+                            {
+                                isAmbiguousOutcome = true;
+                            }
+
+                            if (isAmbiguousOutcome)
+                            {
+                                SrdvBusBookingDetailsResponseDto? details = null;
                                 try
                                 {
-                                    var details = await _srdvBusService.GetBookingDetailsAsync(srdvReq.TraceId);
-                                    if (details.Success && details.Result != null)
-                                    {
-                                        var status = details.Result.BookingStatus?.Trim();
-                                        bool isConfirmed = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
-                                            || string.Equals(status, "Confirmed", StringComparison.OrdinalIgnoreCase)
-                                            || !string.IsNullOrWhiteSpace(details.Result.TicketNo)
-                                            || !string.IsNullOrWhiteSpace(details.Result.TravelOperatorPNR);
-
-                                        if (isConfirmed)
-                                        {
-                                            logger.LogInformation("BookingDetails confirmed successful booking for TraceId {TraceId}. TicketNo: {TicketNo}, PNR: {Pnr}",
-                                                srdvReq.TraceId, details.Result.TicketNo, details.Result.TravelOperatorPNR);
-
-                                            srdvRes = new SrdvBusBookingResponseDto
-                                            {
-                                                Success = true,
-                                                SrdvBookingId = details.Result.BookingId,
-                                                TicketNo = details.Result.TicketNo,
-                                                TravelOperatorPNR = details.Result.TravelOperatorPNR,
-                                                ResponseJson = details.ResponseJson
-                                            };
-                                        }
-                                    }
+                                    details = await _srdvBusService.GetBookingDetailsAsync(srdvReq.TraceId);
                                 }
                                 catch (Exception detailsEx)
                                 {
                                     logger.LogWarning(detailsEx, "BookingDetails recovery query failed for TraceId {TraceId}.", srdvReq.TraceId);
+                                }
+
+                                if (details != null && details.Success && details.Result != null)
+                                {
+                                    var status = details.Result.BookingStatus?.Trim();
+                                    bool isConfirmed = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(status, "Confirmed", StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(status, "Booked", StringComparison.OrdinalIgnoreCase);
+
+                                    bool isExplicitFailure = string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(status, "Rejected", StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                                        || (details.Error != null && details.Error.ErrorCode > 0)
+                                        || details.Result.ErrorCode > 0;
+
+                                    if (isConfirmed)
+                                    {
+                                        logger.LogInformation("BookingDetails confirmed successful booking for TraceId {TraceId}. Status: {Status}, TicketNo: {TicketNo}, PNR: {Pnr}",
+                                            srdvReq.TraceId, status, details.Result.TicketNo, details.Result.TravelOperatorPNR);
+
+                                        srdvRes = new SrdvBusBookingResponseDto
+                                        {
+                                            Success = true,
+                                            ErrorCode = 0,
+                                            SrdvBookingId = details.Result.BookingId?.ToString(),
+                                            TicketNo = details.Result.TicketNo,
+                                            TravelOperatorPNR = details.Result.TravelOperatorPNR,
+                                            ResponseJson = details.ResponseJson
+                                        };
+                                    }
+                                    else if (isExplicitFailure)
+                                    {
+                                        var failMsg = !string.IsNullOrWhiteSpace(details.Result.ErrorMessage)
+                                            ? details.Result.ErrorMessage
+                                            : (!string.IsNullOrWhiteSpace(details.Error?.ErrorMessage) ? details.Error.ErrorMessage : $"Booking rejected by provider with status {status}");
+                                        throw new BusBookingException(7032, $"SRDV Booking Failed: {failMsg}");
+                                    }
+                                }
+
+                                // If BookingDetails was inconclusive (did not confirm success and did not return explicit failure)
+                                if (srdvRes == null || !srdvRes.Success)
+                                {
+                                    // Preserve MANUAL_CHECK_REQUIRED safety behavior. Do NOT automatically convert uncertainty into 7032.
+                                    logger.LogCritical("SRDV Booking outcome for TraceId {TraceId} is inconclusive after recovery. Flagging MANUAL_CHECK_REQUIRED.", srdvReq.TraceId);
+                                    throw new BusBookingException(7033, "MANUAL_CHECK_REQUIRED: Booking outcome is ambiguous and awaiting reconciliation.");
                                 }
                             }
 
@@ -1664,7 +1700,7 @@ namespace PickNBook.Api.Controllers
                             {
                                 var supplierErrMsg = !string.IsNullOrWhiteSpace(srdvRes?.ErrorMessage)
                                     ? srdvRes.ErrorMessage
-                                    : "SRDV Booking Failed or Ambiguous";
+                                    : "SRDV Booking Failed";
                                 throw new BusBookingException(7032, $"SRDV Booking Failed: {supplierErrMsg}");
                             }
 
