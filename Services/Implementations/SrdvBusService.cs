@@ -211,17 +211,20 @@ namespace PickNBook.Api.Services
 
         public async Task<string> SearchBusesProxyAsync(BusSearchProxyRequestDto request)
         {
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
             var requestBody = new
             {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
                 FromCityCode = request.FromCityCode,
                 ToCityCode = request.ToCityCode,
                 DepartDate = request.DepartDate
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Search", requestBody, _jsonOptions);
+            var searchUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Search";
+            var response = await _httpClient.PostAsJsonAsync(searchUrl, requestBody, _jsonOptions);
             return await response.Content.ReadAsStringAsync();
         }
 
@@ -254,20 +257,25 @@ namespace PickNBook.Api.Services
 
         public async Task<(string RawJson, List<SrdvBusOfferDto> Buses)> SearchBusesWithRawAsync(string originId, string destinationId, string journeyDate)
         {
-            var fromCode = MapCityNameToCode(originId);
-            var toCode = MapCityNameToCode(destinationId);
+            var fromCodeStr = MapCityNameToCode(originId);
+            var toCodeStr = MapCityNameToCode(destinationId);
+            _ = int.TryParse(fromCodeStr, out var fromCode);
+            _ = int.TryParse(toCodeStr, out var toCode);
+
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
 
             var requestBody = new
             {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
                 FromCityCode = fromCode,
                 ToCityCode = toCode,
                 DepartDate = journeyDate
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Search", requestBody, _jsonOptions);
+            var searchUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Search";
+            var response = await _httpClient.PostAsJsonAsync(searchUrl, requestBody, _jsonOptions);
             response.EnsureSuccessStatusCode();
 
             using var contentStream = await response.Content.ReadAsStreamAsync();

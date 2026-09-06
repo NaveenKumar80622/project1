@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace PickNBook.Api.Models.DTOs
 {
@@ -116,8 +117,12 @@ namespace PickNBook.Api.Models.DTOs
 
     public class BusSearchProxyRequestDto
     {
-        public string FromCityCode { get; set; } = string.Empty;
-        public string ToCityCode { get; set; } = string.Empty;
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public int FromCityCode { get; set; }
+
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public int ToCityCode { get; set; }
+
         public string DepartDate { get; set; } = string.Empty; // Format: YYYY-MM-DD
     }
 

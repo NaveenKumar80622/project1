@@ -140,11 +140,36 @@ namespace PickNBook.Api.Controllers
         [AllowAnonymous]
         public async Task<IActionResult> SearchBusesProxy([FromBody] BusSearchProxyRequestDto request)
         {
-            if (string.IsNullOrWhiteSpace(request.FromCityCode) || 
-                string.IsNullOrWhiteSpace(request.ToCityCode) || 
-                string.IsNullOrWhiteSpace(request.DepartDate))
+            if (request == null)
             {
-                return BadRequest("FromCityCode, ToCityCode, and DepartDate are required.");
+                return BadRequest("Request body cannot be null.");
+            }
+
+            if (request.FromCityCode <= 0)
+            {
+                return BadRequest("FromCityCode must be greater than 0.");
+            }
+
+            if (request.ToCityCode <= 0)
+            {
+                return BadRequest("ToCityCode must be greater than 0.");
+            }
+
+            if (request.FromCityCode == request.ToCityCode)
+            {
+                return BadRequest("FromCityCode and ToCityCode cannot be the same.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.DepartDate) || 
+                !DateOnly.TryParseExact(request.DepartDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var journeyDate))
+            {
+                return BadRequest("DepartDate must be a valid date in YYYY-MM-DD format.");
+            }
+
+            var todayIst = DateOnly.FromDateTime(DateTime.UtcNow.Add(IndiaOffset));
+            if (journeyDate < todayIst)
+            {
+                return BadRequest("DepartDate cannot be in the past.");
             }
 
             try
@@ -157,7 +182,7 @@ namespace PickNBook.Api.Controllers
                     var (seaterMarkup, sleeperMarkup) = await GetBothMarkupsAsync();
 
                     var journeyDateStr = request.DepartDate; // Format: dd/mm/yyyy or yyyy-MM-dd
-                    DateOnly.TryParseExact(journeyDateStr, new[] { "dd/MM/yyyy", "yyyy-MM-dd" }, null, System.Globalization.DateTimeStyles.None, out var journeyDate);
+                    DateOnly.TryParseExact(journeyDateStr, new[] { "dd/MM/yyyy", "yyyy-MM-dd" }, null, System.Globalization.DateTimeStyles.None, out journeyDate);
 
                     // ========================================
                     // 1. LEGACY DB SYNC REMOVED
@@ -248,8 +273,8 @@ namespace PickNBook.Api.Controllers
                                 SrdvIndex = int.TryParse(busNode["SrdvIndex"]?.ToString(), out var si) ? si : 0,
                                 OperatorName = busNode["TravelsName"]?.ToString() ?? string.Empty,
                                 BusType = busNode["BusType"]?.ToString() ?? string.Empty,
-                                FromCity = request.FromCityCode,
-                                ToCity = request.ToCityCode,
+                                FromCity = request.FromCityCode.ToString(),
+                                ToCity = request.ToCityCode.ToString(),
                                 DepartureTime = busNode["DepartureTime"]?.ToString() ?? string.Empty,
                                 ArrivalTime = busNode["ArrivalTime"]?.ToString() ?? string.Empty,
                                 DepartDate = request.DepartDate
