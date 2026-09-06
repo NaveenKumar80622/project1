@@ -972,5 +972,274 @@ namespace PickNBook.Api.Services
             var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/BalanceLog", requestBody, _jsonOptions);
             return await response.Content.ReadAsStringAsync();
         }
+
+        public async Task<SrdvBusBookingDetailsResponseDto> GetBookingDetailsAsync(string traceId)
+        {
+            var dto = new SrdvBusBookingDetailsResponseDto();
+
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var parsedTraceId = long.TryParse(traceId, out var tid) ? (object)tid : traceId;
+            var requestBody = new
+            {
+                TraceId = parsedTraceId
+            };
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/BookingDetails";
+            HttpResponseMessage response;
+            try
+            {
+                response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
+            }
+            catch (Exception ex)
+            {
+                dto.Success = false;
+                dto.Error = new SrdvBusBookingDetailsErrorDto
+                {
+                    ErrorCode = -1,
+                    ErrorMessage = $"HTTP Request Exception: {ex.Message}"
+                };
+                return dto;
+            }
+
+            var content = await response.Content.ReadAsStringAsync();
+            dto.ResponseJson = content;
+
+            if (!response.IsSuccessStatusCode)
+            {
+                dto.Success = false;
+                dto.Error = new SrdvBusBookingDetailsErrorDto
+                {
+                    ErrorCode = (int)response.StatusCode,
+                    ErrorMessage = $"Supplier returned HTTP {(int)response.StatusCode}"
+                };
+                return dto;
+            }
+
+            try
+            {
+                using var json = JsonDocument.Parse(content);
+                var root = json.RootElement;
+
+                // Error
+                if (root.TryGetProperty("Error", out var errProp) && errProp.ValueKind == JsonValueKind.Object)
+                {
+                    int errCode = 0;
+                    string? errMsg = null;
+                    if (errProp.TryGetProperty("ErrorCode", out var ec))
+                    {
+                        if (ec.ValueKind == JsonValueKind.Number) errCode = ec.GetInt32();
+                        else if (ec.ValueKind == JsonValueKind.String) int.TryParse(ec.GetString(), out errCode);
+                    }
+                    if (errProp.TryGetProperty("ErrorMessage", out var em))
+                    {
+                        errMsg = em.GetString();
+                    }
+
+                    if (errCode != 0 || !string.IsNullOrWhiteSpace(errMsg))
+                    {
+                        dto.Error = new SrdvBusBookingDetailsErrorDto
+                        {
+                            ErrorCode = errCode,
+                            ErrorMessage = errMsg
+                        };
+                    }
+                }
+
+                // TraceId
+                if (root.TryGetProperty("TraceId", out var traceProp))
+                {
+                    if (traceProp.ValueKind == JsonValueKind.Number) dto.TraceId = traceProp.GetInt64();
+                    else if (traceProp.ValueKind == JsonValueKind.String && long.TryParse(traceProp.GetString(), out var parsedTid)) dto.TraceId = parsedTid;
+                }
+
+                // Result
+                if (root.TryGetProperty("Result", out var resProp) && resProp.ValueKind == JsonValueKind.Object)
+                {
+                    var resultDto = new SrdvBusBookingDetailsResultDto();
+
+                    if (resProp.TryGetProperty("SrdvIndex", out var sIdx))
+                    {
+                        if (sIdx.ValueKind == JsonValueKind.Number) resultDto.SrdvIndex = sIdx.GetInt32();
+                        else if (sIdx.ValueKind == JsonValueKind.String) int.TryParse(sIdx.GetString(), out var parsedSIdx);
+                    }
+                    if (resProp.TryGetProperty("ResultIndex", out var rIdx)) resultDto.ResultIndex = rIdx.GetString();
+                    if (resProp.TryGetProperty("BookingId", out var bId)) resultDto.BookingId = bId.ValueKind == JsonValueKind.Number ? bId.GetRawText() : bId.GetString();
+                    if (resProp.TryGetProperty("RefId", out var refId)) resultDto.RefId = refId.GetString();
+                    if (resProp.TryGetProperty("BookingStatus", out var bStatus)) resultDto.BookingStatus = bStatus.GetString();
+                    if (resProp.TryGetProperty("TicketNo", out var tNo)) resultDto.TicketNo = tNo.ValueKind == JsonValueKind.Number ? tNo.GetRawText() : tNo.GetString();
+                    if (resProp.TryGetProperty("TravelOperatorPNR", out var pnr)) resultDto.TravelOperatorPNR = pnr.ValueKind == JsonValueKind.Number ? pnr.GetRawText() : pnr.GetString();
+                    
+                    if (resProp.TryGetProperty("DsaFare", out var dsaFare))
+                    {
+                        if (dsaFare.ValueKind == JsonValueKind.Number) resultDto.DsaFare = dsaFare.GetDecimal();
+                        else if (dsaFare.ValueKind == JsonValueKind.String && decimal.TryParse(dsaFare.GetString(), out var df)) resultDto.DsaFare = df;
+                    }
+                    if (resProp.TryGetProperty("CurrencyCode", out var cur)) resultDto.CurrencyCode = cur.GetString();
+                    if (resProp.TryGetProperty("CancelStatus", out var cStatus)) resultDto.CancelStatus = cStatus.GetString();
+                    if (resProp.TryGetProperty("RefundStatus", out var rStatus)) resultDto.RefundStatus = rStatus.GetString();
+
+                    if (resProp.TryGetProperty("ErrorCode", out var resErrCode))
+                    {
+                        if (resErrCode.ValueKind == JsonValueKind.Number) resultDto.ErrorCode = resErrCode.GetInt32();
+                        else if (resErrCode.ValueKind == JsonValueKind.String) int.TryParse(resErrCode.GetString(), out var rec);
+                    }
+                    if (resProp.TryGetProperty("ErrorMessage", out var resErrMsg)) resultDto.ErrorMessage = resErrMsg.GetString();
+
+                    if (resProp.TryGetProperty("CompletedAt", out var compAt))
+                    {
+                        if (compAt.ValueKind == JsonValueKind.String && DateTime.TryParse(compAt.GetString(), out var cat)) resultDto.CompletedAt = cat;
+                    }
+
+                    // Passengers
+                    if (resProp.TryGetProperty("Passengers", out var paxArray) && paxArray.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var px in paxArray.EnumerateArray())
+                        {
+                            var pDto = new SrdvBusBookingDetailsPassengerDto();
+                            if (px.TryGetProperty("SeatName", out var sn)) pDto.SeatName = sn.GetString();
+                            if (px.TryGetProperty("SeatIndex", out var si))
+                            {
+                                if (si.ValueKind == JsonValueKind.Number) pDto.SeatIndex = si.GetInt32();
+                                else if (si.ValueKind == JsonValueKind.String) int.TryParse(si.GetString(), out var psi);
+                            }
+                            if (px.TryGetProperty("IsUpper", out var iu))
+                            {
+                                if (iu.ValueKind == JsonValueKind.True || iu.ValueKind == JsonValueKind.False) pDto.IsUpper = iu.GetBoolean();
+                                else if (iu.ValueKind == JsonValueKind.String) bool.TryParse(iu.GetString(), out var piu);
+                            }
+                            if (px.TryGetProperty("Title", out var title)) pDto.Title = title.GetString();
+                            if (px.TryGetProperty("FirstName", out var fn)) pDto.FirstName = fn.GetString();
+                            if (px.TryGetProperty("LastName", out var ln)) pDto.LastName = ln.GetString();
+                            if (px.TryGetProperty("Gender", out var g)) pDto.Gender = g.ValueKind == JsonValueKind.Number ? g.GetRawText() : g.GetString();
+                            if (px.TryGetProperty("Age", out var age))
+                            {
+                                if (age.ValueKind == JsonValueKind.Number) pDto.Age = age.GetInt32();
+                                else if (age.ValueKind == JsonValueKind.String) int.TryParse(age.GetString(), out var page);
+                            }
+                            if (px.TryGetProperty("LeadPassenger", out var lp))
+                            {
+                                if (lp.ValueKind == JsonValueKind.True || lp.ValueKind == JsonValueKind.False) pDto.LeadPassenger = lp.GetBoolean();
+                                else if (lp.ValueKind == JsonValueKind.String) bool.TryParse(lp.GetString(), out var plp);
+                            }
+                            if (px.TryGetProperty("CurrencyCode", out var cc)) pDto.CurrencyCode = cc.GetString();
+                            if (px.TryGetProperty("BaseFare", out var bf))
+                            {
+                                if (bf.ValueKind == JsonValueKind.Number) pDto.BaseFare = bf.GetDecimal();
+                                else if (bf.ValueKind == JsonValueKind.String && decimal.TryParse(bf.GetString(), out var pbf)) pDto.BaseFare = pbf;
+                            }
+                            if (px.TryGetProperty("Tax", out var tax))
+                            {
+                                if (tax.ValueKind == JsonValueKind.Number) pDto.Tax = tax.GetDecimal();
+                                else if (tax.ValueKind == JsonValueKind.String && decimal.TryParse(tax.GetString(), out var ptax)) pDto.Tax = ptax;
+                            }
+                            if (px.TryGetProperty("PublishedFare", out var pf))
+                            {
+                                if (pf.ValueKind == JsonValueKind.Number) pDto.PublishedFare = pf.GetDecimal();
+                                else if (pf.ValueKind == JsonValueKind.String && decimal.TryParse(pf.GetString(), out var ppf)) pDto.PublishedFare = ppf;
+                            }
+                            if (px.TryGetProperty("OfferedFare", out var of))
+                            {
+                                if (of.ValueKind == JsonValueKind.Number) pDto.OfferedFare = of.GetDecimal();
+                                else if (of.ValueKind == JsonValueKind.String && decimal.TryParse(of.GetString(), out var pof)) pDto.OfferedFare = pof;
+                            }
+                            if (px.TryGetProperty("GstRate", out var gr))
+                            {
+                                if (gr.ValueKind == JsonValueKind.Number) pDto.GstRate = gr.GetDecimal();
+                                else if (gr.ValueKind == JsonValueKind.String && decimal.TryParse(gr.GetString(), out var pgr)) pDto.GstRate = pgr;
+                            }
+                            if (px.TryGetProperty("GSTAmount", out var ga))
+                            {
+                                if (ga.ValueKind == JsonValueKind.Number) pDto.GSTAmount = ga.GetDecimal();
+                                else if (ga.ValueKind == JsonValueKind.String && decimal.TryParse(ga.GetString(), out var pga)) pDto.GSTAmount = pga;
+                            }
+                            if (px.TryGetProperty("CancelStatus", out var cs)) pDto.CancelStatus = cs.GetString();
+                            if (px.TryGetProperty("CancelledAt", out var ca))
+                            {
+                                if (ca.ValueKind == JsonValueKind.String && DateTime.TryParse(ca.GetString(), out var pca)) pDto.CancelledAt = pca;
+                            }
+                            resultDto.Passengers.Add(pDto);
+                        }
+                    }
+
+                    // Cancellations
+                    if (resProp.TryGetProperty("Cancellations", out var cancelArray) && cancelArray.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var cx in cancelArray.EnumerateArray())
+                        {
+                            var cDto = new SrdvBusBookingDetailsCancellationDto();
+                            if (cx.TryGetProperty("CancelId", out var cid)) cDto.CancelId = cid.ValueKind == JsonValueKind.Number ? cid.GetRawText() : cid.GetString();
+                            if (cx.TryGetProperty("Status", out var cst)) cDto.Status = cst.GetString();
+                            if (cx.TryGetProperty("CancellationType", out var ct)) cDto.CancellationType = ct.GetString();
+
+                            // SeatName[]: can be array of strings or single string
+                            if (cx.TryGetProperty("SeatName", out var csn))
+                            {
+                                if (csn.ValueKind == JsonValueKind.Array)
+                                {
+                                    foreach (var seatItem in csn.EnumerateArray())
+                                    {
+                                        var seatStr = seatItem.GetString();
+                                        if (!string.IsNullOrWhiteSpace(seatStr)) cDto.SeatName.Add(seatStr.Trim());
+                                    }
+                                }
+                                else if (csn.ValueKind == JsonValueKind.String)
+                                {
+                                    var seatStr = csn.GetString();
+                                    if (!string.IsNullOrWhiteSpace(seatStr))
+                                    {
+                                        var splitSeats = seatStr.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                                        foreach (var s in splitSeats) cDto.SeatName.Add(s.Trim());
+                                    }
+                                }
+                            }
+
+                            if (cx.TryGetProperty("SupplierCancelId", out var scid)) cDto.SupplierCancelId = scid.ValueKind == JsonValueKind.Number ? scid.GetRawText() : scid.GetString();
+                            if (cx.TryGetProperty("RefundAmount", out var ra))
+                            {
+                                if (ra.ValueKind == JsonValueKind.Number) cDto.RefundAmount = ra.GetDecimal();
+                                else if (ra.ValueKind == JsonValueKind.String && decimal.TryParse(ra.GetString(), out var pra)) cDto.RefundAmount = pra;
+                            }
+                            if (cx.TryGetProperty("CancellationCharge", out var cc))
+                            {
+                                if (cc.ValueKind == JsonValueKind.Number) cDto.CancellationCharge = cc.GetDecimal();
+                                else if (cc.ValueKind == JsonValueKind.String && decimal.TryParse(cc.GetString(), out var pcc)) cDto.CancellationCharge = pcc;
+                            }
+                            if (cx.TryGetProperty("RefundStatus", out var rs)) cDto.RefundStatus = rs.GetString();
+                            if (cx.TryGetProperty("ErrorCode", out var cec))
+                            {
+                                if (cec.ValueKind == JsonValueKind.Number) cDto.ErrorCode = cec.GetInt32();
+                                else if (cec.ValueKind == JsonValueKind.String) int.TryParse(cec.GetString(), out var pcec);
+                            }
+                            if (cx.TryGetProperty("ErrorMessage", out var cem)) cDto.ErrorMessage = cem.GetString();
+                            if (cx.TryGetProperty("CompletedAt", out var cca))
+                            {
+                                if (cca.ValueKind == JsonValueKind.String && DateTime.TryParse(cca.GetString(), out var pcca)) cDto.CompletedAt = pcca;
+                            }
+
+                            resultDto.Cancellations.Add(cDto);
+                        }
+                    }
+
+                    dto.Result = resultDto;
+                }
+
+                dto.Success = dto.Error == null || dto.Error.ErrorCode == 0;
+            }
+            catch (Exception ex)
+            {
+                dto.Success = false;
+                dto.Error = new SrdvBusBookingDetailsErrorDto
+                {
+                    ErrorCode = -1,
+                    ErrorMessage = $"JSON Deserialization Exception: {ex.Message}"
+                };
+            }
+
+            return dto;
+        }
     }
 }

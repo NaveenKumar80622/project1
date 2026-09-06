@@ -22,5 +22,6 @@ namespace PickNBook.Api.Services
         Task<string> BlockBusProxyAsync(SrdvBusBookingRequestDto request);
         Task<string> GetSrdvMasterWalletBalanceAsync(string endUserIp);
         Task<string> GetSrdvMasterWalletLogAsync(string endUserIp);
+        Task<SrdvBusBookingDetailsResponseDto> GetBookingDetailsAsync(string traceId);
     }
 }
