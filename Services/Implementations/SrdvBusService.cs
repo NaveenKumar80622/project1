@@ -504,20 +504,23 @@ namespace PickNBook.Api.Services
 
         public async Task<SrdvBusBookingResponseDto> BookBusAsync(SrdvBusBookingRequestDto request, string blockKey)
         {
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
 
-            // Step 2: Book Seat (Confirm booking)
+            var compositeResultIndex = BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex.ToString());
+            var parsedTraceId = long.TryParse(request.TraceId, out var tid) ? (object)tid : request.TraceId;
+
+            // The NEW /v9/Book provider request body contains ONLY TraceId and composite ResultIndex
             var bookRequestBody = new
             {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
-                TraceId = request.TraceId,
-                SrdvIndex = request.SrdvIndex.ToString(),
-                ResultIndex = request.ResultIndex,
-                BlockKey = blockKey
+                TraceId = parsedTraceId,
+                ResultIndex = compositeResultIndex
             };
 
-            var bookResponse = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Book", bookRequestBody, _jsonOptions);
+            var bookUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Book";
+            var bookResponse = await _httpClient.PostAsJsonAsync(bookUrl, bookRequestBody, _jsonOptions);
             bookResponse.EnsureSuccessStatusCode();
 
             var bookContent = await bookResponse.Content.ReadAsStringAsync();
@@ -535,7 +538,10 @@ namespace PickNBook.Api.Services
             {
                 if (bookErrorProp.TryGetProperty("ErrorCode", out var codeProp))
                 {
-                    bookErrorCode = codeProp.GetInt32();
+                    if (codeProp.ValueKind == JsonValueKind.Number)
+                        bookErrorCode = codeProp.GetInt32();
+                    else if (codeProp.ValueKind == JsonValueKind.String)
+                        int.TryParse(codeProp.GetString(), out bookErrorCode);
                 }
                 if (bookErrorProp.TryGetProperty("ErrorMessage", out var msgProp))
                 {
@@ -549,7 +555,7 @@ namespace PickNBook.Api.Services
                 if (bookJson.RootElement.TryGetProperty("BookingId", out var bookingIdProp))
                 {
                     dto.SrdvBookingId = bookingIdProp.ValueKind == JsonValueKind.Number 
-                        ? bookingIdProp.GetInt32().ToString() 
+                        ? bookingIdProp.GetRawText() 
                         : bookingIdProp.GetString();
                 }
 
@@ -557,11 +563,26 @@ namespace PickNBook.Api.Services
                 {
                     if (resultProp.TryGetProperty("TicketNo", out var ticketProp))
                     {
-                        dto.TicketNo = ticketProp.GetString();
+                        dto.TicketNo = ticketProp.ValueKind == JsonValueKind.Number ? ticketProp.GetRawText() : ticketProp.GetString();
                     }
                     if (resultProp.TryGetProperty("TravelOperatorPNR", out var pnrProp))
                     {
-                        dto.TravelOperatorPNR = pnrProp.GetString();
+                        dto.TravelOperatorPNR = pnrProp.ValueKind == JsonValueKind.Number ? pnrProp.GetRawText() : pnrProp.GetString();
+                    }
+                    if (resultProp.TryGetProperty("BookingId", out var resultBookIdProp) && string.IsNullOrEmpty(dto.SrdvBookingId))
+                    {
+                        dto.SrdvBookingId = resultBookIdProp.ValueKind == JsonValueKind.Number ? resultBookIdProp.GetRawText() : resultBookIdProp.GetString();
+                    }
+                }
+                else
+                {
+                    if (bookJson.RootElement.TryGetProperty("TicketNo", out var ticketProp))
+                    {
+                        dto.TicketNo = ticketProp.ValueKind == JsonValueKind.Number ? ticketProp.GetRawText() : ticketProp.GetString();
+                    }
+                    if (bookJson.RootElement.TryGetProperty("TravelOperatorPNR", out var pnrProp))
+                    {
+                        dto.TravelOperatorPNR = pnrProp.ValueKind == JsonValueKind.Number ? pnrProp.GetRawText() : pnrProp.GetString();
                     }
                 }
             }

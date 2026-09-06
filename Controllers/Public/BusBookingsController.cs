@@ -1142,6 +1142,11 @@ namespace PickNBook.Api.Controllers
             }
         }
 
+        private sealed class BusBookingException(int errorCode, string message) : Exception(message)
+        {
+            public int ErrorCode { get; } = errorCode;
+        }
+
         [HttpPost("book")]
         public async Task<IActionResult> BookBus([FromBody] CreateBusBookingRequestDto request)
         {
@@ -1150,6 +1155,35 @@ namespace PickNBook.Api.Controllers
                 return Unauthorized("Please login to continue booking.");
             }
             var userId = currentUserService.GetUserOrGuestId();
+
+            if (request == null)
+            {
+                return BadRequest("Request body cannot be null.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
+            {
+                return BadRequest(new { message = "TraceId must be present, numeric, and greater than 0." });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                return BadRequest(new { message = "ResultIndex is required." });
+            }
+
+            var compositeResultIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex.ToString());
+            bool foundSearchCtx = _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
+                || _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
+
+            if (!foundSearchCtx || busCtx == null)
+            {
+                return BadRequest(new { message = "Invalid or expired search workflow session. TraceId and ResultIndex must belong to an active search within 1 hour." });
+            }
+
+            if (request.SrdvIndex <= 0 && busCtx.SrdvIndex > 0)
+            {
+                request.SrdvIndex = busCtx.SrdvIndex;
+            }
 
             var passengerValidationError = ValidateAndNormalizePassengers(request.Passengers, out var normalizedPassengers);
             if (passengerValidationError is not null)
@@ -1165,11 +1199,48 @@ namespace PickNBook.Api.Controllers
             if (string.IsNullOrWhiteSpace(contactName))
                 return BadRequest("PassengerName is required for contact.");
 
-            var seatsRequired = normalizedPassengers!.Count;
-            var strategy = dbContext.Database.CreateExecutionStrategy();
+            // Verify frozen block state exists
+            bool hasBlockKey = !string.IsNullOrWhiteSpace(request.BlockKey)
+                || _cache.TryGetValue($"bus_blockkey_{request.TraceId}_{request.ResultIndex}", out _)
+                || _cache.TryGetValue($"bus_blockkey_{request.TraceId}_{compositeResultIndex}", out _);
+
+            if (!hasBlockKey)
+            {
+                return BadRequest(new { message = "Seats have not been blocked or the block session has expired. Please block the seats before booking." });
+            }
+
+            // Idempotency: return stored completed booking response if already completed
+            var idempotencyKey = $"bus_book_completed_{request.TraceId}_{compositeResultIndex}";
+            if ((_cache.TryGetValue($"bus_book_completed_{request.TraceId}_{request.ResultIndex}", out string? cachedCompletedJson)
+                 || _cache.TryGetValue(idempotencyKey, out cachedCompletedJson))
+                && !string.IsNullOrWhiteSpace(cachedCompletedJson))
+            {
+                var cachedNode = System.Text.Json.Nodes.JsonNode.Parse(cachedCompletedJson);
+                return Ok(cachedNode);
+            }
+
+            // Concurrency lock per TraceId
+            var lockKey = $"bus_book_lock_{request.TraceId}";
+            if (_cache.TryGetValue(lockKey, out _))
+            {
+                return BadRequest(new
+                {
+                    message = "Concurrent booking operation already in progress for this workflow.",
+                    Error = new
+                    {
+                        ErrorCode = 7031,
+                        ErrorMessage = "Concurrent booking operation already in progress for this workflow."
+                    }
+                });
+            }
+
+            _cache.Set(lockKey, true, TimeSpan.FromSeconds(60));
 
             try
             {
+                var seatsRequired = normalizedPassengers!.Count;
+                var strategy = dbContext.Database.CreateExecutionStrategy();
+
                 var executionResult = await strategy.ExecuteAsync(async () =>
                 {
                     await using var transaction = await dbContext.Database.BeginTransactionAsync();
@@ -1426,14 +1497,27 @@ namespace PickNBook.Api.Controllers
                         // ========================================
                         if (User?.IsInRole(AuthRoles.Agent) == true && string.Equals(request.PaymentMethod, "Agent Wallet", StringComparison.OrdinalIgnoreCase))
                         {
-                            var walletService = HttpContext.RequestServices.GetRequiredService<IAgentWalletService>();
-                            await walletService.DebitWalletForBookingAsync(
-                                int.Parse(userId!),
-                                reservation.TotalPriceInr,
-                                reservation.BookingReference,
-                                "Bus",
-                                $"Bus Booking - {bus.FromCity} to {bus.ToCity} ({bus.OperatorName}) - Ref: {reservation.BookingReference}"
-                            );
+                            var agentUser = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == int.Parse(userId!));
+                            if (agentUser == null || agentUser.WalletBalance < reservation.TotalPriceInr)
+                            {
+                                throw new BusBookingException(7030, "Insufficient agent wallet balance.");
+                            }
+
+                            try
+                            {
+                                var walletService = HttpContext.RequestServices.GetRequiredService<IAgentWalletService>();
+                                await walletService.DebitWalletForBookingAsync(
+                                    int.Parse(userId!),
+                                    reservation.TotalPriceInr,
+                                    reservation.BookingReference,
+                                    "Bus",
+                                    $"Bus Booking - {bus.FromCity} to {bus.ToCity} ({bus.OperatorName}) - Ref: {reservation.BookingReference}"
+                                );
+                            }
+                            catch (Exception ex) when (ex.Message.Contains("Insufficient wallet balance", StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new BusBookingException(7030, "Insufficient agent wallet balance.");
+                            }
                         }
 
                         if (bus.BusNumber.StartsWith("SRDV-") && !string.IsNullOrEmpty(bus.TraceId))
@@ -1464,11 +1548,17 @@ namespace PickNBook.Api.Controllers
 
                             var blockKeyToUse = !string.IsNullOrWhiteSpace(request.BlockKey)
                                 ? request.BlockKey
-                                : (_cache.TryGetValue($"bus_blockkey_{srdvReq.TraceId}_{srdvReq.ResultIndex}", out string? cachedBk) ? cachedBk : "");
+                                : (_cache.TryGetValue($"bus_blockkey_{srdvReq.TraceId}_{srdvReq.ResultIndex}", out string? cachedBk) 
+                                    ? cachedBk 
+                                    : (_cache.TryGetValue($"bus_blockkey_{srdvReq.TraceId}_{compositeResultIndex}", out string? cachedCompBk) ? cachedCompBk : ""));
+
                             var srdvRes = await _srdvBusService.BookBusAsync(srdvReq, blockKeyToUse ?? "");
                             if (!srdvRes.Success)
                             {
-                                throw new Exception($"SRDV Booking Failed: {srdvRes.ErrorMessage}");
+                                var supplierErrMsg = !string.IsNullOrWhiteSpace(srdvRes.ErrorMessage)
+                                    ? srdvRes.ErrorMessage
+                                    : "SRDV Booking Failed";
+                                throw new BusBookingException(7032, $"SRDV Booking Failed: {supplierErrMsg}");
                             }
 
                             reservation.SrdvBookingId = srdvRes.SrdvBookingId;
@@ -1484,9 +1574,6 @@ namespace PickNBook.Api.Controllers
 
                         await transaction.CommitAsync();
 
-
-
-
                         return new
                         {
                             Reservation = reservation,
@@ -1495,7 +1582,6 @@ namespace PickNBook.Api.Controllers
                             Response = MapBusReservation(reservation, bus, passengers)
                         };
                     }
-
                     catch (Exception)
                     {
                         await transaction.RollbackAsync();
@@ -1503,7 +1589,13 @@ namespace PickNBook.Api.Controllers
                     }
                 });
 
-               
+                // Cache completed booking response for idempotency replay
+                var completedResponseJson = System.Text.Json.JsonSerializer.Serialize(executionResult.Response);
+                _cache.Set(idempotencyKey, completedResponseJson, TimeSpan.FromHours(1));
+                if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
+                {
+                    _cache.Set($"bus_book_completed_{request.TraceId}_{request.ResultIndex}", completedResponseJson, TimeSpan.FromHours(1));
+                }
 
                 try
                 {
@@ -1613,20 +1705,37 @@ namespace PickNBook.Api.Controllers
                     logger.LogError(ex, "Failed to queue booking notifications for {BookingReference}",
                         executionResult.Reservation.BookingReference);
                 }
-                return CreatedAtAction(
-     nameof(GetBusBookingById),
-     new { bookingId = executionResult.Reservation.Id },
-     executionResult.Response
- );
 
-            }
-            catch (InvalidOperationException ex)
-            {
-                return BadRequest(new { message = ex.Message });
+                return CreatedAtAction(
+                    nameof(GetBusBookingById),
+                    new { bookingId = executionResult.Reservation.Id },
+                    executionResult.Response
+                );
             }
             catch (Exception ex)
             {
+                var busEx = ex as BusBookingException ?? ex.GetBaseException() as BusBookingException;
+                if (busEx != null)
+                {
+                    return BadRequest(new
+                    {
+                        message = busEx.Message,
+                        Error = new
+                        {
+                            ErrorCode = busEx.ErrorCode,
+                            ErrorMessage = busEx.Message
+                        }
+                    });
+                }
+                if (ex is InvalidOperationException)
+                {
+                    return BadRequest(new { message = ex.Message });
+                }
                 return BadRequest(new { message = ex.Message });
+            }
+            finally
+            {
+                _cache.Remove(lockKey);
             }
         }
 
