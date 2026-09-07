@@ -79,22 +79,19 @@ namespace PickNBook.Api.Models.Entities
         public DateTime? CompletedAtUtc { get; set; }
 
         // V9 Cancellation Correlation Fields
-        [NotMapped]
         public long? TraceId { get; set; }
 
-        [NotMapped]
         public long? ProviderCancelId { get; set; }
 
-        [NotMapped]
+        [MaxLength(100)]
         public string? SupplierCancelId { get; set; }
 
-        [NotMapped]
         public string? SeatNamesJson { get; set; }
 
-        [NotMapped]
+        [MaxLength(20)]
         public string? CancellationType { get; set; } // "FULL" or "PARTIAL"
 
-        [NotMapped]
+        [MaxLength(50)]
         public string? RefundStatus { get; set; } // "PENDING", "NOT_REQUIRED", "COMPLETED", "FAILED"
     }
 }

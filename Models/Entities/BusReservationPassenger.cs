@@ -16,31 +16,35 @@ namespace PickNBook.Api.Models
         public bool IsCancelled { get; set; } = false;
         public DateTime? CancelledAtUtc { get; set; }
 
-        [NotMapped]
+       
         public string? Title { get; set; }
 
-        [NotMapped]
+        
         public string? FirstName { get; set; }
 
-        [NotMapped]
+       
         public string? LastName { get; set; }
 
-        [NotMapped]
+        
         public bool LeadPassenger { get; set; } = false;
 
-        [NotMapped]
+       
         public int? SeatIndex { get; set; }
 
-        [NotMapped]
+        
         public decimal? PublishedFareInr { get; set; }
 
-        [NotMapped]
+       
         public decimal? GstAmountInr { get; set; }
 
-        [NotMapped]
+        
         public decimal? TaxInr { get; set; }
 
-        [NotMapped]
+       
         public decimal? OfferedFareInr { get; set; }
+
+        public decimal? GstRate { get; set; }
+
+        public bool? IsUpper { get; set; }
     }
 }

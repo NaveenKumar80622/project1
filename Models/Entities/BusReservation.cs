@@ -69,6 +69,7 @@ namespace PickNBook.Api.Models
         public DateTime? DroppingPointTime { get; set; }
 
         // State Machine & Financial Correlation Fields
+        public string? TraceId { get; set; }
         public string? FinancialStatus { get; set; }
         public long? ProviderCancelId { get; set; }
         public string? SupplierCancelId { get; set; }
