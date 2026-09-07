@@ -54,23 +54,24 @@ namespace PickNBook.Api.Services
                                 var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
                                 if (dbContext != null)
                                 {
-                                    var dbCities = dbContext.BusCities.AsNoTracking().Where(c => c.IsActive).ToList();
+                                    var dbCities = dbContext.BusCities.AsNoTracking().Where(c => c.IsActive).OrderBy(c => c.CityName).ToList();
                                     if (dbCities.Count > 0)
                                     {
                                         foreach (var city in dbCities)
                                         {
-                                            if (!string.IsNullOrEmpty(city.CityName) && !string.IsNullOrEmpty(city.CityCode))
+                                            if (!string.IsNullOrEmpty(city.CityName))
                                             {
+                                                var cityIdStr = city.CityId.ToString();
                                                 if (!mapping.ContainsKey(city.CityName))
                                                 {
-                                                    cityList.Add(new BusCityDto { CityId = city.CityCode, CityName = city.CityName, StateName = city.StateName ?? string.Empty });
+                                                    cityList.Add(new BusCityDto { CityId = cityIdStr, CityName = city.CityName, StateName = city.StateName ?? string.Empty });
                                                 }
 
-                                                mapping[city.CityName] = city.CityCode;
+                                                mapping[city.CityName] = cityIdStr;
                                                 var cleanName = city.CityName.Split('(')[0].Trim();
                                                 if (!mapping.ContainsKey(cleanName))
                                                 {
-                                                    mapping[cleanName] = city.CityCode;
+                                                    mapping[cleanName] = cityIdStr;
                                                 }
                                             }
                                         }
@@ -80,56 +81,9 @@ namespace PickNBook.Api.Services
                         }
                         catch
                         {
-                            // Ignore and fallback to file
+                            // Ignore
                         }
 
-                        if (cityList.Count == 0)
-                        {
-                            try
-                            {
-                                var filePath = Path.Combine(Directory.GetCurrentDirectory(), "srdv_bus_cities.json");
-                                if (System.IO.File.Exists(filePath))
-                                {
-                                    var jsonString = System.IO.File.ReadAllText(filePath);
-                                    using var jsonDoc = JsonDocument.Parse(jsonString);
-                                    foreach (var rootElement in jsonDoc.RootElement.EnumerateArray())
-                                    {
-                                        if (rootElement.TryGetProperty("type", out var typeProp) && typeProp.GetString() == "table")
-                                        {
-                                            if (rootElement.TryGetProperty("data", out var dataProp))
-                                            {
-                                                foreach (var city in dataProp.EnumerateArray())
-                                                {
-                                                    var name = city.GetProperty("cico_city_name").GetString();
-                                                    var id = city.GetProperty("cico_id").GetString();
-                                                    var stateName = city.TryGetProperty("cico_state_name", out var s) ? s.GetString() : string.Empty;
-                                                    
-                                                    if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(id))
-                                                    {
-                                                        if (!mapping.ContainsKey(name))
-                                                        {
-                                                            cityList.Add(new BusCityDto { CityId = id, CityName = name, StateName = stateName ?? string.Empty });
-                                                        }
-
-                                                        mapping[name] = id;
-                                                        
-                                                        var cleanName = name.Split('(')[0].Trim();
-                                                        if (!mapping.ContainsKey(cleanName))
-                                                        {
-                                                            mapping[cleanName] = id;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            catch
-                            {
-                                // Fallback
-                            }
-                        }
                         _cityMapping = mapping;
                         _busCitiesList = cityList;
                     }
@@ -201,8 +155,13 @@ namespace PickNBook.Api.Services
                 return Task.FromResult(new List<BusCityDto>());
             }
 
+            var trimmedQuery = query.Trim();
             var results = _busCitiesList
-                .Where(c => c.CityName.Contains(query, StringComparison.OrdinalIgnoreCase))
+                .Where(c => c.CityName.Contains(trimmedQuery, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(c => c.CityName.Equals(trimmedQuery, StringComparison.OrdinalIgnoreCase))
+                .ThenByDescending(c => c.CityName.StartsWith(trimmedQuery, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(c => c.CityName.Length)
+                .ThenBy(c => c.CityName)
                 .Take(20)
                 .ToList();
 

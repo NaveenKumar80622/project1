@@ -1304,13 +1304,21 @@ namespace PickNBook.Api.Data
             modelBuilder.Entity<BusCity>(entity =>
             {
                 entity.ToTable("bus_cities");
-                entity.Property(x => x.CityCode).HasMaxLength(50).IsRequired();
+                entity.HasKey(x => x.CityId);
+                entity.Property(x => x.CityId).ValueGeneratedNever();
+                entity.Property(x => x.CityCode).HasMaxLength(50).ValueGeneratedOnAddOrUpdate();
                 entity.Property(x => x.CityName).HasMaxLength(200).IsRequired();
-                entity.Property(x => x.StateName).HasMaxLength(200);
-                entity.Property(x => x.CountryName).HasMaxLength(100);
-                entity.Property(x => x.CountryCode).HasMaxLength(10);
+                entity.Property(x => x.DistrictName).HasMaxLength(200);
+                entity.Property(x => x.StateName).HasMaxLength(200).IsRequired();
+                entity.Property(x => x.StateCode).HasMaxLength(20);
+                entity.Property(x => x.CountryName).HasMaxLength(100).IsRequired();
+                entity.Property(x => x.CountryCode).HasMaxLength(10).IsRequired();
+                entity.Property(x => x.Type).HasMaxLength(30).IsRequired();
+                entity.Property(x => x.Timezone).HasMaxLength(64);
                 entity.HasIndex(x => x.CityCode);
                 entity.HasIndex(x => x.CityName);
+                entity.HasIndex(x => x.Type);
+                entity.HasIndex(x => x.ParentCityId);
                 entity.HasIndex(x => x.IsActive);
             });
 

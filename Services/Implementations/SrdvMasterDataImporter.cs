@@ -105,9 +105,9 @@ namespace PickNBook.Api.Services.Implementations
                     {
                         toInsert.Add(new BusCity
                         {
-                            CityCode = cityCode,
+                            CityId = long.TryParse(cityCode, out var cid) ? cid : 0,
                             CityName = cityName,
-                            StateName = stateName,
+                            StateName = stateName ?? string.Empty,
                             CountryName = "India",
                             CountryCode = "IN",
                             IsActive = true,
