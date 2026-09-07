@@ -20,7 +20,7 @@ namespace PickNBook.Api.Models
         // SRDV Tracking Fields
         public string? TraceId { get; set; }
         public string? ResultIndex { get; set; }
-        public int? SrdvIndex { get; set; }
+        public long? SrdvIndex { get; set; }
         public string? RouteId { get; set; }
         public string? OperatorId { get; set; }
         

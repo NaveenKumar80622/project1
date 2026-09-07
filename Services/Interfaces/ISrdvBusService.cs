@@ -12,9 +12,9 @@ namespace PickNBook.Api.Services
         Task<List<SrdvBusOfferDto>> SearchBusesAsync(string originId, string destinationId, string journeyDate);
         Task<(string RawJson, List<SrdvBusOfferDto> Buses)> SearchBusesWithRawAsync(string originId, string destinationId, string journeyDate);
         Task<SrdvBusBookingResponseDto> BookBusAsync(SrdvBusBookingRequestDto request, string blockKey);
-        Task<SrdvBoardingDroppingDetailsDto> GetBoardingPointDetailsAsync(string traceId, int srdvIndex, string resultIndex);
-        Task<List<SrdvSeatDto>> GetSeatLayoutAsync(string traceId, int srdvIndex, string resultIndex, string? boardingPointId = null, string? droppingPointId = null);
-        Task<string> GetSeatLayoutRawAsync(string traceId, int srdvIndex, string resultIndex, string? boardingPointId = null, string? droppingPointId = null);
+        Task<SrdvBoardingDroppingDetailsDto> GetBoardingPointDetailsAsync(string traceId, long srdvIndex, string resultIndex);
+        Task<List<SrdvSeatDto>> GetSeatLayoutAsync(string traceId, long srdvIndex, string resultIndex, string? boardingPointId = null, string? droppingPointId = null);
+        Task<string> GetSeatLayoutRawAsync(string traceId, long srdvIndex, string resultIndex, string? boardingPointId = null, string? droppingPointId = null);
         Task<(bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount)> CancelTicketAsync(string traceId, string seatName, string remark);
         Task<SrdvBusCancelResponseDto> CancelTicketV9Async(long traceId, List<string> seatNames, string remarks);
         Task<string> SearchBusesProxyAsync(BusSearchProxyRequestDto request);

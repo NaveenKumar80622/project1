@@ -322,7 +322,9 @@ namespace PickNBook.Api.Services
                             AvailableSeats = availableSeats,
                             TraceId = traceId,
                             ResultIndex = bus.TryGetProperty("ResultIndex", out var riProp) ? riProp.GetString() : null,
-                            SrdvIndex = bus.TryGetProperty("SrdvIndex", out var siProp) && siProp.ValueKind == JsonValueKind.Number ? siProp.GetInt32() : 0,
+                            SrdvIndex = bus.TryGetProperty("SrdvIndex", out var siProp) 
+                                ? (siProp.ValueKind == JsonValueKind.Number ? siProp.GetInt64() : (long.TryParse(siProp.GetString(), out var parsedSi) ? parsedSi : 0))
+                                : 0,
                             IsGSTMandatory = bus.TryGetProperty("IsGSTMandatory", out var gstProp) && gstProp.GetBoolean(),
                             IsTypeRequired = bus.TryGetProperty("IsTypeRequired", out var typeProp) && typeProp.GetBoolean(),
                             IsDropPointMandatory = bus.TryGetProperty("IsDropPointMandatory", out var dropProp) && dropProp.GetBoolean()
@@ -559,7 +561,7 @@ namespace PickNBook.Api.Services
             return dto;
         }
 
-        public async Task<SrdvBoardingDroppingDetailsDto> GetBoardingPointDetailsAsync(string traceId, int srdvIndex, string resultIndex)
+        public async Task<SrdvBoardingDroppingDetailsDto> GetBoardingPointDetailsAsync(string traceId, long srdvIndex, string resultIndex)
         {
             var compositeResultIndex = BuildCompositeResultIndex(resultIndex, srdvIndex.ToString());
             var parsedTraceId = long.TryParse(traceId, out var tid) ? (object)tid : traceId;
@@ -638,7 +640,7 @@ namespace PickNBook.Api.Services
 
         public async Task<List<SrdvSeatDto>> GetSeatLayoutAsync(
             string traceId,
-            int srdvIndex,
+            long srdvIndex,
             string resultIndex,
             string? boardingPointId = null,
             string? droppingPointId = null)
@@ -760,7 +762,7 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetSeatLayoutRawAsync(
             string traceId,
-            int srdvIndex,
+            long srdvIndex,
             string resultIndex,
             string? boardingPointId = null,
             string? droppingPointId = null)

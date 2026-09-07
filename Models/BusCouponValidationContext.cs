@@ -35,7 +35,7 @@ namespace PickNBook.Api.Models
     {
         public string TraceId { get; set; } = string.Empty;
         public string ResultIndex { get; set; } = string.Empty;
-        public int SrdvIndex { get; set; }
+        public long SrdvIndex { get; set; }
         public string OperatorName { get; set; } = string.Empty;
         public string BusType { get; set; } = string.Empty;
         public string FromCity { get; set; } = string.Empty;

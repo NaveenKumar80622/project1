@@ -80,7 +80,7 @@ public class CreateBusBookingRequestDto
     // SRDV Tracking
     public string TraceId { get; set; } = string.Empty;
     public string ResultIndex { get; set; } = string.Empty;
-    public int SrdvIndex { get; set; }
+    public long SrdvIndex { get; set; }
     public string? BlockKey { get; set; }
     
     // User Selection

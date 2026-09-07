@@ -16,7 +16,7 @@ namespace PickNBook.Api.Models.DTOs
         
         public string? TraceId { get; set; }
         public string? ResultIndex { get; set; }
-        public int? SrdvIndex { get; set; }
+        public long? SrdvIndex { get; set; }
 
         public bool IsGSTMandatory { get; set; }
         public bool IsTypeRequired { get; set; }
@@ -51,7 +51,7 @@ namespace PickNBook.Api.Models.DTOs
     {
         public string TraceId { get; set; } = string.Empty;
         public string ResultIndex { get; set; } = string.Empty;
-        public int SrdvIndex { get; set; }
+        public long SrdvIndex { get; set; }
         public string BoardingPointId { get; set; } = string.Empty;
         public string DroppingPointId { get; set; } = string.Empty;
         public string? RefId { get; set; }
