@@ -30,7 +30,9 @@ public class FlightRequestLoggingMiddleware
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var options = _optionsMonitor.CurrentValue;
+        PayloadLoggingOptions options;
+        try { options = _optionsMonitor.CurrentValue; }
+        catch { options = new PayloadLoggingOptions(); }
 
         // 1. Generate or retrieve Correlation ID
         var correlationId = context.Request.Headers.TryGetValue("X-Correlation-ID", out var cid) 
