@@ -33,28 +33,41 @@ namespace PickNBook.Api.Models.DTOs
 
     public class BusSeatLayoutProxyRequestDto
     {
+        [JsonConverter(typeof(SafeStringConverter))]
         public string TraceId { get; set; } = string.Empty;
         public string SrdvIndex { get; set; } = string.Empty;
         public string ResultIndex { get; set; } = string.Empty;
+        [JsonConverter(typeof(SafeStringConverter))]
         public string? BoardingPointId { get; set; }
+        [JsonConverter(typeof(SafeStringConverter))]
         public string? DroppingPointId { get; set; }
         public bool? BpDpSeatLayout { get; set; }
     }
 
     public class BusBoardingPointsProxyRequestDto
     {
+        [JsonConverter(typeof(SafeStringConverter))]
         public string TraceId { get; set; } = string.Empty;
         public string? SrdvIndex { get; set; } = string.Empty;
         public string ResultIndex { get; set; } = string.Empty;
     }
     public class SrdvBusBookingRequestDto
     {
+        [JsonConverter(typeof(SafeStringConverter))]
         public string TraceId { get; set; } = string.Empty;
+
         public string ResultIndex { get; set; } = string.Empty;
         public long SrdvIndex { get; set; }
+
+        [JsonConverter(typeof(SafeStringConverter))]
         public string BoardingPointId { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeStringConverter))]
         public string DroppingPointId { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeStringConverter))]
         public string? RefId { get; set; }
+
         public string FromCity { get; set; } = string.Empty;
         public string ToCity { get; set; } = string.Empty;
         public string DepartureTime { get; set; } = string.Empty;
@@ -70,17 +83,37 @@ namespace PickNBook.Api.Models.DTOs
 
     public class SrdvBusPassengerDto
     {
+        private string _contactNo = string.Empty;
+        private string _phoneNo = string.Empty;
+
         public string Title { get; set; } = string.Empty;
         public string FirstName { get; set; } = string.Empty;
         public string LastName { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeIntConverter))]
         public int Age { get; set; }
+
+        [JsonConverter(typeof(SafeIntConverter))]
         public int Gender { get; set; } // 1: Male, 2: Female
+
         public string SeatName { get; set; } = string.Empty;
         public decimal Fare { get; set; }
         public string Address { get; set; } = string.Empty;
         public string City { get; set; } = string.Empty;
         public string State { get; set; } = string.Empty;
-        public string ContactNo { get; set; } = string.Empty;
+
+        public string ContactNo
+        {
+            get => !string.IsNullOrWhiteSpace(_contactNo) ? _contactNo : (!string.IsNullOrWhiteSpace(_phoneNo) ? _phoneNo : string.Empty);
+            set => _contactNo = value ?? string.Empty;
+        }
+
+        public string? PhoneNo
+        {
+            get => !string.IsNullOrWhiteSpace(_phoneNo) ? _phoneNo : (!string.IsNullOrWhiteSpace(_contactNo) ? _contactNo : string.Empty);
+            set => _phoneNo = value ?? string.Empty;
+        }
+
         public string Email { get; set; } = string.Empty;
         public bool? LeadPassenger { get; set; }
         public int? SeatIndex { get; set; }
