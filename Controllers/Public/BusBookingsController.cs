@@ -1240,19 +1240,215 @@ namespace PickNBook.Api.Controllers
             return (false, 0m, 0m);
         }
 
+        [HttpPost("v9/Book")]
+        [HttpPost("/v9/Book")]
+        [AllowAnonymous]
+        [InjectClientIp]
+        public async Task<IActionResult> BookBusV9Proxy([FromBody] BusBookV9RequestDto request)
+        {
+            if (request == null)
+            {
+                return BadRequest(new { message = "Request body cannot be null." });
+            }
+
+            if (request.TraceId <= 0)
+            {
+                return BadRequest(new { message = "TraceId must be present, numeric, and greater than 0." });
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                return BadRequest(new { message = "ResultIndex is required." });
+            }
+
+            var traceIdStr = request.TraceId.ToString();
+            var compositeResultIndex = request.ResultIndex.Trim();
+
+            // Idempotency: return stored completed booking response if already completed
+            var idempotencyKey = $"bus_book_completed_{request.TraceId}_{compositeResultIndex}";
+            if ((_cache.TryGetValue($"bus_book_completed_{request.TraceId}_{request.ResultIndex}", out string? cachedCompletedJson)
+                 || _cache.TryGetValue(idempotencyKey, out cachedCompletedJson))
+                && !string.IsNullOrWhiteSpace(cachedCompletedJson))
+            {
+                var cachedNode = System.Text.Json.Nodes.JsonNode.Parse(cachedCompletedJson);
+                return Ok(cachedNode);
+            }
+
+            try
+            {
+                var rawJson = await _srdvBusService.BookBusProxyAsync(request.TraceId, compositeResultIndex);
+                var jsonNode = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
+
+                if (jsonNode is System.Text.Json.Nodes.JsonObject jsonObj)
+                {
+                    var errObj = jsonObj["Error"] as System.Text.Json.Nodes.JsonObject;
+                    int errCode = -1;
+                    if (errObj != null && int.TryParse(errObj["ErrorCode"]?.ToString(), out var ec))
+                    {
+                        errCode = ec;
+                    }
+                    else if (errObj == null)
+                    {
+                        errCode = 0;
+                    }
+
+                    if (errCode == 0)
+                    {
+                        _cache.Set($"bus_book_completed_{request.TraceId}_{request.ResultIndex}", rawJson, TimeSpan.FromHours(1));
+                        _cache.Set(idempotencyKey, rawJson, TimeSpan.FromHours(1));
+
+                        try
+                        {
+                            var resultObj = jsonObj["Result"] as System.Text.Json.Nodes.JsonObject;
+                            var ticketNo = resultObj?["TicketNo"]?.ToString() ?? jsonObj["TicketNo"]?.ToString() ?? string.Empty;
+                            var pnr = resultObj?["TravelOperatorPNR"]?.ToString() ?? jsonObj["TravelOperatorPNR"]?.ToString() ?? ticketNo;
+                            var bookingIdStr = resultObj?["BookingId"]?.ToString() ?? jsonObj["BookingId"]?.ToString() ?? string.Empty;
+
+                            var existingRes = await dbContext.BusReservations
+                                .Include(r => r.BusBooking)
+                                .FirstOrDefaultAsync(r => r.BusBooking != null && r.BusBooking.TraceId == traceIdStr);
+
+                            if (existingRes == null)
+                            {
+                                bool foundCtx = _cache.TryGetValue($"bus_ctx_{traceIdStr}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
+                                    || _cache.TryGetValue($"bus_ctx_{traceIdStr}_{compositeResultIndex}", out busCtx);
+
+                                _cache.TryGetValue($"bus_block_passengers_{traceIdStr}_{request.ResultIndex}", out List<SrdvBusPassengerDto>? cachedPax);
+                                if (cachedPax == null)
+                                {
+                                    _cache.TryGetValue($"bus_block_passengers_{traceIdStr}_{compositeResultIndex}", out cachedPax);
+                                }
+
+                                var depTime = busCtx != null && DateTime.TryParse(busCtx.DepartureTime, out var dt) ? dt.ToUniversalTime() : DateTime.UtcNow.AddHours(2);
+                                var arrTime = busCtx != null && DateTime.TryParse(busCtx.ArrivalTime, out var at) ? at.ToUniversalTime() : depTime.AddHours(8);
+
+                                var blockedSeatsInDb = await dbContext.BusBlockedSeatPrices.Where(x => x.TraceId == traceIdStr).ToListAsync();
+                                var totalBlockedFare = blockedSeatsInDb.Sum(b => b.GrandTotal);
+
+                                var bus = new BusBooking
+                                {
+                                    BusNumber = "SRDV-" + Random.Shared.Next(1000, 9999),
+                                    OperatorName = busCtx?.OperatorName ?? "Unknown",
+                                    BusType = busCtx?.BusType ?? "Unknown",
+                                    GstCategory = "AC",
+                                    FromCity = busCtx?.FromCity ?? "Origin",
+                                    ToCity = busCtx?.ToCity ?? "Destination",
+                                    DepartureTime = depTime,
+                                    ArrivalTime = arrTime,
+                                    PriceInr = totalBlockedFare,
+                                    TotalSeats = 40,
+                                    AvailableSeats = 40,
+                                    BoardingPoint = "Default Point",
+                                    DroppingPoint = "Default Point",
+                                    TraceId = traceIdStr,
+                                    ResultIndex = compositeResultIndex,
+                                    SrdvIndex = busCtx?.SrdvIndex ?? 0,
+                                    OperatorId = string.Empty
+                                };
+                                dbContext.BusBookings.Add(bus);
+                                await dbContext.SaveChangesAsync();
+
+                                var leadPax = cachedPax?.FirstOrDefault(p => p.LeadPassenger == true) ?? cachedPax?.FirstOrDefault();
+                                var reservation = new BusReservation
+                                {
+                                    BookingReference = $"PB-BUS-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(100000, 999999)}",
+                                    Pnr = !string.IsNullOrWhiteSpace(pnr) ? pnr : ticketNo,
+                                    UserId = currentUserService.GetUserOrGuestId() ?? "GUEST",
+                                    BusBookingId = bus.Id,
+                                    PassengerName = leadPax != null ? $"{leadPax.FirstName} {leadPax.LastName}".Trim() : "Lead Passenger",
+                                    PassengerPhone = leadPax?.ContactNo ?? leadPax?.PhoneNo ?? "9876543210",
+                                    PassengerEmail = leadPax?.Email ?? "passenger@example.com",
+                                    SeatsBooked = cachedPax?.Count ?? 1,
+                                    TotalPriceInr = totalBlockedFare,
+                                    CustomerFareInr = totalBlockedFare,
+                                    NetFareInr = totalBlockedFare,
+                                    Status = BusBookingStatus.Success,
+                                    BookedAtUtc = DateTime.UtcNow,
+                                    SrdvBookingId = bookingIdStr,
+                                    SrdvTicketNo = ticketNo,
+                                    SrdvBookingResponseJson = rawJson
+                                };
+                                dbContext.BusReservations.Add(reservation);
+                                await dbContext.SaveChangesAsync();
+
+                                if (cachedPax != null && cachedPax.Count > 0)
+                                {
+                                    foreach (var pax in cachedPax)
+                                    {
+                                        var blockedSeat = blockedSeatsInDb.FirstOrDefault(b => b.SeatName.Equals(pax.SeatName, StringComparison.OrdinalIgnoreCase));
+                                        var passengerEntity = new BusReservationPassenger
+                                        {
+                                            BusReservationId = reservation.Id,
+                                            FullName = $"{pax.FirstName} {pax.LastName}".Trim(),
+                                            FirstName = pax.FirstName,
+                                            LastName = pax.LastName,
+                                            Title = pax.Title,
+                                            Gender = pax.Gender == 2 ? "Female" : "Male",
+                                            SeatNumber = pax.SeatName,
+                                            Age = pax.Age,
+                                            SeatType = !string.IsNullOrWhiteSpace(bus.BusType) ? bus.BusType : "Seater",
+                                            BaseFareInr = blockedSeat?.BaseFare ?? 0m,
+                                            PublishedFareInr = blockedSeat?.PublishedFare ?? 0m,
+                                            GstAmountInr = blockedSeat?.GstAmount ?? 0m,
+                                            LeadPassenger = pax.LeadPassenger == true
+                                        };
+                                        dbContext.BusReservationPassengers.Add(passengerEntity);
+                                    }
+                                    await dbContext.SaveChangesAsync();
+                                }
+                            }
+                            else
+                            {
+                                existingRes.Status = BusBookingStatus.Success;
+                                if (!string.IsNullOrWhiteSpace(ticketNo)) existingRes.SrdvTicketNo = ticketNo;
+                                if (!string.IsNullOrWhiteSpace(pnr)) existingRes.Pnr = pnr;
+                                if (!string.IsNullOrWhiteSpace(bookingIdStr)) existingRes.SrdvBookingId = bookingIdStr;
+                                existingRes.SrdvBookingResponseJson = rawJson;
+                                await dbContext.SaveChangesAsync();
+                            }
+                        }
+                        catch (Exception dbEx)
+                        {
+                            logger.LogWarning(dbEx, "Failed to persist bus reservation in DB during V9 Book proxy for TraceId {TraceId}. Returning provider JSON regardless.", request.TraceId);
+                        }
+                    }
+                }
+
+                return Ok(jsonNode);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to book bus ticket from SRDV proxy for TraceId {TraceId}, ResultIndex {ResultIndex}", request.TraceId, request.ResultIndex);
+                return StatusCode(500, new { message = "Error booking bus from provider.", details = ex.Message });
+            }
+        }
+
         [HttpPost("book")]
         public async Task<IActionResult> BookBus([FromBody] CreateBusBookingRequestDto request)
         {
+            if (request == null)
+            {
+                return BadRequest("Request body cannot be null.");
+            }
+
+            // If a client calls /book sending only TraceId and ResultIndex without passengers, forward to V9 Book proxy
+            if ((request.Passengers == null || request.Passengers.Count == 0) &&
+                long.TryParse(request.TraceId, out var traceIdLong) && traceIdLong > 0 &&
+                !string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                var compositeIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex.ToString());
+                return await BookBusV9Proxy(new BusBookV9RequestDto
+                {
+                    TraceId = traceIdLong,
+                    ResultIndex = compositeIndex
+                });
+            }
+
             if (!currentUserService.IsAuthenticated())
             {
                 return Unauthorized("Please login to continue booking.");
             }
             var userId = currentUserService.GetUserOrGuestId();
-
-            if (request == null)
-            {
-                return BadRequest("Request body cannot be null.");
-            }
 
             if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
             {

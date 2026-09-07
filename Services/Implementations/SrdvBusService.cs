@@ -466,6 +466,26 @@ namespace PickNBook.Api.Services
             return rawJson;
         }
 
+        public async Task<string> BookBusProxyAsync(long traceId, string resultIndex)
+        {
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var bookRequestBody = new
+            {
+                TraceId = traceId,
+                ResultIndex = resultIndex?.Trim() ?? string.Empty
+            };
+
+            var bookUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Book";
+            var response = await _httpClient.PostAsJsonAsync(bookUrl, bookRequestBody, _jsonOptions);
+
+            var rawJson = await response.Content.ReadAsStringAsync();
+            return rawJson;
+        }
+
         public async Task<SrdvBusBookingResponseDto> BookBusAsync(SrdvBusBookingRequestDto request, string blockKey)
         {
             if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))

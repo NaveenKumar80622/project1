@@ -1,8 +1,21 @@
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 
 namespace PickNBook.Api.Models.DTOs
 {
+    public class BusBookV9RequestDto
+    {
+        [Required]
+        [Range(1, long.MaxValue, ErrorMessage = "TraceId must be between 1 and signed 64-bit integer maximum.")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+
+        [Required]
+        [StringLength(500, MinimumLength = 3, ErrorMessage = "ResultIndex must be between 3 and 500 characters.")]
+        public string ResultIndex { get; set; } = string.Empty;
+    }
+
     public class SrdvBusOfferDto
     {
         public string RouteId { get; set; } = string.Empty;

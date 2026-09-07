@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace PickNBook.Api.Models.DTOs;
 
 public class BookingResponseDto
@@ -78,6 +80,7 @@ public class FlightPassengerResponseDto
 public class CreateBusBookingRequestDto
 {
     // SRDV Tracking
+    [JsonConverter(typeof(SafeStringConverter))]
     public string TraceId { get; set; } = string.Empty;
     public string ResultIndex { get; set; } = string.Empty;
     public long SrdvIndex { get; set; }
