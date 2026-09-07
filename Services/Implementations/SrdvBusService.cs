@@ -894,58 +894,268 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<(bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount)> CancelTicketAsync(string traceId, string seatName, string remark)
+        public async Task<SrdvBusCancelResponseDto> CancelTicketV9Async(long traceId, List<string> seatNames, string remarks)
         {
-            var requestBody = new
+            // 1. Validation
+            if (traceId <= 0)
             {
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password,
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsExplicitSupplierRejection = true,
+                    ErrorCode = 400,
+                    ErrorMessage = "TraceId must be greater than 0."
+                };
+            }
+
+            var cleanedSeats = (seatNames ?? new List<string>())
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (cleanedSeats.Count == 0)
+            {
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsExplicitSupplierRejection = true,
+                    ErrorCode = 400,
+                    ErrorMessage = "SeatName must contain at least 1 valid seat."
+                };
+            }
+
+            if (cleanedSeats.Count > 10)
+            {
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsExplicitSupplierRejection = true,
+                    ErrorCode = 400,
+                    ErrorMessage = "SeatName cannot contain more than 10 seats."
+                };
+            }
+
+            if (cleanedSeats.Any(s => s.Length > 100))
+            {
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsExplicitSupplierRejection = true,
+                    ErrorCode = 400,
+                    ErrorMessage = "SeatName items must not exceed 100 characters."
+                };
+            }
+
+            var cleanRemarks = remarks?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(cleanRemarks))
+            {
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsExplicitSupplierRejection = true,
+                    ErrorCode = 400,
+                    ErrorMessage = "Remarks is mandatory and cannot be empty."
+                };
+            }
+
+            if (cleanRemarks.Length > 1000)
+            {
+                cleanRemarks = cleanRemarks.Substring(0, 1000);
+            }
+
+            // 2. Canonical V9 Provider Request
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/Cancel";
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+            if (!string.IsNullOrWhiteSpace(ApiToken))
+            {
+                httpRequest.Headers.Add("Api-Token", ApiToken);
+            }
+
+            var payload = new SrdvBusCancelRequestDto
+            {
                 TraceId = traceId,
-                SeatName = seatName,
-                Remark = remark
+                SeatName = cleanedSeats,
+                Remarks = cleanRemarks
+            };
+            httpRequest.Content = JsonContent.Create(payload, options: _jsonOptions);
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await _httpClient.SendAsync(httpRequest);
+            }
+            catch (Exception ex)
+            {
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsAmbiguous = true,
+                    IsExplicitSupplierRejection = false,
+                    ErrorCode = -1,
+                    ErrorMessage = $"Network/HTTP Exception: {ex.Message}"
+                };
+            }
+
+            string content = string.Empty;
+            try
+            {
+                content = await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                return new SrdvBusCancelResponseDto
+                {
+                    Success = false,
+                    IsAmbiguous = true,
+                    IsExplicitSupplierRejection = false,
+                    ErrorCode = -1,
+                    ErrorMessage = $"Failed reading SRDV response: {ex.Message}"
+                };
+            }
+
+            var dto = new SrdvBusCancelResponseDto
+            {
+                ResponseJson = content
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Cancel", requestBody, _jsonOptions);
-            response.EnsureSuccessStatusCode();
-
-            using var contentStream = await response.Content.ReadAsStreamAsync();
-            var json = await JsonDocument.ParseAsync(contentStream);
-
-            int errorCode = -1;
-            string errorMessage = "Unknown SRDV Cancellation Error";
-
-            if (json.RootElement.TryGetProperty("Error", out var errorProp))
+            JsonDocument? json = null;
+            try
             {
-                if (errorProp.TryGetProperty("ErrorCode", out var codeProp))
+                json = JsonDocument.Parse(content);
+            }
+            catch
+            {
+                if ((int)response.StatusCode >= 500)
                 {
-                    if (codeProp.ValueKind == JsonValueKind.Number)
-                        errorCode = codeProp.GetInt32();
-                    else if (codeProp.ValueKind == JsonValueKind.String)
-                        int.TryParse(codeProp.GetString(), out errorCode);
+                    dto.Success = false;
+                    dto.IsAmbiguous = true;
+                    dto.ErrorCode = (int)response.StatusCode;
+                    dto.ErrorMessage = $"Supplier returned HTTP {(int)response.StatusCode} with non-JSON body.";
+                    return dto;
                 }
-                if (errorProp.TryGetProperty("ErrorMessage", out var msgProp))
+                else
                 {
-                    errorMessage = msgProp.GetString() ?? errorMessage;
+                    dto.Success = false;
+                    dto.IsExplicitSupplierRejection = true;
+                    dto.ErrorCode = (int)response.StatusCode;
+                    dto.ErrorMessage = $"Supplier returned HTTP {(int)response.StatusCode}: {content}";
+                    return dto;
                 }
             }
 
-            decimal cancellationCharge = 0m;
-            decimal refundAmount = 0m;
-
-            if (json.RootElement.TryGetProperty("CancellationCharge", out var ccProp))
+            using (json)
             {
-                if (ccProp.ValueKind == JsonValueKind.Number) cancellationCharge = ccProp.GetDecimal();
-                else if (ccProp.ValueKind == JsonValueKind.String && decimal.TryParse(ccProp.GetString(), out var c)) cancellationCharge = c;
+                var root = json.RootElement;
+                string? status = null;
+                int? cancelId = null;
+                int errCode = 0;
+                string? errMsg = null;
+                decimal cancellationCharge = 0m;
+                decimal refundAmount = 0m;
+
+                if (root.TryGetProperty("Status", out var statusProp))
+                {
+                    status = statusProp.GetString();
+                }
+
+                if (root.TryGetProperty("CancelId", out var cidProp))
+                {
+                    if (cidProp.ValueKind == JsonValueKind.Number)
+                        cancelId = cidProp.GetInt32();
+                    else if (cidProp.ValueKind == JsonValueKind.String && int.TryParse(cidProp.GetString(), out var parsedCid))
+                        cancelId = parsedCid;
+                }
+
+                if (root.TryGetProperty("Error", out var errorProp) && errorProp.ValueKind == JsonValueKind.Object)
+                {
+                    if (errorProp.TryGetProperty("ErrorCode", out var codeProp))
+                    {
+                        if (codeProp.ValueKind == JsonValueKind.Number) errCode = codeProp.GetInt32();
+                        else if (codeProp.ValueKind == JsonValueKind.String && int.TryParse(codeProp.GetString(), out var ec)) errCode = ec;
+                    }
+                    if (errorProp.TryGetProperty("ErrorMessage", out var msgProp))
+                    {
+                        errMsg = msgProp.GetString();
+                    }
+                }
+                else if (root.TryGetProperty("ErrorCode", out var topErrProp))
+                {
+                    if (topErrProp.ValueKind == JsonValueKind.Number) errCode = topErrProp.GetInt32();
+                    else if (topErrProp.ValueKind == JsonValueKind.String && int.TryParse(topErrProp.GetString(), out var ec)) errCode = ec;
+                    if (root.TryGetProperty("ErrorMessage", out var topMsgProp))
+                    {
+                        errMsg = topMsgProp.GetString();
+                    }
+                }
+
+                if (root.TryGetProperty("CancellationCharge", out var ccProp))
+                {
+                    if (ccProp.ValueKind == JsonValueKind.Number) cancellationCharge = ccProp.GetDecimal();
+                    else if (ccProp.ValueKind == JsonValueKind.String && decimal.TryParse(ccProp.GetString(), out var cc)) cancellationCharge = cc;
+                }
+
+                if (root.TryGetProperty("RefundAmount", out var raProp))
+                {
+                    if (raProp.ValueKind == JsonValueKind.Number) refundAmount = raProp.GetDecimal();
+                    else if (raProp.ValueKind == JsonValueKind.String && decimal.TryParse(raProp.GetString(), out var ra)) refundAmount = ra;
+                }
+
+                dto.Status = status;
+                dto.CancelId = cancelId;
+                dto.ErrorCode = errCode;
+                dto.ErrorMessage = errMsg;
+                dto.CancellationCharge = cancellationCharge;
+                dto.RefundAmount = refundAmount;
+
+                bool isInProcess = string.Equals(status, "In Process", StringComparison.OrdinalIgnoreCase);
+                bool hasCancelId = cancelId.HasValue && cancelId.Value > 0;
+
+                if (isInProcess || hasCancelId || (response.IsSuccessStatusCode && errCode == 0 && string.IsNullOrWhiteSpace(errMsg) && (status == null || !string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase))))
+                {
+                    dto.Success = true;
+                    dto.IsExplicitSupplierRejection = false;
+                    dto.IsAmbiguous = false;
+                    if (string.IsNullOrEmpty(dto.Status)) dto.Status = isInProcess ? "In Process" : "Success";
+                }
+                else
+                {
+                    dto.Success = false;
+                    dto.IsExplicitSupplierRejection = true;
+                    dto.IsAmbiguous = false;
+                    if (string.IsNullOrWhiteSpace(dto.ErrorMessage))
+                    {
+                        dto.ErrorMessage = !string.IsNullOrWhiteSpace(status) ? $"Supplier cancellation status: {status}" : "Unknown SRDV Cancellation Error";
+                    }
+                }
+
+                return dto;
+            }
+        }
+
+        public async Task<(bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount)> CancelTicketAsync(string traceId, string seatName, string remark)
+        {
+            long parsedTraceId = 0;
+            if (!long.TryParse(traceId, out parsedTraceId) || parsedTraceId <= 0)
+            {
+                return (false, "TraceId must be present, numeric, and greater than 0.", 0m, 0m);
             }
 
-            if (json.RootElement.TryGetProperty("RefundAmount", out var raProp))
+            var seats = new List<string>();
+            if (!string.IsNullOrWhiteSpace(seatName))
             {
-                if (raProp.ValueKind == JsonValueKind.Number) refundAmount = raProp.GetDecimal();
-                else if (raProp.ValueKind == JsonValueKind.String && decimal.TryParse(raProp.GetString(), out var r)) refundAmount = r;
+                var split = seatName.Split(',', StringSplitOptions.RemoveEmptyEntries);
+                foreach (var s in split)
+                {
+                    var trimmed = s.Trim();
+                    if (!string.IsNullOrWhiteSpace(trimmed)) seats.Add(trimmed);
+                }
             }
 
-            return (errorCode == 0, errorMessage, cancellationCharge, refundAmount);
+            var remarks = string.IsNullOrWhiteSpace(remark) ? "Cancelled by user" : remark.Trim();
+
+            var v9Res = await CancelTicketV9Async(parsedTraceId, seats, remarks);
+            return (v9Res.Success, v9Res.ErrorMessage ?? string.Empty, v9Res.CancellationCharge, v9Res.RefundAmount);
         }
         public async Task<string> GetSrdvMasterWalletBalanceAsync(string endUserIp)
         {

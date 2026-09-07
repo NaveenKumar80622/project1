@@ -147,6 +147,27 @@ namespace PickNBook.Api.Models.DTOs
         public List<int>? PassengerIdsToCancel { get; set; }
     }
 
+    public class SrdvBusCancelRequestDto
+    {
+        public long TraceId { get; set; }
+        public List<string> SeatName { get; set; } = new();
+        public string Remarks { get; set; } = string.Empty;
+    }
+
+    public class SrdvBusCancelResponseDto
+    {
+        public bool Success { get; set; }
+        public string? Status { get; set; }
+        public int? CancelId { get; set; }
+        public decimal CancellationCharge { get; set; }
+        public decimal RefundAmount { get; set; }
+        public int ErrorCode { get; set; }
+        public string? ErrorMessage { get; set; }
+        public bool IsExplicitSupplierRejection { get; set; }
+        public bool IsAmbiguous { get; set; }
+        public string? ResponseJson { get; set; }
+    }
+
     public class SrdvBusBookingDetailsResponseDto
     {
         public bool Success { get; set; }

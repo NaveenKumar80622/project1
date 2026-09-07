@@ -16,6 +16,7 @@ namespace PickNBook.Api.Services
         Task<List<SrdvSeatDto>> GetSeatLayoutAsync(string traceId, int srdvIndex, string resultIndex, string? boardingPointId = null, string? droppingPointId = null);
         Task<string> GetSeatLayoutRawAsync(string traceId, int srdvIndex, string resultIndex, string? boardingPointId = null, string? droppingPointId = null);
         Task<(bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount)> CancelTicketAsync(string traceId, string seatName, string remark);
+        Task<SrdvBusCancelResponseDto> CancelTicketV9Async(long traceId, List<string> seatNames, string remarks);
         Task<string> SearchBusesProxyAsync(BusSearchProxyRequestDto request);
         Task<string> GetSeatLayoutProxyAsync(BusSeatLayoutProxyRequestDto request);
         Task<string> GetBoardingPointDetailsProxyAsync(BusBoardingPointsProxyRequestDto request);

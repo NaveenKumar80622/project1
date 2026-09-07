@@ -1149,7 +1149,8 @@ namespace PickNBook.Api.Controllers
 
         private static (bool IsConfirmed, decimal CancellationCharge, decimal RefundAmount) TryReconcileCancellationFromDetails(
             SrdvBusBookingDetailsResponseDto? details,
-            IEnumerable<string> targetSeatNumbers)
+            IEnumerable<string> targetSeatNumbers,
+            int? targetCancelId = null)
         {
             if (details == null || !details.Success || details.Result == null)
             {
@@ -1157,28 +1158,39 @@ namespace PickNBook.Api.Controllers
             }
 
             var seatsSet = new HashSet<string>(targetSeatNumbers.Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
-            if (seatsSet.Count == 0)
+            if (seatsSet.Count == 0 && (!targetCancelId.HasValue || targetCancelId.Value <= 0))
             {
                 return (false, 0m, 0m);
             }
 
             if (details.Result.Cancellations != null && details.Result.Cancellations.Any())
             {
-                // Correlate against the single cancellation record whose SeatName matches the current operation's target seats
-                var matchingCancellation = details.Result.Cancellations
-                    .OrderByDescending(c => c.CompletedAt ?? DateTime.MinValue)
-                    .FirstOrDefault(c =>
-                    {
-                        var isCancelled = string.Equals(c.Status, "Success", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
-                            || string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)
-                            || !string.IsNullOrWhiteSpace(c.SupplierCancelId);
+                // Prefer exact CancelId correlation if available
+                SrdvBusBookingDetailsCancellationDto? matchingCancellation = null;
+                if (targetCancelId.HasValue && targetCancelId.Value > 0)
+                {
+                    matchingCancellation = details.Result.Cancellations
+                        .FirstOrDefault(c => c.CancelId == targetCancelId.Value);
+                }
 
-                        if (!isCancelled || c.SeatName == null || c.SeatName.Count == 0) return false;
+                // Fallback to strict seat set matching on recent records
+                if (matchingCancellation == null && seatsSet.Count > 0)
+                {
+                    matchingCancellation = details.Result.Cancellations
+                        .OrderByDescending(c => c.CompletedAt ?? DateTime.MinValue)
+                        .FirstOrDefault(c =>
+                        {
+                            var isCancelled = string.Equals(c.Status, "Success", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)
+                                || !string.IsNullOrWhiteSpace(c.SupplierCancelId);
 
-                        var cSeats = new HashSet<string>(c.SeatName.Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
-                        return cSeats.SetEquals(seatsSet);
-                    });
+                            if (!isCancelled || c.SeatName == null || c.SeatName.Count == 0) return false;
+
+                            var cSeats = new HashSet<string>(c.SeatName.Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
+                            return cSeats.SetEquals(seatsSet);
+                        });
+                }
 
                 if (matchingCancellation != null)
                 {
@@ -1188,7 +1200,7 @@ namespace PickNBook.Api.Controllers
             }
 
             // Fallback: Check if passenger records confirm the cancellation status
-            if (details.Result.Passengers != null && details.Result.Passengers.Any())
+            if (seatsSet.Count > 0 && details.Result.Passengers != null && details.Result.Passengers.Any())
             {
                 var cancelledPax = details.Result.Passengers
                     .Where(p => !string.IsNullOrWhiteSpace(p.SeatName) && seatsSet.Contains(p.SeatName) &&
@@ -2039,148 +2051,85 @@ namespace PickNBook.Api.Controllers
 
                     decimal srdvCancellationCharge = 0m;
                     decimal srdvRefundAmount = 0m;
+                    bool requiresManualReview = false;
 
                     if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && !string.IsNullOrEmpty(booking.BusBooking.TraceId))
                     {
                         if (seatNumbers.Any())
                         {
-                            bool partialAllowed = false;
                             string actualTraceId = booking.BusBooking.TraceId ?? string.Empty;
+                            if (!long.TryParse(actualTraceId, out var parsedTraceId) || parsedTraceId <= 0)
+                            {
+                                throw new Exception("Invalid TraceId on booking.");
+                            }
 
-                            if (!string.IsNullOrWhiteSpace(booking.SrdvBookingResponseJson))
+                            var cancelRemarks = string.IsNullOrWhiteSpace(reason) ? "Cancelled by user" : reason.Trim();
+                            var v9Result = await _srdvBusService.CancelTicketV9Async(
+                                parsedTraceId,
+                                seatNumbers,
+                                cancelRemarks);
+
+                            if (v9Result.Success)
                             {
                                 try
                                 {
-                                    var j = System.Text.Json.JsonDocument.Parse(booking.SrdvBookingResponseJson);
-                                    if (j.RootElement.TryGetProperty("PartialCancellationAllowed", out var pc))
+                                    var details = await _srdvBusService.GetBookingDetailsAsync(actualTraceId);
+                                    var reconciled = TryReconcileCancellationFromDetails(details, seatNumbers, v9Result.CancelId);
+                                    if (reconciled.IsConfirmed)
                                     {
-                                        partialAllowed = pc.ValueKind == System.Text.Json.JsonValueKind.String 
-                                            ? pc.GetString()?.ToLower() == "true" 
-                                            : pc.GetBoolean();
-                                    }
-                                }
-                                catch { }
-                            }
-
-                            List<BusReservationPassenger> successfullyCancelledPassengers = new();
-                            if (partialAllowed)
-                            {
-                                foreach (var p in activePassengers)
-                                {
-                                    if (string.IsNullOrWhiteSpace(p.SeatNumber)) continue;
-                                    (bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount) cancelResult = default;
-                                    try
-                                    {
-                                        cancelResult = await _srdvBusService.CancelTicketAsync(
-                                            actualTraceId,
-                                            p.SeatNumber,
-                                            string.IsNullOrWhiteSpace(reason) ? "Cancelled by user" : reason.Trim());
-                                    }
-                                    catch (Exception cancelEx)
-                                    {
-                                        logger.LogWarning(cancelEx, "SRDV CancelTicketAsync failed or timed out for seat {SeatNumber}, TraceId {TraceId}. Checking BookingDetails.", p.SeatNumber, actualTraceId);
-                                    }
-
-                                    if (!cancelResult.Success)
-                                    {
-                                        try
-                                        {
-                                            var details = await _srdvBusService.GetBookingDetailsAsync(actualTraceId);
-                                            var reconciled = TryReconcileCancellationFromDetails(details, new[] { p.SeatNumber });
-                                            if (reconciled.IsConfirmed)
-                                            {
-                                                logger.LogInformation("BookingDetails confirmed cancellation for seat {SeatNumber}, TraceId {TraceId}.", p.SeatNumber, actualTraceId);
-                                                cancelResult = (true, string.Empty, reconciled.CancellationCharge, reconciled.RefundAmount);
-                                            }
-                                        }
-                                        catch (Exception detailsEx)
-                                        {
-                                            logger.LogWarning(detailsEx, "BookingDetails reconciliation failed for seat {SeatNumber}, TraceId {TraceId}.", p.SeatNumber, actualTraceId);
-                                        }
-                                    }
-                                    
-                                    if (cancelResult.Success)
-                                    {
-                                        successfullyCancelledPassengers.Add(p);
-                                        srdvCancellationCharge += cancelResult.CancellationCharge;
-                                        srdvRefundAmount += cancelResult.RefundAmount;
+                                        logger.LogInformation("BookingDetails confirmed full cancellation for seats {Seats}, TraceId {TraceId}.", string.Join(",", seatNumbers), actualTraceId);
+                                        srdvCancellationCharge = reconciled.CancellationCharge;
+                                        srdvRefundAmount = reconciled.RefundAmount;
                                     }
                                     else
                                     {
-                                        throw new Exception($"SRDV Provider Error: {cancelResult.ErrorMessage}");
+                                        srdvCancellationCharge = v9Result.CancellationCharge;
+                                        srdvRefundAmount = v9Result.RefundAmount;
                                     }
                                 }
-                                
-                                if (successfullyCancelledPassengers.Count == 0)
+                                catch (Exception detailsEx)
                                 {
-                                    throw new Exception("SRDV Provider failed to cancel the seats on their server.");
+                                    logger.LogWarning(detailsEx, "BookingDetails reconciliation lookup failed after successful cancel initiation for TraceId {TraceId}.", actualTraceId);
+                                    srdvCancellationCharge = v9Result.CancellationCharge;
+                                    srdvRefundAmount = v9Result.RefundAmount;
                                 }
-                                
-                                activePassengers = successfullyCancelledPassengers;
+                            }
+                            else if (v9Result.IsExplicitSupplierRejection)
+                            {
+                                throw new Exception($"SRDV Provider Error: {v9Result.ErrorMessage}");
                             }
                             else
                             {
-                                (bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount) cancelResult = default;
+                                logger.LogWarning("SRDV Cancel produced ambiguous response/timeout for TraceId {TraceId}. Reconciling via BookingDetails.", actualTraceId);
+                                bool confirmed = false;
                                 try
                                 {
-                                    cancelResult = await _srdvBusService.CancelTicketAsync(
-                                        actualTraceId,
-                                        string.Join(",", seatNumbers),
-                                        string.IsNullOrWhiteSpace(reason) ? "Cancelled by user" : reason.Trim());
-                                }
-                                catch (Exception cancelEx)
-                                {
-                                    logger.LogWarning(cancelEx, "SRDV CancelTicketAsync failed or timed out for seats {Seats}, TraceId {TraceId}. Checking BookingDetails.", string.Join(",", seatNumbers), actualTraceId);
-                                }
-
-                                if (!cancelResult.Success)
-                                {
-                                    try
+                                    var details = await _srdvBusService.GetBookingDetailsAsync(actualTraceId);
+                                    var reconciled = TryReconcileCancellationFromDetails(details, seatNumbers);
+                                    if (reconciled.IsConfirmed)
                                     {
-                                        var details = await _srdvBusService.GetBookingDetailsAsync(actualTraceId);
-                                        var reconciled = TryReconcileCancellationFromDetails(details, seatNumbers);
-                                        if (reconciled.IsConfirmed)
-                                        {
-                                            logger.LogInformation("BookingDetails confirmed full cancellation for seats {Seats}, TraceId {TraceId}.", string.Join(",", seatNumbers), actualTraceId);
-                                            cancelResult = (true, string.Empty, reconciled.CancellationCharge, reconciled.RefundAmount);
-                                        }
-                                    }
-                                    catch (Exception detailsEx)
-                                    {
-                                        logger.LogWarning(detailsEx, "BookingDetails reconciliation failed for full cancellation, TraceId {TraceId}.", actualTraceId);
+                                        confirmed = true;
+                                        srdvCancellationCharge = reconciled.CancellationCharge;
+                                        srdvRefundAmount = reconciled.RefundAmount;
+                                        logger.LogInformation("BookingDetails confirmed full cancellation following ambiguous cancel for TraceId {TraceId}.", actualTraceId);
                                     }
                                 }
-
-                                if (!cancelResult.Success)
+                                catch (Exception detailsEx)
                                 {
-                                    throw new Exception($"SRDV Provider Error: {cancelResult.ErrorMessage}");
+                                    logger.LogWarning(detailsEx, "BookingDetails reconciliation failed following ambiguous cancel for TraceId {TraceId}.", actualTraceId);
                                 }
-                                srdvCancellationCharge += cancelResult.CancellationCharge;
-                                srdvRefundAmount += cancelResult.RefundAmount;
+
+                                if (!confirmed)
+                                {
+                                    requiresManualReview = true;
+                                }
                             }
                         }
                     }
 
-                    bool requiresManualReview = false;
-                    if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && srdvCancellationCharge == 0 && srdvRefundAmount == 0)
+                    if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && !requiresManualReview && srdvCancellationCharge == 0 && srdvRefundAmount == 0)
                     {
-                        try
-                        {
-                            var details = await _srdvBusService.GetBookingDetailsAsync(booking.BusBooking.TraceId ?? string.Empty);
-                            var reconciled = TryReconcileCancellationFromDetails(details, seatNumbers);
-                            if (reconciled.IsConfirmed && (reconciled.CancellationCharge > 0 || reconciled.RefundAmount > 0))
-                            {
-                                srdvCancellationCharge = reconciled.CancellationCharge;
-                                srdvRefundAmount = reconciled.RefundAmount;
-                            }
-                        }
-                        catch { }
-
-                        if (srdvCancellationCharge == 0 && srdvRefundAmount == 0)
-                        {
-                            // DO NOT fabricate refunds. If both are 0, the SRDV response was likely ambiguous.
-                            requiresManualReview = true;
-                        }
+                        requiresManualReview = true;
                     }
 
 
@@ -2395,6 +2344,7 @@ namespace PickNBook.Api.Controllers
 
                     decimal srdvCancellationCharge = 0m;
                     decimal srdvRefundAmount = 0m;
+                    bool requiresManualReview = false;
 
                     if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && !string.IsNullOrEmpty(booking.BusBooking.TraceId))
                     {
@@ -2428,62 +2378,98 @@ namespace PickNBook.Api.Controllers
                                 throw new Exception("Cancelling the lead passenger will automatically cancel the entire booking on SRDV. If you want to cancel the entire booking, please use the Full Cancel button instead.");
                             }
 
-                            List<BusReservationPassenger> successfullyCancelledPassengers = new();
+                            var targetSeats = targetPassengers
+                                .Where(x => !string.IsNullOrWhiteSpace(x.SeatNumber))
+                                .Select(x => x.SeatNumber!.Trim())
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToList();
 
-                            foreach (var p in targetPassengers)
+                            if (targetSeats.Any())
                             {
-                                if (string.IsNullOrWhiteSpace(p.SeatNumber)) continue;
-                                (bool Success, string ErrorMessage, decimal CancellationCharge, decimal RefundAmount) cancelResult = default;
-                                try
+                                string actualTraceId = booking.BusBooking.TraceId ?? string.Empty;
+                                if (!long.TryParse(actualTraceId, out var parsedTraceId) || parsedTraceId <= 0)
                                 {
-                                    cancelResult = await _srdvBusService.CancelTicketAsync(
-                                        booking.BusBooking.TraceId ?? string.Empty,
-                                        p.SeatNumber,
-                                        "Partial passenger cancellation");
-                                }
-                                catch (Exception cancelEx)
-                                {
-                                    logger.LogWarning(cancelEx, "SRDV CancelTicketAsync failed or timed out for seat {SeatNumber}, TraceId {TraceId}. Checking BookingDetails.", p.SeatNumber, booking.BusBooking.TraceId);
+                                    throw new Exception("Invalid TraceId on booking.");
                                 }
 
-                                if (!cancelResult.Success)
+                                var partialRemarks = string.IsNullOrWhiteSpace(request.Reason) ? "Partial passenger cancellation" : request.Reason.Trim();
+                                var v9Result = await _srdvBusService.CancelTicketV9Async(
+                                    parsedTraceId,
+                                    targetSeats,
+                                    partialRemarks);
+
+                                if (v9Result.Success)
                                 {
                                     try
                                     {
-                                        var details = await _srdvBusService.GetBookingDetailsAsync(booking.BusBooking.TraceId ?? string.Empty);
-                                        var reconciled = TryReconcileCancellationFromDetails(details, new[] { p.SeatNumber });
+                                        var details = await _srdvBusService.GetBookingDetailsAsync(actualTraceId);
+                                        var reconciled = TryReconcileCancellationFromDetails(details, targetSeats, v9Result.CancelId);
                                         if (reconciled.IsConfirmed)
                                         {
-                                            logger.LogInformation("BookingDetails confirmed cancellation for seat {SeatNumber}, TraceId {TraceId}.", p.SeatNumber, booking.BusBooking.TraceId);
-                                            cancelResult = (true, string.Empty, reconciled.CancellationCharge, reconciled.RefundAmount);
+                                            logger.LogInformation("BookingDetails confirmed partial cancellation for seats {Seats}, TraceId {TraceId}.", string.Join(",", targetSeats), actualTraceId);
+                                            srdvCancellationCharge = reconciled.CancellationCharge;
+                                            srdvRefundAmount = reconciled.RefundAmount;
+                                        }
+                                        else
+                                        {
+                                            srdvCancellationCharge = v9Result.CancellationCharge;
+                                            srdvRefundAmount = v9Result.RefundAmount;
                                         }
                                     }
                                     catch (Exception detailsEx)
                                     {
-                                        logger.LogWarning(detailsEx, "BookingDetails reconciliation failed for seat {SeatNumber}, TraceId {TraceId}.", p.SeatNumber, booking.BusBooking.TraceId);
+                                        logger.LogWarning(detailsEx, "BookingDetails reconciliation failed for partial cancel, TraceId {TraceId}.", actualTraceId);
+                                        srdvCancellationCharge = v9Result.CancellationCharge;
+                                        srdvRefundAmount = v9Result.RefundAmount;
+                                    }
+
+                                    foreach (var p in targetPassengers)
+                                    {
+                                        p.IsCancelled = true;
+                                        p.CancelledAtUtc = DateTime.UtcNow;
                                     }
                                 }
-                                
-                                if (cancelResult.Success)
+                                else if (v9Result.IsExplicitSupplierRejection)
                                 {
-                                    successfullyCancelledPassengers.Add(p);
-                                    p.IsCancelled = true;
-                                    p.CancelledAtUtc = DateTime.UtcNow;
-                                    srdvCancellationCharge += cancelResult.CancellationCharge;
-                                    srdvRefundAmount += cancelResult.RefundAmount;
+                                    throw new Exception($"SRDV Provider Error: {v9Result.ErrorMessage}");
                                 }
                                 else
                                 {
-                                    throw new Exception($"SRDV Provider Error: {cancelResult.ErrorMessage}");
+                                    logger.LogWarning("SRDV Cancel produced ambiguous outcome for partial cancel, TraceId {TraceId}. Checking BookingDetails.", actualTraceId);
+                                    bool confirmed = false;
+                                    try
+                                    {
+                                        var details = await _srdvBusService.GetBookingDetailsAsync(actualTraceId);
+                                        var reconciled = TryReconcileCancellationFromDetails(details, targetSeats);
+                                        if (reconciled.IsConfirmed)
+                                        {
+                                            confirmed = true;
+                                            srdvCancellationCharge = reconciled.CancellationCharge;
+                                            srdvRefundAmount = reconciled.RefundAmount;
+                                            logger.LogInformation("BookingDetails confirmed partial cancellation following ambiguous outcome for TraceId {TraceId}.", actualTraceId);
+                                            foreach (var p in targetPassengers)
+                                            {
+                                                p.IsCancelled = true;
+                                                p.CancelledAtUtc = DateTime.UtcNow;
+                                            }
+                                        }
+                                    }
+                                    catch (Exception detailsEx)
+                                    {
+                                        logger.LogWarning(detailsEx, "BookingDetails lookup failed after ambiguous partial cancel for TraceId {TraceId}.", actualTraceId);
+                                    }
+
+                                    if (!confirmed)
+                                    {
+                                        requiresManualReview = true;
+                                        foreach (var p in targetPassengers)
+                                        {
+                                            p.IsCancelled = true;
+                                            p.CancelledAtUtc = DateTime.UtcNow;
+                                        }
+                                    }
                                 }
                             }
-                            
-                            if (successfullyCancelledPassengers.Count == 0)
-                            {
-                                throw new Exception("SRDV Provider failed to cancel the selected seats on their server.");
-                            }
-                            
-                            targetPassengers = successfullyCancelledPassengers;
                         }
                         else
                         {
@@ -2496,8 +2482,7 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
-                    bool requiresManualReview = false;
-                    if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && srdvCancellationCharge == 0 && srdvRefundAmount == 0)
+                    if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && !requiresManualReview && srdvCancellationCharge == 0 && srdvRefundAmount == 0)
                     {
                         try
                         {

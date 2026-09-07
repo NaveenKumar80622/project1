@@ -180,52 +180,44 @@ namespace PickNBook.Api.Controllers
 
                 var seatNumbers = activePassengers
                     .Where(x => !string.IsNullOrWhiteSpace(x.SeatNumber))
-                    .Select(x => x.SeatNumber!)
+                    .Select(x => x.SeatNumber!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
                 if (seatNumbers.Any())
                 {
-                    if (partialAllowed)
+                    if (!long.TryParse(actualTraceId, out var parsedTraceId) || parsedTraceId <= 0)
                     {
-                        List<BusReservationPassenger> successfullyCancelledPassengers = new();
-                        foreach (var p in activePassengers)
-                        {
-                            if (string.IsNullOrWhiteSpace(p.SeatNumber)) continue;
-
-                            var cancelResult = await srdvBusService.CancelTicketAsync(
-                                actualTraceId,
-                                p.SeatNumber,
-                                string.IsNullOrWhiteSpace(request.Reason) ? "Cancelled by admin" : request.Reason.Trim()
-                            );
-                            
-                            if (cancelResult.Success)
-                            {
-                                successfullyCancelledPassengers.Add(p);
-                            }
-                            else
-                            {
-                                throw new Exception($"SRDV Provider Error: {cancelResult.ErrorMessage}");
-                            }
-                        }
-
-                        if (successfullyCancelledPassengers.Count == 0)
-                        {
-                            throw new Exception("SRDV Provider failed to cancel the seats on their server.");
-                        }
-
-                        activePassengers = successfullyCancelledPassengers;
+                        throw new Exception("Invalid TraceId on booking.");
                     }
-                    else
-                    {
-                        var cancelResult = await srdvBusService.CancelTicketAsync(
-                            actualTraceId,
-                            string.Join(",", seatNumbers),
-                            string.IsNullOrWhiteSpace(request.Reason) ? "Cancelled by admin" : request.Reason.Trim()
-                        );
 
-                        if (!cancelResult.Success)
+                    var adminRemarks = string.IsNullOrWhiteSpace(request.Reason) ? "Cancelled by admin" : request.Reason.Trim();
+                    var v9Result = await srdvBusService.CancelTicketV9Async(
+                        parsedTraceId,
+                        seatNumbers,
+                        adminRemarks
+                    );
+
+                    if (!v9Result.Success)
+                    {
+                        if (v9Result.IsExplicitSupplierRejection)
                         {
-                            throw new Exception($"SRDV Provider Error: {cancelResult.ErrorMessage}");
+                            throw new Exception($"SRDV Provider Error: {v9Result.ErrorMessage}");
+                        }
+                        else
+                        {
+                            // Ambiguous outcome: check BookingDetails
+                            var details = await srdvBusService.GetBookingDetailsAsync(actualTraceId);
+                            var isConfirmed = details?.Result?.Cancellations != null && details.Result.Cancellations.Any(c =>
+                                (string.Equals(c.Status, "Success", StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(c.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(c.Status, "Completed", StringComparison.OrdinalIgnoreCase)) &&
+                                c.SeatName != null && new HashSet<string>(c.SeatName, StringComparer.OrdinalIgnoreCase).SetEquals(seatNumbers));
+
+                            if (!isConfirmed)
+                            {
+                                throw new Exception($"SRDV Cancel timed out or ambiguous. Please verify booking status manually. Error: {v9Result.ErrorMessage}");
+                            }
                         }
                     }
                 }
