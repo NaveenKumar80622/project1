@@ -1284,8 +1284,9 @@ namespace PickNBook.Api.Controllers
             if (string.IsNullOrWhiteSpace(request.PassengerPhone))
                 return BadRequest("PassengerPhone is required for contact.");
 
+            var leadPassenger = normalizedPassengers!.FirstOrDefault(p => p.LeadPassenger == true);
             var contactName = string.IsNullOrWhiteSpace(request.PassengerName)
-                ? normalizedPassengers![0].FullName
+                ? (leadPassenger?.FullName ?? normalizedPassengers![0].FullName)
                 : request.PassengerName.Trim();
 
             if (string.IsNullOrWhiteSpace(contactName))
@@ -1299,6 +1300,161 @@ namespace PickNBook.Api.Controllers
             if (!hasBlockKey)
             {
                 return BadRequest(new { message = "Seats have not been blocked or the block session has expired. Please block the seats before booking." });
+            }
+
+            // =========================================================================
+            // HARD DB-BACKED BOOK IDEMPOTENCY & RETRY GUARD
+            // =========================================================================
+            var existingReservation = await dbContext.BusReservations
+                .Include(r => r.BusBooking)
+                .FirstOrDefaultAsync(r => r.UserId == userId && r.BusBooking != null && r.BusBooking.TraceId == request.TraceId);
+
+            if (existingReservation != null)
+            {
+                // A) EXISTING SUCCESS (or Booked)
+                if (BusBookingStatus.IsConfirmed(existingReservation.Status))
+                {
+                    // Repair financial state if needed
+                    if (string.Equals(existingReservation.FinancialStatus, "DEBIT_FAILED_MANUAL_RECOVERY", StringComparison.OrdinalIgnoreCase)
+                        && User?.IsInRole(AuthRoles.Agent) == true
+                        && string.Equals(request.PaymentMethod, "Agent Wallet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            var walletService = HttpContext.RequestServices.GetRequiredService<IAgentWalletService>();
+                            await walletService.DebitWalletForBookingAsync(
+                                int.Parse(userId!),
+                                existingReservation.TotalPriceInr,
+                                existingReservation.BookingReference,
+                                "Bus",
+                                $"Bus Booking - {existingReservation.BusBooking?.FromCity} to {existingReservation.BusBooking?.ToCity} ({existingReservation.BusBooking?.OperatorName}) - Ref: {existingReservation.BookingReference}"
+                            );
+                            existingReservation.FinancialStatus = "DEDUCTED";
+                            await dbContext.SaveChangesAsync();
+                        }
+                        catch (Exception repairEx)
+                        {
+                            logger.LogError(repairEx, "Failed to repair wallet debit on Book retry for {BookingRef}", existingReservation.BookingReference);
+                        }
+                    }
+
+                    var existingPax = await dbContext.BusReservationPassengers
+                        .AsNoTracking()
+                        .Where(p => p.BusReservationId == existingReservation.Id)
+                        .OrderBy(p => p.Id)
+                        .ToListAsync();
+
+                    return Ok(MapBusReservation(existingReservation, existingReservation.BusBooking!, existingPax));
+                }
+
+                // B) MANUAL_CHECK_REQUIRED: Reconcile via BookingDetails; DO NOT call BookBusAsync again!
+                if (string.Equals(existingReservation.Status, BusBookingStatus.ManualCheckRequired, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.LogInformation("Existing booking in MANUAL_CHECK_REQUIRED found for TraceId {TraceId}. Attempting reconciliation via BookingDetails.", request.TraceId);
+                    SrdvBusBookingDetailsResponseDto? details = null;
+                    try
+                    {
+                        details = await _srdvBusService.GetBookingDetailsAsync(request.TraceId);
+                    }
+                    catch (Exception detailsEx)
+                    {
+                        logger.LogWarning(detailsEx, "BookingDetails reconciliation failed during Book retry for TraceId {TraceId}", request.TraceId);
+                    }
+
+                    if (details != null && details.Success && details.Result != null)
+                    {
+                        var status = details.Result.BookingStatus?.Trim();
+                        bool isConfirmed = string.Equals(status, "Success", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(status, "Confirmed", StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(status, "Booked", StringComparison.OrdinalIgnoreCase);
+
+                        if (isConfirmed)
+                        {
+                            existingReservation.Status = BusBookingStatus.Success;
+                            existingReservation.SrdvTicketNo = details.Result.TicketNo;
+                            existingReservation.Pnr = details.Result.TravelOperatorPNR ?? details.Result.TicketNo ?? existingReservation.Pnr;
+                            existingReservation.SrdvBookingId = details.Result.BookingId?.ToString();
+                            existingReservation.SrdvBookingResponseJson = details.ResponseJson;
+                            await dbContext.SaveChangesAsync();
+
+                            if (string.Equals(existingReservation.FinancialStatus, "DEDUCT_PENDING", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (User?.IsInRole(AuthRoles.Agent) == true && string.Equals(request.PaymentMethod, "Agent Wallet", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    try
+                                    {
+                                        var walletService = HttpContext.RequestServices.GetRequiredService<IAgentWalletService>();
+                                        await walletService.DebitWalletForBookingAsync(
+                                            int.Parse(userId!),
+                                            existingReservation.TotalPriceInr,
+                                            existingReservation.BookingReference,
+                                            "Bus",
+                                            $"Bus Booking - {existingReservation.BusBooking?.FromCity} to {existingReservation.BusBooking?.ToCity} ({existingReservation.BusBooking?.OperatorName}) - Ref: {existingReservation.BookingReference}"
+                                        );
+                                        existingReservation.FinancialStatus = "DEDUCTED";
+                                    }
+                                    catch (Exception wEx)
+                                    {
+                                        logger.LogError(wEx, "Wallet debit failed after reconciliation for {BookingRef}", existingReservation.BookingReference);
+                                        existingReservation.FinancialStatus = "DEBIT_FAILED_MANUAL_RECOVERY";
+                                    }
+                                    await dbContext.SaveChangesAsync();
+                                }
+                                else
+                                {
+                                    existingReservation.FinancialStatus = "DEDUCTED";
+                                    await dbContext.SaveChangesAsync();
+                                }
+                            }
+
+                            var existingPax = await dbContext.BusReservationPassengers
+                                .AsNoTracking()
+                                .Where(p => p.BusReservationId == existingReservation.Id)
+                                .OrderBy(p => p.Id)
+                                .ToListAsync();
+
+                            return Ok(MapBusReservation(existingReservation, existingReservation.BusBooking!, existingPax));
+                        }
+                    }
+
+                    return BadRequest(new
+                    {
+                        message = "MANUAL_CHECK_REQUIRED: Booking outcome is ambiguous and awaiting reconciliation.",
+                        Error = new
+                        {
+                            ErrorCode = 7033,
+                            ErrorMessage = "MANUAL_CHECK_REQUIRED: Booking outcome is ambiguous and awaiting reconciliation."
+                        }
+                    });
+                }
+
+                // C) BOOKING_IN_PROGRESS
+                if (string.Equals(existingReservation.Status, BusBookingStatus.BookingInProgress, StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new
+                    {
+                        message = "Concurrent booking operation already in progress for this workflow.",
+                        Error = new
+                        {
+                            ErrorCode = 7031,
+                            ErrorMessage = "Concurrent booking operation already in progress for this workflow."
+                        }
+                    });
+                }
+
+                // D) FAILED
+                if (string.Equals(existingReservation.Status, BusBookingStatus.Failed, StringComparison.OrdinalIgnoreCase))
+                {
+                    return BadRequest(new
+                    {
+                        message = $"SRDV Booking Failed: {existingReservation.CancellationReason ?? "Booking previously rejected"}",
+                        Error = new
+                        {
+                            ErrorCode = 7032,
+                            ErrorMessage = $"SRDV Booking Failed: {existingReservation.CancellationReason ?? "Booking previously rejected"}"
+                        }
+                    });
+                }
             }
 
             // Idempotency: return stored completed booking response if already completed
@@ -1599,7 +1755,7 @@ namespace PickNBook.Api.Controllers
                                 }
                             }
 
-                            bool isLead = p.LeadPassenger == true || (matchingBlockPax != null && matchingBlockPax.LeadPassenger == true);
+                            bool isLead = p.LeadPassenger == true;
                             int seatIndex = p.SeatIndex ?? matchingBlockPax?.SeatIndex ?? (pIdx + 1);
 
                             passengers.Add(new BusReservationPassenger
@@ -1617,7 +1773,9 @@ namespace PickNBook.Api.Controllers
                                 SeatType = layoutSeat!.SeatType,
                                 Age = p.Age,
                                 PublishedFareInr = blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare : blockedSeat.BaseFare,
-                                GstAmountInr = blockedSeat.GstAmount
+                                GstAmountInr = blockedSeat.GstAmount,
+                                TaxInr = blockedSeat.GstAmount,
+                                OfferedFareInr = blockedSeat.GrandTotal > 0 ? (blockedSeat.GrandTotal - blockedSeat.GstAmount) : (blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare - blockedSeat.DiscountAmount : blockedSeat.BaseFare)
                             });
                         }
                         dbContext.BusReservationPassengers.AddRange(passengers);
@@ -1763,14 +1921,27 @@ namespace PickNBook.Api.Controllers
                 }
 
                 // ========================================
-                // PHASE 3: OUTCOME TRANSITIONS & PERSISTENCE
+                // PHASE 3: LOCAL DATABASE (OUTCOME PERSISTENCE)
                 // ========================================
                 if (isAmbiguousOutcome && (srdvRes == null || !srdvRes.Success) && explicitFailureMessage == null)
                 {
                     logger.LogCritical("SRDV Booking outcome for TraceId {TraceId} is inconclusive after recovery. Flagging MANUAL_CHECK_REQUIRED.", bus.TraceId);
-                    reservation.Status = BusBookingStatus.ManualCheckRequired;
-                    reservation.FinancialStatus = "DEDUCT_PENDING";
-                    await dbContext.SaveChangesAsync();
+                    await strategy.ExecuteAsync(async () =>
+                    {
+                        await using var ambTx = await dbContext.Database.BeginTransactionAsync();
+                        try
+                        {
+                            reservation.Status = BusBookingStatus.ManualCheckRequired;
+                            reservation.FinancialStatus = "DEDUCT_PENDING";
+                            await dbContext.SaveChangesAsync();
+                            await ambTx.CommitAsync();
+                        }
+                        catch
+                        {
+                            await ambTx.RollbackAsync();
+                            throw;
+                        }
+                    });
 
                     return BadRequest(new
                     {
@@ -1786,27 +1957,40 @@ namespace PickNBook.Api.Controllers
                 if (explicitFailureMessage != null || (srdvRes != null && !srdvRes.Success))
                 {
                     var failMsg = explicitFailureMessage ?? srdvRes?.ErrorMessage ?? "SRDV Booking Failed";
-                    reservation.Status = BusBookingStatus.Failed;
-                    reservation.CancellationReason = failMsg;
-                    // Release/void pending financial reservation without wallet credit (funds were never debited)
-                    reservation.FinancialStatus = "VOIDED";
-
-                    if (!string.IsNullOrWhiteSpace(reservation.CouponCode))
+                    await strategy.ExecuteAsync(async () =>
                     {
-                        await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
-                            UPDATE bus_coupons
-                            SET UsedCount = CASE WHEN UsedCount > 0 THEN UsedCount - 1 ELSE 0 END
-                            WHERE CouponCode = {reservation.CouponCode}
-                        ");
-                    }
+                        await using var failTx = await dbContext.Database.BeginTransactionAsync();
+                        try
+                        {
+                            reservation.Status = BusBookingStatus.Failed;
+                            reservation.CancellationReason = failMsg;
+                            // Release/void pending financial reservation without wallet credit (funds were never debited)
+                            reservation.FinancialStatus = "VOIDED";
 
-                    var couponUsages = await dbContext.BusCouponUsages.Where(u => u.BusReservationId == reservation.Id).ToListAsync();
-                    foreach (var cu in couponUsages)
-                    {
-                        cu.BookingStatus = BusBookingStatus.Failed;
-                    }
+                            if (!string.IsNullOrWhiteSpace(reservation.CouponCode))
+                            {
+                                await dbContext.Database.ExecuteSqlInterpolatedAsync($@"
+                                    UPDATE bus_coupons
+                                    SET UsedCount = CASE WHEN UsedCount > 0 THEN UsedCount - 1 ELSE 0 END
+                                    WHERE CouponCode = {reservation.CouponCode}
+                                ");
+                            }
 
-                    await dbContext.SaveChangesAsync();
+                            var couponUsages = await dbContext.BusCouponUsages.Where(u => u.BusReservationId == reservation.Id).ToListAsync();
+                            foreach (var cu in couponUsages)
+                            {
+                                cu.BookingStatus = BusBookingStatus.Failed;
+                            }
+
+                            await dbContext.SaveChangesAsync();
+                            await failTx.CommitAsync();
+                        }
+                        catch
+                        {
+                            await failTx.RollbackAsync();
+                            throw;
+                        }
+                    });
 
                     return BadRequest(new
                     {
@@ -1819,18 +2003,40 @@ namespace PickNBook.Api.Controllers
                     });
                 }
 
-                reservation.Status = BusBookingStatus.Success;
-                if (srdvRes != null)
+                // Authoritative Supplier Confirmation: Commit Phase 3 in dedicated DB transaction
+                await strategy.ExecuteAsync(async () =>
                 {
-                    reservation.SrdvBookingId = srdvRes.SrdvBookingId;
-                    reservation.SrdvBookingResponseJson = srdvRes.ResponseJson;
-                    reservation.SrdvTicketNo = srdvRes.TicketNo;
-                    reservation.Pnr = srdvRes.TravelOperatorPNR ?? srdvRes.TicketNo ?? reservation.Pnr;
-                    bus.TraceId = !string.IsNullOrWhiteSpace(request.TraceId) ? request.TraceId : bus.TraceId;
-                }
+                    await using var phase3Tx = await dbContext.Database.BeginTransactionAsync();
+                    try
+                    {
+                        reservation.Status = BusBookingStatus.Success;
+                        if (srdvRes != null)
+                        {
+                            reservation.SrdvBookingId = srdvRes.SrdvBookingId;
+                            reservation.SrdvBookingResponseJson = srdvRes.ResponseJson;
+                            reservation.SrdvTicketNo = srdvRes.TicketNo;
+                            reservation.Pnr = srdvRes.TravelOperatorPNR ?? srdvRes.TicketNo ?? reservation.Pnr;
+                            bus.TraceId = !string.IsNullOrWhiteSpace(request.TraceId) ? request.TraceId : bus.TraceId;
+                        }
+
+                        var successCouponUsages = await dbContext.BusCouponUsages.Where(u => u.BusReservationId == reservation.Id).ToListAsync();
+                        foreach (var cu in successCouponUsages)
+                        {
+                            cu.BookingStatus = BusBookingStatus.Success;
+                        }
+
+                        await dbContext.SaveChangesAsync();
+                        await phase3Tx.CommitAsync();
+                    }
+                    catch
+                    {
+                        await phase3Tx.RollbackAsync();
+                        throw;
+                    }
+                });
 
                 // =========================================================================
-                // CRITICAL: EXECUTE WALLET DEBIT ONLY AFTER CONFIRMED SUPPLIER BOOK SUCCESS
+                // PHASE 4: FINANCIAL MOVEMENT (ONLY AFTER PHASE 3 CONFIRMATION COMMITTED!)
                 // =========================================================================
                 if (User?.IsInRole(AuthRoles.Agent) == true && string.Equals(request.PaymentMethod, "Agent Wallet", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1852,19 +2058,13 @@ namespace PickNBook.Api.Controllers
                         // DO NOT mark supplier booking FAILED - it is already confirmed on provider!
                         reservation.FinancialStatus = "DEBIT_FAILED_MANUAL_RECOVERY";
                     }
+                    await dbContext.SaveChangesAsync();
                 }
                 else
                 {
                     reservation.FinancialStatus = "DEDUCTED";
+                    await dbContext.SaveChangesAsync();
                 }
-
-                var successCouponUsages = await dbContext.BusCouponUsages.Where(u => u.BusReservationId == reservation.Id).ToListAsync();
-                foreach (var cu in successCouponUsages)
-                {
-                    cu.BookingStatus = BusBookingStatus.Success;
-                }
-
-                await dbContext.SaveChangesAsync();
 
                 var mappedResponse = MapBusReservation(reservation, bus, passengers);
                 var completedResponseJson = System.Text.Json.JsonSerializer.Serialize(mappedResponse);
@@ -2353,6 +2553,22 @@ namespace PickNBook.Api.Controllers
                             ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
                             : "PENDING");
 
+                    var activeSeatNames = curActive
+                        .Select(x => x.SeatNumber!.Trim())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    var requestedSeatNames = (seatNumbers ?? new List<string>())
+                        .Select(x => x.Trim())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    var calculatedCancellationType = (requestedSeatNames.Count == 0 || requestedSeatNames.SetEquals(activeSeatNames))
+                        ? "FULL"
+                        : "PARTIAL";
+
                     var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
                     {
                         BookingType = "Bus",
@@ -2371,7 +2587,7 @@ namespace PickNBook.Api.Controllers
                         CouponForfeited = calculatedRefund.CouponForfeited,
                         CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                         Status = auditStatus,
-                        CancellationType = "FULL",
+                        CancellationType = calculatedCancellationType,
                         RefundStatus = refundAuditStatus,
                         TraceId = cancelTraceId,
                         ProviderCancelId = v9Result?.CancelId,
@@ -2655,8 +2871,20 @@ namespace PickNBook.Api.Controllers
                         curBooking.SupplierCancelId = v9Result.SupplierCancelId;
                     }
 
-                    bool isAllActiveCancelled = curTarget.Count == curActiveCount;
-                    string cancellationType = isAllActiveCancelled ? "FULL" : "PARTIAL";
+                    var activeSeatNames = curPassengers
+                        .Where(x => !x.IsCancelled)
+                        .Select(x => x.SeatNumber!.Trim())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    var requestedSeatNames = curTarget
+                        .Select(x => x.SeatNumber!.Trim())
+                        .Where(x => !string.IsNullOrWhiteSpace(x))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    string cancellationType = requestedSeatNames.SetEquals(activeSeatNames) ? "FULL" : "PARTIAL";
                     string refundAuditStatus = requiresManualReview
                         ? "MANUAL_CHECK_REQUIRED"
                         : (cancellationConfirmed
@@ -3052,6 +3280,12 @@ namespace PickNBook.Api.Controllers
                 return "At least one passenger is required.";
             }
 
+            var leadCount = passengers.Count(p => p.LeadPassenger == true);
+            if (leadCount != 1)
+            {
+                return $"Exactly one passenger must be designated as the lead passenger (found {leadCount}).";
+            }
+
             normalizedPassengers = new List<CreateBusPassengerDto>();
             for (var i = 0; i < passengers.Count; i++)
             {
@@ -3083,9 +3317,17 @@ namespace PickNBook.Api.Controllers
                 normalizedPassengers.Add(new CreateBusPassengerDto
                 {
                     FullName = passenger.FullName.Trim(),
+                    Title = passenger.Title?.Trim(),
+                    FirstName = passenger.FirstName?.Trim(),
+                    LastName = passenger.LastName?.Trim(),
+                    LeadPassenger = passenger.LeadPassenger == true,
+                    SeatIndex = passenger.SeatIndex,
                     Gender = normalizedGender,
                     SeatNumber = normalizedSeat,
-                    Age=passenger.Age
+                    Age = passenger.Age,
+                    BaseFare = passenger.BaseFare,
+                    SeatType = passenger.SeatType,
+                    ExternalGst = passenger.ExternalGst
                 });
             }
 
@@ -3765,11 +4007,25 @@ Refund: ₹{currentRefundAmount}
                 string pLast = !string.IsNullOrWhiteSpace(p.LastName) ? p.LastName : (pFullName.Contains(' ') ? pFullName.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[1] : string.Empty);
                 string pTitle = p.Title ?? string.Empty;
 
-                decimal baseFare = blockedSeat != null && blockedSeat.BaseFare > 0 ? blockedSeat.BaseFare : p.BaseFareInr;
-                decimal publishedFare = blockedSeat != null && blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare : baseFare;
-                decimal offeredFare = blockedSeat != null && blockedSeat.GrandTotal > 0 ? (blockedSeat.GrandTotal - blockedSeat.GstAmount) : baseFare;
-                decimal gstAmount = blockedSeat != null ? blockedSeat.GstAmount : (booking.SeatsBooked > 0 ? (booking.GstAmountInr / booking.SeatsBooked) : 0m);
-                decimal tax = gstAmount;
+                decimal baseFare = (p.BaseFareInr > 0)
+                    ? p.BaseFareInr
+                    : (blockedSeat != null && blockedSeat.BaseFare > 0 ? blockedSeat.BaseFare : 0m);
+
+                decimal publishedFare = (p.PublishedFareInr.HasValue && p.PublishedFareInr.Value > 0)
+                    ? p.PublishedFareInr.Value
+                    : (blockedSeat != null && blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare : baseFare);
+
+                decimal offeredFare = (p.OfferedFareInr.HasValue && p.OfferedFareInr.Value > 0)
+                    ? p.OfferedFareInr.Value
+                    : (blockedSeat != null && blockedSeat.GrandTotal > 0
+                        ? (blockedSeat.GrandTotal - blockedSeat.GstAmount)
+                        : (blockedSeat != null && blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare - blockedSeat.DiscountAmount : publishedFare));
+
+                decimal gstAmount = p.GstAmountInr.HasValue
+                    ? p.GstAmountInr.Value
+                    : (blockedSeat != null ? blockedSeat.GstAmount : 0m);
+
+                decimal tax = p.TaxInr.HasValue ? p.TaxInr.Value : gstAmount;
 
                 return new SrdvBusBookingDetailsPassengerDto
                 {
@@ -4047,8 +4303,20 @@ Refund: ₹{currentRefundAmount}
                 logger.LogWarning(dEx, "Details reconciliation failed following V9 cancel for TraceId {TraceId}", traceIdStr);
             }
 
-            bool isFullCancellation = targetPassengers.Count == passengers.Count(p => !p.IsCancelled);
-            string cancellationType = isFullCancellation ? "FULL" : "PARTIAL";
+            var activeSeatNames = passengers
+                .Where(x => !x.IsCancelled)
+                .Select(x => x.SeatNumber!.Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var requestedSeatNames = seatNames
+                .Select(x => x.Trim())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            string cancellationType = requestedSeatNames.SetEquals(activeSeatNames) ? "FULL" : "PARTIAL";
 
             if (isAmbiguousCancel || (v9Result == null && !cancellationConfirmed))
             {

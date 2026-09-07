@@ -36,5 +36,11 @@ namespace PickNBook.Api.Models
 
         [NotMapped]
         public decimal? GstAmountInr { get; set; }
+
+        [NotMapped]
+        public decimal? TaxInr { get; set; }
+
+        [NotMapped]
+        public decimal? OfferedFareInr { get; set; }
     }
 }
