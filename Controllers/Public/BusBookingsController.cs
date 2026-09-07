@@ -634,7 +634,6 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPost("v9/Block")]
-        [HttpPost("v9/block")]
         [HttpPost("block")]
         [AllowAnonymous]
         [InjectClientIp]
