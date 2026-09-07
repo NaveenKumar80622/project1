@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations.Schema;
+
 namespace PickNBook.Api.Models
 {
     public class BusReservationPassenger
@@ -13,5 +15,26 @@ namespace PickNBook.Api.Models
         public int Age { get; set; }
         public bool IsCancelled { get; set; } = false;
         public DateTime? CancelledAtUtc { get; set; }
+
+        [NotMapped]
+        public string? Title { get; set; }
+
+        [NotMapped]
+        public string? FirstName { get; set; }
+
+        [NotMapped]
+        public string? LastName { get; set; }
+
+        [NotMapped]
+        public bool LeadPassenger { get; set; } = false;
+
+        [NotMapped]
+        public int? SeatIndex { get; set; }
+
+        [NotMapped]
+        public decimal? PublishedFareInr { get; set; }
+
+        [NotMapped]
+        public decimal? GstAmountInr { get; set; }
     }
 }

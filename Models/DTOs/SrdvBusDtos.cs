@@ -83,6 +83,7 @@ namespace PickNBook.Api.Models.DTOs
         public string ContactNo { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
         public bool? LeadPassenger { get; set; }
+        public int? SeatIndex { get; set; }
         
         public string? IdType { get; set; }
         public string? IdNumber { get; set; }

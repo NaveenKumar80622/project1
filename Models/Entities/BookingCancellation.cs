@@ -90,5 +90,11 @@ namespace PickNBook.Api.Models.Entities
 
         [NotMapped]
         public string? SeatNamesJson { get; set; }
+
+        [NotMapped]
+        public string? CancellationType { get; set; } // "FULL" or "PARTIAL"
+
+        [NotMapped]
+        public string? RefundStatus { get; set; } // "PENDING", "NOT_REQUIRED", "COMPLETED", "FAILED"
     }
 }

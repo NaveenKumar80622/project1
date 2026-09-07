@@ -116,6 +116,11 @@ public class CreateBusBookingRequestDto
 public class CreateBusPassengerDto
 {
     public string FullName { get; set; } = string.Empty;
+    public string? Title { get; set; }
+    public string? FirstName { get; set; }
+    public string? LastName { get; set; }
+    public bool? LeadPassenger { get; set; }
+    public int? SeatIndex { get; set; }
     public string Gender { get; set; } = string.Empty;
     public string? SeatNumber { get; set; }
     public int Age { get; set; }

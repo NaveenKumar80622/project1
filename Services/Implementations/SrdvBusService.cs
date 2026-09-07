@@ -264,7 +264,7 @@ namespace PickNBook.Api.Services
             {
                 var traceIdProp = json.RootElement.GetProperty("TraceId");
                 var traceId = traceIdProp.ValueKind == JsonValueKind.Number 
-                    ? traceIdProp.GetInt32().ToString() 
+                    ? traceIdProp.GetInt64().ToString() 
                     : traceIdProp.GetString() ?? string.Empty;
 
                 if (json.RootElement.TryGetProperty("Result", out var results) && results.ValueKind == JsonValueKind.Array)
