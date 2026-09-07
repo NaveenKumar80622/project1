@@ -67,5 +67,32 @@ namespace PickNBook.Api.Models
         public DateTime? BoardingPointTime { get; set; }
         public string? DroppingPointName { get; set; }
         public DateTime? DroppingPointTime { get; set; }
+
+        // State Machine & Financial Correlation Fields
+        public string? FinancialStatus { get; set; }
+        public long? ProviderCancelId { get; set; }
+        public string? SupplierCancelId { get; set; }
+    }
+
+    public static class BusBookingStatus
+    {
+        public const string Pending = "PENDING";
+        public const string Blocked = "BLOCKED";
+        public const string BookingInProgress = "BOOKING_IN_PROGRESS";
+        public const string Success = "SUCCESS";
+        public const string Booked = "Booked"; // Legacy alias
+        public const string Failed = "FAILED";
+        public const string ManualCheckRequired = "MANUAL_CHECK_REQUIRED";
+        public const string CancelInProcess = "CANCEL_IN_PROCESS";
+        public const string Cancelled = "Cancelled";
+        public const string PartiallyCancelled = "Partially Cancelled";
+
+        public static bool IsConfirmed(string? status) =>
+            string.Equals(status, Success, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, Booked, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(status, "Confirmed", StringComparison.OrdinalIgnoreCase);
+
+        public static bool IsCancelled(string? status) =>
+            string.Equals(status, Cancelled, StringComparison.OrdinalIgnoreCase);
     }
 }

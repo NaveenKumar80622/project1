@@ -125,10 +125,10 @@ namespace PickNBook.Api.Models.DTOs
     public class BusSearchProxyRequestDto
     {
         [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
-        public int FromCityCode { get; set; }
+        public long FromCityCode { get; set; }
 
         [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
-        public int ToCityCode { get; set; }
+        public long ToCityCode { get; set; }
 
         public string DepartDate { get; set; } = string.Empty; // Format: YYYY-MM-DD
     }
@@ -154,11 +154,31 @@ namespace PickNBook.Api.Models.DTOs
         public string Remarks { get; set; } = string.Empty;
     }
 
+    public class BusCancelV9RequestDto
+    {
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+        public List<string>? SeatName { get; set; }
+        public List<string>? SeatNames { get => SeatName; set => SeatName = value; }
+        public string? SeatId { get; set; } // Legacy alias (e.g. "1,2")
+        public string? Remarks { get; set; }
+        public string? Remark { get; set; } // Legacy alias
+        public string? BookingId { get; set; } // Detected & rejected per V9 spec
+        public string? BusId { get; set; }     // Detected & rejected per V9 spec
+    }
+
+    public class BusBookingDetailsQueryRequestDto
+    {
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+    }
+
     public class SrdvBusCancelResponseDto
     {
         public bool Success { get; set; }
         public string? Status { get; set; }
-        public int? CancelId { get; set; }
+        public long? CancelId { get; set; }
+        public string? SupplierCancelId { get; set; }
         public decimal CancellationCharge { get; set; }
         public decimal RefundAmount { get; set; }
         public int ErrorCode { get; set; }
@@ -185,9 +205,9 @@ namespace PickNBook.Api.Models.DTOs
 
     public class SrdvBusBookingDetailsResultDto
     {
-        public int SrdvIndex { get; set; }
+        public long SrdvIndex { get; set; }
         public string? ResultIndex { get; set; }
-        public int? BookingId { get; set; }
+        public long? BookingId { get; set; }
         public string? RefId { get; set; }
         public string? BookingStatus { get; set; }
         public string? TicketNo { get; set; }
@@ -227,7 +247,7 @@ namespace PickNBook.Api.Models.DTOs
 
     public class SrdvBusBookingDetailsCancellationDto
     {
-        public int? CancelId { get; set; }
+        public long? CancelId { get; set; }
         public string? Status { get; set; }
         public string? CancellationType { get; set; }
         public List<string> SeatName { get; set; } = new();

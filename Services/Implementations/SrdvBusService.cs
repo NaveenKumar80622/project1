@@ -91,11 +91,12 @@ namespace PickNBook.Api.Services
             }
         }
 
+        private readonly BusCityCacheService? _cityCache;
+
         private string MapCityNameToCode(string cityName)
         {
             if (string.IsNullOrWhiteSpace(cityName)) return cityName;
-            if (int.TryParse(cityName, out _)) return cityName;
-
+            if (_cityCache != null) return _cityCache.MapCityNameToCode(cityName);
             EnsureCityMappingLoaded();
 
             if (_cityMapping != null && _cityMapping.TryGetValue(cityName, out var code))
@@ -109,6 +110,7 @@ namespace PickNBook.Api.Services
         public string MapCityCodeToName(string cityCode)
         {
             if (string.IsNullOrWhiteSpace(cityCode)) return cityCode;
+            if (_cityCache != null) return _cityCache.MapCityCodeToName(cityCode);
             EnsureCityMappingLoaded();
 
             if (_busCitiesList != null)
@@ -120,7 +122,7 @@ namespace PickNBook.Api.Services
             return cityCode;
         }
 
-        public SrdvBusService(HttpClient httpClient, IOptions<SrdvSettings> settings, IMemoryCache cache, IServiceScopeFactory scopeFactory)
+        public SrdvBusService(HttpClient httpClient, IOptions<SrdvSettings> settings, IMemoryCache cache, IServiceScopeFactory scopeFactory, BusCityCacheService? cityCache = null)
         {
             _httpClient = httpClient;
             _httpClient.Timeout = TimeSpan.FromSeconds(180); // Increased from 60s to handle slow responses
@@ -128,6 +130,7 @@ namespace PickNBook.Api.Services
             _settings = settings.Value;
             _cache = cache;
             _scopeFactory = scopeFactory;
+            _cityCache = cityCache;
 
             if (!string.IsNullOrEmpty(ApiToken))
             {
@@ -218,8 +221,8 @@ namespace PickNBook.Api.Services
         {
             var fromCodeStr = MapCityNameToCode(originId);
             var toCodeStr = MapCityNameToCode(destinationId);
-            _ = int.TryParse(fromCodeStr, out var fromCode);
-            _ = int.TryParse(toCodeStr, out var toCode);
+            _ = long.TryParse(fromCodeStr, out var fromCode);
+            _ = long.TryParse(toCodeStr, out var toCode);
 
             if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
             {
@@ -1007,7 +1010,7 @@ namespace PickNBook.Api.Services
             {
                 var root = json.RootElement;
                 string? status = null;
-                int? cancelId = null;
+                long? cancelId = null;
                 int errCode = 0;
                 string? errMsg = null;
                 decimal cancellationCharge = 0m;
@@ -1021,9 +1024,15 @@ namespace PickNBook.Api.Services
                 if (root.TryGetProperty("CancelId", out var cidProp))
                 {
                     if (cidProp.ValueKind == JsonValueKind.Number)
-                        cancelId = cidProp.GetInt32();
-                    else if (cidProp.ValueKind == JsonValueKind.String && int.TryParse(cidProp.GetString(), out var parsedCid))
+                        cancelId = cidProp.GetInt64();
+                    else if (cidProp.ValueKind == JsonValueKind.String && long.TryParse(cidProp.GetString(), out var parsedCid))
                         cancelId = parsedCid;
+                }
+
+                string? supplierCancelId = null;
+                if (root.TryGetProperty("SupplierCancelId", out var scidProp))
+                {
+                    supplierCancelId = scidProp.ValueKind == JsonValueKind.String ? scidProp.GetString() : scidProp.ToString();
                 }
 
                 if (root.TryGetProperty("Error", out var errorProp) && errorProp.ValueKind == JsonValueKind.Object)
@@ -1062,6 +1071,7 @@ namespace PickNBook.Api.Services
 
                 dto.Status = status;
                 dto.CancelId = cancelId;
+                dto.SupplierCancelId = supplierCancelId;
                 dto.ErrorCode = errCode;
                 dto.ErrorMessage = errMsg;
                 dto.CancellationCharge = cancellationCharge;
@@ -1234,14 +1244,14 @@ namespace PickNBook.Api.Services
 
                     if (resProp.TryGetProperty("SrdvIndex", out var sIdx))
                     {
-                        if (sIdx.ValueKind == JsonValueKind.Number) resultDto.SrdvIndex = sIdx.GetInt32();
-                        else if (sIdx.ValueKind == JsonValueKind.String && int.TryParse(sIdx.GetString(), out var parsedSIdx)) resultDto.SrdvIndex = parsedSIdx;
+                        if (sIdx.ValueKind == JsonValueKind.Number) resultDto.SrdvIndex = sIdx.GetInt64();
+                        else if (sIdx.ValueKind == JsonValueKind.String && long.TryParse(sIdx.GetString(), out var parsedSIdx)) resultDto.SrdvIndex = parsedSIdx;
                     }
                     if (resProp.TryGetProperty("ResultIndex", out var rIdx)) resultDto.ResultIndex = rIdx.GetString();
                     if (resProp.TryGetProperty("BookingId", out var bId))
                     {
-                        if (bId.ValueKind == JsonValueKind.Number) resultDto.BookingId = bId.GetInt32();
-                        else if (bId.ValueKind == JsonValueKind.String && int.TryParse(bId.GetString(), out var parsedBId)) resultDto.BookingId = parsedBId;
+                        if (bId.ValueKind == JsonValueKind.Number) resultDto.BookingId = bId.GetInt64();
+                        else if (bId.ValueKind == JsonValueKind.String && long.TryParse(bId.GetString(), out var parsedBId)) resultDto.BookingId = parsedBId;
                     }
                     if (resProp.TryGetProperty("RefId", out var refId)) resultDto.RefId = refId.GetString();
                     if (resProp.TryGetProperty("BookingStatus", out var bStatus)) resultDto.BookingStatus = bStatus.GetString();
@@ -1348,8 +1358,8 @@ namespace PickNBook.Api.Services
                             var cDto = new SrdvBusBookingDetailsCancellationDto();
                             if (cx.TryGetProperty("CancelId", out var cid))
                             {
-                                if (cid.ValueKind == JsonValueKind.Number) cDto.CancelId = cid.GetInt32();
-                                else if (cid.ValueKind == JsonValueKind.String && int.TryParse(cid.GetString(), out var parsedCid)) cDto.CancelId = parsedCid;
+                                if (cid.ValueKind == JsonValueKind.Number) cDto.CancelId = cid.GetInt64();
+                                else if (cid.ValueKind == JsonValueKind.String && long.TryParse(cid.GetString(), out var parsedCid)) cDto.CancelId = parsedCid;
                             }
                             if (cx.TryGetProperty("Status", out var cst)) cDto.Status = cst.GetString();
                             if (cx.TryGetProperty("CancellationType", out var ct)) cDto.CancellationType = ct.GetString();

@@ -19,6 +19,9 @@ namespace PickNBook.Api.Services
         private readonly IServiceScopeFactory _scopeFactory;
 
         public List<PlaceSuggestionDto> BusCities { get; private set; } = new();
+        private HashSet<long> _validCityIds = new();
+        private Dictionary<long, string> _cityIdToName = new();
+        private Dictionary<string, long> _cityNameToId = new(StringComparer.OrdinalIgnoreCase);
 
         public BusCityCacheService(ILogger<BusCityCacheService> logger, IServiceScopeFactory scopeFactory)
         {
@@ -26,7 +29,12 @@ namespace PickNBook.Api.Services
             _scopeFactory = scopeFactory;
         }
 
-        public async Task StartAsync(CancellationToken cancellationToken)
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            return ReloadAsync(cancellationToken);
+        }
+
+        public async Task ReloadAsync(CancellationToken cancellationToken = default)
         {
             _logger.LogInformation("Loading SRDV Bus City Code Cache from database...");
 
@@ -34,11 +42,36 @@ namespace PickNBook.Api.Services
             {
                 using var scope = _scopeFactory.CreateScope();
                 var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                var cities = await dbContext.BusCities
+                var dbCities = await dbContext.BusCities
                     .AsNoTracking()
                     .Where(c => c.IsActive)
                     .OrderBy(c => c.CityName)
-                    .Select(c => new PlaceSuggestionDto
+                    .ToListAsync(cancellationToken);
+
+                var cities = new List<PlaceSuggestionDto>(dbCities.Count);
+                var validIds = new HashSet<long>(dbCities.Count);
+                var idToName = new Dictionary<long, string>(dbCities.Count);
+                var nameToId = new Dictionary<string, long>(dbCities.Count * 2, StringComparer.OrdinalIgnoreCase);
+
+                foreach (var c in dbCities)
+                {
+                    validIds.Add(c.CityId);
+                    idToName[c.CityId] = c.CityName;
+                    
+                    if (!string.IsNullOrWhiteSpace(c.CityName))
+                    {
+                        if (!nameToId.ContainsKey(c.CityName))
+                        {
+                            nameToId[c.CityName] = c.CityId;
+                        }
+                        var cleanName = c.CityName.Split('(')[0].Trim();
+                        if (!string.IsNullOrWhiteSpace(cleanName) && !nameToId.ContainsKey(cleanName))
+                        {
+                            nameToId[cleanName] = c.CityId;
+                        }
+                    }
+
+                    cities.Add(new PlaceSuggestionDto
                     {
                         CityName = c.CityName,
                         CityCode = c.CityId.ToString(),
@@ -47,16 +80,46 @@ namespace PickNBook.Api.Services
                         CountryName = c.CountryName,
                         TripType = "bus",
                         UsageCount = 1
-                    })
-                    .ToListAsync(cancellationToken);
+                    });
+                }
 
                 BusCities = cities;
+                _validCityIds = validIds;
+                _cityIdToName = idToName;
+                _cityNameToId = nameToId;
+
                 _logger.LogInformation($"Loaded {BusCities.Count} Bus City Codes from Database.");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to load bus city code cache from database.");
             }
+        }
+
+        public bool IsValidCity(long cityId)
+        {
+            return cityId > 0 && _validCityIds.Contains(cityId);
+        }
+
+        public string MapCityCodeToName(string cityCode)
+        {
+            if (string.IsNullOrWhiteSpace(cityCode)) return cityCode;
+            if (long.TryParse(cityCode, out var cid) && _cityIdToName.TryGetValue(cid, out var name))
+            {
+                return name;
+            }
+            return cityCode;
+        }
+
+        public string MapCityNameToCode(string cityName)
+        {
+            if (string.IsNullOrWhiteSpace(cityName)) return cityName;
+            if (long.TryParse(cityName, out _)) return cityName;
+            if (_cityNameToId.TryGetValue(cityName, out var cid))
+            {
+                return cid.ToString();
+            }
+            return cityName;
         }
 
         public List<PlaceSuggestionDto> SearchCities(string query, int limit = 20)
