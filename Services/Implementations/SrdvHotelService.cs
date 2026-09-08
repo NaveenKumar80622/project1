@@ -1352,12 +1352,12 @@ namespace PickNBook.Api.Services
                         return responseDto;
                     }
 
-                    if (target.TryGetProperty("SrdvType", out var stProp)) resDto.SrdvType = stProp.GetString() ?? "MixAPI";
-                    if (target.TryGetProperty("ResultIndex", out var riProp)) resDto.ResultIndex = riProp.GetString() ?? request.ResultIndex;
-                    if (target.TryGetProperty("SrdvIndex", out var siProp)) resDto.SrdvIndex = siProp.GetString() ?? "15";
+                    if (target.TryGetProperty("SrdvType", out var stProp)) resDto.SrdvType = SafeGetString(target, "SrdvType", "MixAPI");
+                    if (target.TryGetProperty("ResultIndex", out var riProp)) resDto.ResultIndex = SafeGetString(target, "ResultIndex", request.ResultIndex);
+                    if (target.TryGetProperty("SrdvIndex", out var siProp)) resDto.SrdvIndex = SafeGetString(target, "SrdvIndex", "15");
                     if (target.TryGetProperty("TraceId", out var tiProp))
                     {
-                        resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId.ToString());
+                        resDto.TraceId = SafeGetString(target, "TraceId", request.TraceId.ToString());
                     }
                     if (target.TryGetProperty("IsPolicyPerStay", out var ipProp) && (ipProp.ValueKind == JsonValueKind.True || ipProp.ValueKind == JsonValueKind.False)) resDto.IsPolicyPerStay = ipProp.GetBoolean();
                     if (target.TryGetProperty("IsUnderCancellationAllowed", out var icProp) && (icProp.ValueKind == JsonValueKind.True || icProp.ValueKind == JsonValueKind.False)) resDto.IsUnderCancellationAllowed = icProp.GetBoolean();
@@ -1381,28 +1381,25 @@ namespace PickNBook.Api.Services
                     var rmDto = new HotelRoomDetailItemDto();
                     if (rmElem.ValueKind != JsonValueKind.Object) return rmDto;
 
-                    if (rmElem.TryGetProperty("OptionId", out var optProp))
-                    {
-                        rmDto.OptionId = optProp.ValueKind == JsonValueKind.Number ? optProp.GetRawText() : (optProp.GetString() ?? "");
-                    }
+                    rmDto.OptionId = SafeGetString(rmElem, "OptionId", "");
                     if (rmElem.TryGetProperty("ChildCount", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number) rmDto.ChildCount = ccProp.GetInt32();
                     if (rmElem.TryGetProperty("RequireAllPaxDetails", out var rapProp) && (rapProp.ValueKind == JsonValueKind.True || rapProp.ValueKind == JsonValueKind.False)) rmDto.RequireAllPaxDetails = rapProp.GetBoolean();
-                    if (rmElem.TryGetProperty("RoomId", out var ridProp)) rmDto.RoomId = ridProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("RoomStatus", out var rsProp)) rmDto.RoomStatus = rsProp.GetString() ?? "Active";
-                    if (rmElem.TryGetProperty("RoomIndex", out var ridxProp)) rmDto.RoomIndex = ridxProp.ValueKind == JsonValueKind.Number ? ridxProp.GetRawText() : (ridxProp.GetString() ?? "");
-                    if (rmElem.TryGetProperty("RoomTypeCode", out var rtcProp)) rmDto.RoomTypeCode = rtcProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("RoomTypeName", out var rtnProp)) rmDto.RoomTypeName = rtnProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("RoomTypeCategory", out var rtcatProp)) rmDto.RoomTypeCategory = rtcatProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("RatePlanCode", out var rpcProp)) rmDto.RatePlanCode = rpcProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("RatePlan", out var rpProp)) rmDto.RatePlan = rpProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("InfoSource", out var isProp)) rmDto.InfoSource = isProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("SequenceNo", out var snProp)) rmDto.SequenceNo = snProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("SupplierPrice", out var spProp)) rmDto.SupplierPrice = spProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("RoomPromotion", out var rp2Prop)) rmDto.RoomPromotion = rp2Prop.GetString() ?? "";
-                    if (rmElem.TryGetProperty("SmokingPreference", out var smkProp)) rmDto.SmokingPreference = smkProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("BedTypes", out var btProp)) rmDto.BedTypes = btProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("HotelSupplements", out var hsProp)) rmDto.HotelSupplements = hsProp.GetString() ?? "";
-                    if (rmElem.TryGetProperty("LastCancellationDate", out var lcdProp)) rmDto.LastCancellationDate = lcdProp.GetString() ?? "";
+                    rmDto.RoomId = SafeGetString(rmElem, "RoomId", "");
+                    rmDto.RoomStatus = SafeGetString(rmElem, "RoomStatus", "Active");
+                    rmDto.RoomIndex = SafeGetString(rmElem, "RoomIndex", "");
+                    rmDto.RoomTypeCode = SafeGetString(rmElem, "RoomTypeCode", "");
+                    rmDto.RoomTypeName = SafeGetString(rmElem, "RoomTypeName", "");
+                    rmDto.RoomTypeCategory = SafeGetString(rmElem, "RoomTypeCategory", "");
+                    rmDto.RatePlanCode = SafeGetString(rmElem, "RatePlanCode", "");
+                    rmDto.RatePlan = SafeGetString(rmElem, "RatePlan", "");
+                    rmDto.InfoSource = SafeGetString(rmElem, "InfoSource", "");
+                    rmDto.SequenceNo = SafeGetString(rmElem, "SequenceNo", "");
+                    rmDto.SupplierPrice = SafeGetString(rmElem, "SupplierPrice", "");
+                    rmDto.RoomPromotion = SafeGetString(rmElem, "RoomPromotion", "");
+                    rmDto.SmokingPreference = SafeGetString(rmElem, "SmokingPreference", "");
+                    rmDto.BedTypes = SafeGetString(rmElem, "BedTypes", "");
+                    rmDto.HotelSupplements = SafeGetString(rmElem, "HotelSupplements", "");
+                    rmDto.LastCancellationDate = SafeGetString(rmElem, "LastCancellationDate", "");
                     if (rmElem.TryGetProperty("IsPassportMandatory", out var ipmProp) && (ipmProp.ValueKind == JsonValueKind.True || ipmProp.ValueKind == JsonValueKind.False)) rmDto.IsPassportMandatory = ipmProp.GetBoolean();
                     if (rmElem.TryGetProperty("IsPANMandatory", out var ipanProp) && (ipanProp.ValueKind == JsonValueKind.True || ipanProp.ValueKind == JsonValueKind.False)) rmDto.IsPANMandatory = ipanProp.GetBoolean();
                     if (rmElem.TryGetProperty("FullRefundAllowed", out var fraProp) && (fraProp.ValueKind == JsonValueKind.True || fraProp.ValueKind == JsonValueKind.False)) rmDto.FullRefundAllowed = fraProp.GetBoolean();
@@ -1812,33 +1809,30 @@ namespace PickNBook.Api.Services
                     foreach (var rmElem in roomsDetailsProp.EnumerateArray())
                     {
                         var rmDto = new BlockRoomDetailItemDto();
-                        if (rmElem.TryGetProperty("OptionId", out var optProp))
-                        {
-                            rmDto.OptionId = optProp.ValueKind == JsonValueKind.Number ? optProp.GetRawText() : (optProp.GetString() ?? "");
-                        }
+                        rmDto.OptionId = SafeGetString(rmElem, "OptionId", "");
                         if (rmElem.TryGetProperty("ChildCount", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number) rmDto.ChildCount = ccProp.GetInt32();
                         if (rmElem.TryGetProperty("RequireAllPaxDetails", out var rapProp) && (rapProp.ValueKind == JsonValueKind.True || rapProp.ValueKind == JsonValueKind.False)) rmDto.RequireAllPaxDetails = rapProp.GetBoolean();
-                        if (rmElem.TryGetProperty("RoomId", out var ridProp)) rmDto.RoomId = ridProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("RoomStatus", out var rStatProp)) rmDto.RoomStatus = rStatProp.GetString() ?? "Active";
-                        if (rmElem.TryGetProperty("RoomIndex", out var ridxProp)) rmDto.RoomIndex = ridxProp.ValueKind == JsonValueKind.Number ? ridxProp.GetRawText() : (ridxProp.GetString() ?? "");
-                        if (rmElem.TryGetProperty("RoomTypeCode", out var rtcProp)) rmDto.RoomTypeCode = rtcProp.ValueKind == JsonValueKind.Number ? rtcProp.GetRawText() : (rtcProp.GetString() ?? "1");
-                        if (rmElem.TryGetProperty("RoomTypeName", out var rtnProp)) rmDto.RoomTypeName = rtnProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("RatePlanCode", out var rpcProp)) rmDto.RatePlanCode = rpcProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("RatePlan", out var rpProp)) rmDto.RatePlan = rpProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("InfoSource", out var isProp)) rmDto.InfoSource = isProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("SequenceNo", out var snProp)) rmDto.SequenceNo = snProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("SupplierPrice", out var spProp)) rmDto.SupplierPrice = spProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("RoomPromotion", out var rp2Prop)) rmDto.RoomPromotion = rp2Prop.GetString() ?? "";
-                        if (rmElem.TryGetProperty("SmokingPreference", out var smkProp)) rmDto.SmokingPreference = smkProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("BedTypes", out var btProp)) rmDto.BedTypes = btProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("HotelSupplements", out var hsProp)) rmDto.HotelSupplements = hsProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("LastCancellationDate", out var lcdProp)) rmDto.LastCancellationDate = lcdProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("BedTypeCode", out var btcProp)) rmDto.BedTypeCode = btcProp.GetString() ?? "";
-                        if (rmElem.TryGetProperty("Supplements", out var supProp)) rmDto.Supplements = supProp.GetString() ?? "";
+                        rmDto.RoomId = SafeGetString(rmElem, "RoomId", "");
+                        rmDto.RoomStatus = SafeGetString(rmElem, "RoomStatus", "Active");
+                        rmDto.RoomIndex = SafeGetString(rmElem, "RoomIndex", "");
+                        rmDto.RoomTypeCode = SafeGetString(rmElem, "RoomTypeCode", "1");
+                        rmDto.RoomTypeName = SafeGetString(rmElem, "RoomTypeName", "");
+                        rmDto.RatePlanCode = SafeGetString(rmElem, "RatePlanCode", "");
+                        rmDto.RatePlan = SafeGetString(rmElem, "RatePlan", "");
+                        rmDto.InfoSource = SafeGetString(rmElem, "InfoSource", "");
+                        rmDto.SequenceNo = SafeGetString(rmElem, "SequenceNo", "");
+                        rmDto.SupplierPrice = SafeGetString(rmElem, "SupplierPrice", "");
+                        rmDto.RoomPromotion = SafeGetString(rmElem, "RoomPromotion", "");
+                        rmDto.SmokingPreference = SafeGetString(rmElem, "SmokingPreference", "");
+                        rmDto.BedTypes = SafeGetString(rmElem, "BedTypes", "");
+                        rmDto.HotelSupplements = SafeGetString(rmElem, "HotelSupplements", "");
+                        rmDto.LastCancellationDate = SafeGetString(rmElem, "LastCancellationDate", "");
+                        rmDto.BedTypeCode = SafeGetString(rmElem, "BedTypeCode", "");
+                        rmDto.Supplements = SafeGetString(rmElem, "Supplements", "");
                         if (rmElem.TryGetProperty("IsPassportMandatory", out var ipmProp) && (ipmProp.ValueKind == JsonValueKind.True || ipmProp.ValueKind == JsonValueKind.False)) rmDto.IsPassportMandatory = ipmProp.GetBoolean();
                         if (rmElem.TryGetProperty("IsPANMandatory", out var ipanProp) && (ipanProp.ValueKind == JsonValueKind.True || ipanProp.ValueKind == JsonValueKind.False)) rmDto.IsPANMandatory = ipanProp.GetBoolean();
                         if (rmElem.TryGetProperty("FullRefundAllowed", out var fraProp) && (fraProp.ValueKind == JsonValueKind.True || fraProp.ValueKind == JsonValueKind.False)) rmDto.FullRefundAllowed = fraProp.GetBoolean();
-                        if (rmElem.TryGetProperty("CancellationPolicy", out var cpStrProp)) rmDto.CancellationPolicy = cpStrProp.GetString() ?? "";
+                        rmDto.CancellationPolicy = SafeGetString(rmElem, "CancellationPolicy", "");
 
                         if (rmElem.TryGetProperty("DayRates", out var drProp) && drProp.ValueKind == JsonValueKind.Array)
                         {
@@ -2244,7 +2238,7 @@ namespace PickNBook.Api.Services
 
                 if ((target.TryGetProperty("ResponseStatus", out var rsProp) || target.TryGetProperty("responseStatus", out rsProp)) && rsProp.ValueKind == System.Text.Json.JsonValueKind.Number) resDto.ResponseStatus = rsProp.GetInt32();
                 if (target.TryGetProperty("SrdvType", out var stProp) || target.TryGetProperty("srdvType", out stProp)) resDto.SrdvType = stProp.GetString() ?? (request.SrdvType ?? "MixAPI");
-                if (target.TryGetProperty("SrdvIndex", out var siProp) || target.TryGetProperty("srdvIndex", out siProp)) resDto.SrdvIndex = siProp.GetString() ?? (request.SrdvIndex ?? "");
+                if (target.TryGetProperty("SrdvIndex", out var siProp) || target.TryGetProperty("srdvIndex", out siProp)) resDto.SrdvIndex = SafeGetString(target, "SrdvIndex", (request.SrdvIndex ?? ""));
                 if (target.TryGetProperty("TraceId", out var tidProp) || target.TryGetProperty("traceId", out tidProp)) resDto.TraceId = tidProp.ValueKind == System.Text.Json.JsonValueKind.Number ? tidProp.GetRawText() : (tidProp.GetString() ?? request.TraceId);
                 if ((target.TryGetProperty("ChangeRequestId", out var cridProp) || target.TryGetProperty("changeRequestId", out cridProp)) && cridProp.ValueKind == System.Text.Json.JsonValueKind.Number) resDto.ChangeRequestId = cridProp.GetInt32();
                 if ((target.TryGetProperty("ChangeRequestStatus", out var crsProp) || target.TryGetProperty("changeRequestStatus", out crsProp)) && crsProp.ValueKind == System.Text.Json.JsonValueKind.Number) resDto.ChangeRequestStatus = crsProp.GetInt32();
@@ -3000,6 +2994,18 @@ namespace PickNBook.Api.Services
             {
                 jsonDoc?.Dispose();
             }
+        }
+
+        private static string SafeGetString(JsonElement elem, string propName, string defaultVal = "")
+        {
+            if (elem.TryGetProperty(propName, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.Number) return p.GetRawText();
+                if (p.ValueKind == JsonValueKind.String) return p.GetString() ?? defaultVal;
+                if (p.ValueKind == JsonValueKind.True) return "true";
+                if (p.ValueKind == JsonValueKind.False) return "false";
+            }
+            return defaultVal;
         }
     }
 }
