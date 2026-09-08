@@ -15,8 +15,8 @@ namespace PickNBook.Api.Services.Background
         private readonly ILogger<HotelCacheWarmerHostedService> _logger;
         private readonly IServiceScopeFactory _scopeFactory;
 
-        // Top searched City IDs (e.g., Hyderabad, Delhi, Mumbai, Bangalore)
-        private readonly List<string> _topCityIds = new() { "697288", "145330", "130443", "111124" };
+        // Top searched City IDs (Hyderabad: 2947514, Mumbai: 2948193, Delhi: 2936442, Bangalore: 2948216)
+        private readonly List<long> _topCityIds = new() { 2947514, 2948193, 2936442, 2948216 };
 
         public HotelCacheWarmerHostedService(
             ILogger<HotelCacheWarmerHostedService> logger,
@@ -54,11 +54,11 @@ namespace PickNBook.Api.Services.Background
                             CityId = cityId,
                             CheckInDate = checkInDate.ToString("yyyy-MM-dd"),
                             CheckOutDate = checkOutDate.ToString("yyyy-MM-dd"),
-                            NoOfNights = "2",
+                            NoOfNights = 2,
                             NoOfRooms = "1",
                             RoomGuests = new List<RoomGuestDto>
                             {
-                                new RoomGuestDto { NoOfAdults = "2", NoOfChild = "0", ChildAge = new List<int>() }
+                                new RoomGuestDto { NoOfAdults = 2, NoOfChild = 0, ChildAge = new List<int>() }
                             },
                             MinRating = "0",
                             MaxRating = "7"

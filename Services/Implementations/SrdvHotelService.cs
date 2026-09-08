@@ -66,10 +66,10 @@ namespace PickNBook.Api.Services
                 Password = _settings.Password,
                 CheckInDate = checkInDate.ToString("yyyy-MM-dd"),
                 CheckOutDate = checkOutDate.ToString("yyyy-MM-dd"),
-                NoOfNights = noOfNights.ToString(),
+                NoOfNights = noOfNights,
                 BookingMode = string.IsNullOrWhiteSpace(bookingMode) ? "5" : bookingMode,
                 CountryCode = "IN",
-                CityId = cityCode,
+                CityId = long.TryParse(cityCode, out var cc) ? cc : null,
                 ResultCount = "500",
                 PreferredCurrency = "INR",
                 GuestNationality = string.IsNullOrWhiteSpace(guestNationality) ? "IN" : guestNationality,
@@ -78,8 +78,8 @@ namespace PickNBook.Api.Services
                 {
                     new RoomGuestDto
                     {
-                        NoOfAdults = Math.Max(1, adults).ToString(),
-                        NoOfChild = Math.Max(0, children).ToString(),
+                        NoOfAdults = Math.Max(1, adults),
+                        NoOfChild = Math.Max(0, children),
                         ChildAge = childAges != null ? new List<int>(childAges) : new List<int>()
                     }
                 },
@@ -135,9 +135,9 @@ namespace PickNBook.Api.Services
             };
 
             // Calculate NoOfNights (1 to 30)
-            if (int.TryParse(request.NoOfNights, out var nightsVal) && nightsVal >= 1 && nightsVal <= 30)
+            if (request.NoOfNights >= 1 && request.NoOfNights <= 30)
             {
-                supplierReq.NoOfNights = nightsVal;
+                supplierReq.NoOfNights = request.NoOfNights;
             }
             else if (DateTime.TryParse(request.CheckInDate, out var cIn) && DateTime.TryParse(request.CheckOutDate, out var cOut) && cOut > cIn)
             {
@@ -148,16 +148,21 @@ namespace PickNBook.Api.Services
                 supplierReq.NoOfNights = 1;
             }
 
-            // CityId (integer)
-            if (int.TryParse(request.CityId, out var cid) && cid > 0)
+            // CityId (positive integer)
+            if (request.CityId.HasValue && request.CityId.Value > 0)
             {
-                supplierReq.CityId = cid;
+                supplierReq.CityId = request.CityId.Value;
             }
 
             // HotelCodes (integer[], max 200, positive integers)
+            // Spec: Send this or CityId; when both arrive HotelCodes wins.
             if (request.HotelCodes != null && request.HotelCodes.Count > 0)
             {
                 supplierReq.HotelCodes = request.HotelCodes.Where(h => h > 0).Distinct().Take(200).ToList();
+                if (supplierReq.HotelCodes.Count > 0)
+                {
+                    supplierReq.CityId = null; // When both arrive HotelCodes wins
+                }
             }
 
             // RoomGuests (1 to 9 rooms)
@@ -165,8 +170,8 @@ namespace PickNBook.Api.Services
             {
                 foreach (var rg in request.RoomGuests.Take(9))
                 {
-                    int adults = int.TryParse(rg.NoOfAdults, out var a) ? Math.Clamp(a, 1, 6) : 1;
-                    int child = int.TryParse(rg.NoOfChild, out var c) ? Math.Clamp(c, 0, 4) : 0;
+                    int adults = Math.Clamp(rg.NoOfAdults, 1, 6);
+                    int child = Math.Clamp(rg.NoOfChild, 0, 4);
                     List<int>? ages = null;
                     if (child > 0)
                     {
@@ -220,7 +225,7 @@ namespace PickNBook.Api.Services
                 var responseDto = new PickNBookHotelSearchResponseDto
                 {
                     SrdvType = srdvResponse.SrdvType,
-                    CityId = string.IsNullOrEmpty(srdvResponse.CityId) ? request.CityId : srdvResponse.CityId,
+                    CityId = string.IsNullOrEmpty(srdvResponse.CityId) ? (request.CityId?.ToString() ?? string.Empty) : srdvResponse.CityId,
                     Remarks = srdvResponse.Remarks,
                     CheckInDate = string.IsNullOrEmpty(srdvResponse.CheckInDate) ? request.CheckInDate : srdvResponse.CheckInDate,
                     CheckOutDate = string.IsNullOrEmpty(srdvResponse.CheckOutDate) ? request.CheckOutDate : srdvResponse.CheckOutDate,
@@ -265,7 +270,7 @@ namespace PickNBook.Api.Services
                 {
                     foreach (var rg in request.RoomGuests)
                     {
-                        responseDto.NoOfRooms.Add(new HotelSearchNoOfRoomsDto { NoOfAdults = rg.NoOfAdults, NoOfChild = rg.NoOfChild, ChildAge = new List<int>(rg.ChildAge ?? new List<int>()) });
+                        responseDto.NoOfRooms.Add(new HotelSearchNoOfRoomsDto { NoOfAdults = rg.NoOfAdults.ToString(), NoOfChild = rg.NoOfChild.ToString(), ChildAge = new List<int>(rg.ChildAge ?? new List<int>()) });
                     }
                 }
 
@@ -287,7 +292,7 @@ namespace PickNBook.Api.Services
                         {
                             if (markupService != null && item.Price != null)
                             {
-                                await ApplyMarkupAndGstAsync(markupService, item.Price, request.CityId, item.HotelCode, "B2C");
+                                await ApplyMarkupAndGstAsync(markupService, item.Price, request.CityId?.ToString(), item.HotelCode, "B2C");
                                 item.OfferedFare = item.Price.OfferedPrice;
                                 offerDto.Price = item.OfferedFare;
                             }
@@ -584,15 +589,15 @@ namespace PickNBook.Api.Services
                 OfferId = item.ResultIndex,
                 HotelId = item.HotelCode,
                 HotelName = item.HotelName,
-                CityCode = request.CityId,
+                CityCode = request.CityId?.ToString() ?? string.Empty,
                 Latitude = double.TryParse(item.Latitude, out var ltVal) ? ltVal : null,
                 Longitude = double.TryParse(item.Longitude, out var lgVal) ? lgVal : null,
                 Address = item.HotelAddress,
                 CheckInDate = request.CheckInDate,
                 CheckOutDate = request.CheckOutDate,
                 RoomQuantity = int.TryParse(request.NoOfRooms, out var rmQty) ? rmQty : 1,
-                AdultQuantity = request.RoomGuests != null && request.RoomGuests.Count > 0 && int.TryParse(request.RoomGuests[0].NoOfAdults, out var aq) ? aq : 1,
-                ChildQuantity = request.RoomGuests != null && request.RoomGuests.Count > 0 && int.TryParse(request.RoomGuests[0].NoOfChild, out var cq) ? cq : 0,
+                AdultQuantity = request.RoomGuests != null && request.RoomGuests.Count > 0 ? request.RoomGuests[0].NoOfAdults : 1,
+                ChildQuantity = request.RoomGuests != null && request.RoomGuests.Count > 0 ? request.RoomGuests[0].NoOfChild : 0,
                 Price = item.OfferedFare,
                 Currency = item.Price?.CurrencyCode ?? "INR",
                 SrdvIndex = int.TryParse(item.SrdvIndex, out var siVal) ? siVal : 0,

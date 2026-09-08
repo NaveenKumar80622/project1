@@ -63,7 +63,7 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(new { message = "Request body is required." });
             }
 
-            bool hasCityId = !string.IsNullOrWhiteSpace(request.CityId);
+            bool hasCityId = request.CityId.HasValue && request.CityId.Value > 0;
             bool hasHotelCodes = request.HotelCodes != null && request.HotelCodes.Count > 0;
 
             if (!hasCityId && !hasHotelCodes)
@@ -71,9 +71,64 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(new { message = "Either CityId or HotelCodes must be provided." });
             }
 
-            if (string.IsNullOrWhiteSpace(request.CheckInDate))
+            if (string.IsNullOrWhiteSpace(request.CheckInDate) || 
+                !DateOnly.TryParseExact(request.CheckInDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
             {
-                return BadRequest(new { message = "CheckInDate is required (format: YYYY-MM-DD)." });
+                return BadRequest(new { message = "CheckInDate is required and must be in YYYY-MM-DD format." });
+            }
+
+            if (request.NoOfNights < 1 || request.NoOfNights > 30)
+            {
+                return BadRequest(new { message = "NoOfNights must be an integer between 1 and 30." });
+            }
+
+            if (!string.IsNullOrWhiteSpace(request.GuestNationality) && request.GuestNationality.Trim().Length != 2)
+            {
+                return BadRequest(new { message = "GuestNationality must be a two-letter ISO country code." });
+            }
+
+            if (request.RoomGuests == null || request.RoomGuests.Count < 1 || request.RoomGuests.Count > 9)
+            {
+                return BadRequest(new { message = "RoomGuests is required and must contain between 1 and 9 rooms." });
+            }
+
+            for (int i = 0; i < request.RoomGuests.Count; i++)
+            {
+                var room = request.RoomGuests[i];
+                if (room.NoOfAdults < 1 || room.NoOfAdults > 6)
+                {
+                    return BadRequest(new { message = $"Room {i + 1}: NoOfAdults must be between 1 and 6." });
+                }
+                if (room.NoOfChild < 0 || room.NoOfChild > 4)
+                {
+                    return BadRequest(new { message = $"Room {i + 1}: NoOfChild must be between 0 and 4." });
+                }
+                int childCount = room.NoOfChild;
+                int ageCount = room.ChildAge?.Count ?? 0;
+                if (childCount > 0 && ageCount != childCount)
+                {
+                    return BadRequest(new { message = $"Room {i + 1}: The number of ChildAge entries ({ageCount}) must equal NoOfChild ({childCount})." });
+                }
+                if (room.ChildAge != null && room.ChildAge.Any(age => age < 0 || age > 17))
+                {
+                    return BadRequest(new { message = $"Room {i + 1}: Each child age must be between 0 and 17." });
+                }
+            }
+
+            if (int.TryParse(request.MinRating, out var minR) && int.TryParse(request.MaxRating, out var maxR))
+            {
+                if (minR < 0 || minR > 7)
+                {
+                    return BadRequest(new { message = "MinRating must be between 0 and 7." });
+                }
+                if (maxR < 0 || maxR > 7)
+                {
+                    return BadRequest(new { message = "MaxRating must be between 0 and 7." });
+                }
+                if (minR > maxR)
+                {
+                    return BadRequest(new { message = "MinRating cannot be greater than MaxRating." });
+                }
             }
 
             try
@@ -82,7 +137,7 @@ namespace PickNBook.Api.Controllers
 
                 // Fire-and-forget logging to the database
                 var userId = _currentUserService.GetUserOrGuestId();
-                var cityId = hasCityId ? request.CityId.Trim().ToUpperInvariant() : (request.HotelCodes != null ? string.Join(",", request.HotelCodes) : "HOTEL_CODES");
+                var cityId = hasCityId ? request.CityId!.Value.ToString() : (request.HotelCodes != null ? string.Join(",", request.HotelCodes) : "HOTEL_CODES");
                 var checkInStr = request.CheckInDate;
                 var checkOutStr = request.CheckOutDate;
                 var roomGuests = request.RoomGuests;
@@ -98,7 +153,7 @@ namespace PickNBook.Api.Controllers
 
                         DateTime parsedCheckIn = DateTime.TryParse(checkInStr, out var cin) ? cin : DateTime.UtcNow.AddDays(10);
                         DateTime parsedCheckOut = DateTime.TryParse(checkOutStr, out var cout) ? cout : parsedCheckIn.AddDays(1);
-                        int adults = roomGuests?.Sum(rg => int.TryParse(rg.NoOfAdults, out var a) ? a : 1) ?? 1;
+                        int adults = roomGuests?.Sum(rg => rg.NoOfAdults) ?? 1;
                         int rooms = roomGuests != null && roomGuests.Count > 0 ? roomGuests.Count : (int.TryParse(noOfRoomsStr, out var r) ? r : 1);
 
                         var searchLog = new HotelSearchLog

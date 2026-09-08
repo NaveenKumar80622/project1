@@ -766,7 +766,8 @@ namespace PickNBook.Api.Models.DTOs
         public string CheckOutDate { get; set; } = string.Empty;
 
         [JsonPropertyName("NoOfNights")]
-        public string NoOfNights { get; set; } = "1";
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int NoOfNights { get; set; } = 1;
 
         [JsonPropertyName("BookingMode")]
         public string BookingMode { get; set; } = "5";
@@ -775,7 +776,8 @@ namespace PickNBook.Api.Models.DTOs
         public string CountryCode { get; set; } = "IN";
 
         [JsonPropertyName("CityId")]
-        public string CityId { get; set; } = string.Empty;
+        [JsonConverter(typeof(SafeNullableLongConverter))]
+        public long? CityId { get; set; }
 
         [JsonPropertyName("HotelCodes")]
         public List<int>? HotelCodes { get; set; }
@@ -802,9 +804,11 @@ namespace PickNBook.Api.Models.DTOs
         public string PreferredHotel { get; set; } = string.Empty;
 
         [JsonPropertyName("MaxRating")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string MaxRating { get; set; } = "7";
 
         [JsonPropertyName("MinRating")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string MinRating { get; set; } = "0";
 
         [JsonPropertyName("ReviewScore")]
@@ -817,10 +821,12 @@ namespace PickNBook.Api.Models.DTOs
     public class RoomGuestDto
     {
         [JsonPropertyName("NoOfAdults")]
-        public string NoOfAdults { get; set; } = "1";
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int NoOfAdults { get; set; } = 1;
 
         [JsonPropertyName("NoOfChild")]
-        public string NoOfChild { get; set; } = "0";
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int NoOfChild { get; set; } = 0;
 
         [JsonPropertyName("ChildAge")]
         public List<int>? ChildAge { get; set; } = new();
@@ -836,7 +842,7 @@ namespace PickNBook.Api.Models.DTOs
 
         [JsonPropertyName("CityId")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public int? CityId { get; set; }
+        public long? CityId { get; set; }
 
         [JsonPropertyName("HotelCodes")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
