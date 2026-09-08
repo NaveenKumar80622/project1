@@ -1346,15 +1346,25 @@ namespace PickNBook.Api.Data
             modelBuilder.Entity<HotelCity>(entity =>
             {
                 entity.ToTable("hotel_cities");
+                entity.HasKey(x => x.Id);
+                entity.Property(x => x.CityId).IsRequired();
                 entity.Property(x => x.CityCode).HasMaxLength(50).IsRequired();
                 entity.Property(x => x.CityName).HasMaxLength(200).IsRequired();
+                entity.Property(x => x.DistrictName).HasMaxLength(200);
+                entity.Property(x => x.StateName).HasMaxLength(200);
                 entity.Property(x => x.CountryName).HasMaxLength(150);
                 entity.Property(x => x.CountryCode).HasMaxLength(20);
+                entity.Property(x => x.FullName).HasMaxLength(750).IsRequired();
+                entity.Property(x => x.Type).HasMaxLength(30).IsRequired();
+                entity.Property(x => x.HotelCount).IsRequired();
                 entity.Property(x => x.RequestType).HasMaxLength(30).IsRequired();
-                entity.HasIndex(x => new { x.RequestType, x.CityCode }).IsUnique();
-                entity.HasIndex(x => new { x.RequestType, x.CityName });
+
+                entity.HasIndex(x => x.CityId);
                 entity.HasIndex(x => x.CityCode);
                 entity.HasIndex(x => x.CityName);
+                entity.HasIndex(x => x.FullName);
+                entity.HasIndex(x => x.CountryCode);
+                entity.HasIndex(x => x.HotelCount);
                 entity.HasIndex(x => x.IsActive);
             });
 

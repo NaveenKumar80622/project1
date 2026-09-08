@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace PickNBook.Api.Models.DTOs
@@ -21,6 +22,15 @@ namespace PickNBook.Api.Models.DTOs
         public decimal RunningBalance { get; set; }
     }
 
+    public class SrdvSupplierHotelInfoRequest
+    {
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("ResultIndex")]
+        public string ResultIndex { get; set; } = string.Empty;
+    }
+
     public class HotelInfoRequestDto
     {
         [JsonPropertyName("EndUserIp")]
@@ -36,7 +46,7 @@ namespace PickNBook.Api.Models.DTOs
         public string Password { get; set; } = string.Empty;
 
         [JsonPropertyName("TraceId")]
-        public string TraceId { get; set; } = string.Empty;
+        public object? TraceId { get; set; } = string.Empty;
 
         [JsonPropertyName("SrdvType")]
         public string SrdvType { get; set; } = string.Empty;
@@ -53,61 +63,63 @@ namespace PickNBook.Api.Models.DTOs
 
     public class HotelRoomRequestDto
     {
-        [JsonPropertyName("EndUserIp")]
-        public string EndUserIp { get; set; } = string.Empty;
-
-        [JsonPropertyName("ClientId")]
-        public string ClientId { get; set; } = string.Empty;
-
-        [JsonPropertyName("UserName")]
-        public string UserName { get; set; } = string.Empty;
-
-        [JsonPropertyName("Password")]
-        public string Password { get; set; } = string.Empty;
-
         [JsonPropertyName("TraceId")]
-        public string TraceId { get; set; } = string.Empty;
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
 
-        [JsonPropertyName("SrdvType")]
-        public string SrdvType { get; set; } = string.Empty;
+        [JsonPropertyName("ResultIndex")]
+        public string ResultIndex { get; set; } = string.Empty;
+    }
 
-        [JsonPropertyName("SrdvIndex")]
-        public string SrdvIndex { get; set; } = string.Empty;
+    public class SrdvSupplierBlockRoomRequest
+    {
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
 
         [JsonPropertyName("ResultIndex")]
         public string ResultIndex { get; set; } = string.Empty;
 
-        [JsonPropertyName("HotelCode")]
-        public string HotelCode { get; set; } = string.Empty;
+        [JsonPropertyName("HotelRoomsDetails")]
+        public List<BlockRoomRequestRoomDto> HotelRoomsDetails { get; set; } = new();
+    }
+
+    public class BlockRoomRequestRoomDto
+    {
+        [JsonPropertyName("OptionId")]
+        public string OptionId { get; set; } = string.Empty;
+
+        [JsonPropertyName("RoomTypeCode")]
+        public string RoomTypeCode { get; set; } = string.Empty;
+
+        [JsonPropertyName("RoomIndex")]
+        public string RoomIndex { get; set; } = string.Empty;
     }
 
     public class BlockRoomRequestDto
     {
-        public string EndUserIp { get; set; } = string.Empty;
-        public string ClientId { get; set; } = string.Empty;
-        public string UserName { get; set; } = string.Empty;
-        public string Password { get; set; } = string.Empty;
-        public string TraceId { get; set; } = string.Empty;
-        public string SrdvType { get; set; } = string.Empty;
-        public string SrdvIndex { get; set; } = string.Empty;
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("ResultIndex")]
         public string ResultIndex { get; set; } = string.Empty;
-        public string HotelCode { get; set; } = string.Empty;
-        public string HotelName { get; set; } = string.Empty;
-        public string GuestNationality { get; set; } = string.Empty;
-        public int NoOfRooms { get; set; } = 1;
-        public int ClientReferenceNo { get; set; } = 0;
-        public bool IsVoucherBooking { get; set; } = false;
 
-        public List<BlockRoomDetailItemDto> HotelRoomsDetails { get; set; } = new();
+        [JsonPropertyName("HotelRoomsDetails")]
+        public List<BlockRoomRequestRoomDto> HotelRoomsDetails { get; set; } = new();
 
-        // Optional flat properties for backward/convenient frontend mapping
-        public string RoomIndex { get; set; } = string.Empty;
-        public string RoomTypeCode { get; set; } = string.Empty;
-        public string RoomTypeName { get; set; } = string.Empty;
-        public string RatePlanCode { get; set; } = string.Empty;
-        public string BedTypeCode { get; set; } = string.Empty;
+        // Optional flat properties for convenient frontend mapping or internal orchestrator
+        public string? OptionId { get; set; }
+        public string? RoomIndex { get; set; }
+        public string? RoomTypeCode { get; set; }
+        public string? RoomTypeName { get; set; }
+        public string? RatePlanCode { get; set; }
+        public string? BedTypeCode { get; set; }
         public int SmokingPreference { get; set; } = 0;
         public decimal Price { get; set; } = 0m;
+        public string? HotelCode { get; set; }
+        public string? HotelName { get; set; }
+        public int NoOfRooms { get; set; } = 1;
+        public string? EndUserIp { get; set; }
     }
 
     public class FareBreakdownDto
@@ -165,38 +177,127 @@ namespace PickNBook.Api.Models.DTOs
         public FareBreakdownDto? FareBreakdown { get; set; }
     }
 
+    public class SrdvSupplierBookRequest
+    {
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("ResultIndex")]
+        public string ResultIndex { get; set; } = string.Empty;
+
+        [JsonPropertyName("HotelRoomsDetails")]
+        public List<SrdvSupplierBookRoomDto> HotelRoomsDetails { get; set; } = new();
+
+        [JsonPropertyName("ClientReferenceNo")]
+        public string ClientReferenceNo { get; set; } = string.Empty;
+    }
+
+    public class SrdvSupplierBookRoomDto
+    {
+        [JsonPropertyName("HotelPassenger")]
+        public List<SrdvSupplierBookPassengerDto> HotelPassenger { get; set; } = new();
+    }
+
+    public class SrdvSupplierBookPassengerDto
+    {
+        [JsonPropertyName("Title")]
+        public string Title { get; set; } = string.Empty;
+
+        [JsonPropertyName("FirstName")]
+        public string FirstName { get; set; } = string.Empty;
+
+        [JsonPropertyName("MiddleName")]
+        public string MiddleName { get; set; } = string.Empty;
+
+        [JsonPropertyName("LastName")]
+        public string LastName { get; set; } = string.Empty;
+
+        [JsonPropertyName("Phoneno")]
+        public string Phoneno { get; set; } = string.Empty;
+
+        [JsonPropertyName("Email")]
+        public string Email { get; set; } = string.Empty;
+
+        [JsonPropertyName("PaxType")]
+        public string PaxType { get; set; } = string.Empty;
+
+        [JsonPropertyName("Age")]
+        public int? Age { get; set; }
+
+        [JsonPropertyName("LeadPassenger")]
+        public bool LeadPassenger { get; set; }
+
+        [JsonPropertyName("PAN")]
+        public string PAN { get; set; } = string.Empty;
+
+        [JsonPropertyName("PassportNo")]
+        public string PassportNo { get; set; } = string.Empty;
+
+        [JsonPropertyName("PassportExpDate")]
+        public string PassportExpDate { get; set; } = string.Empty;
+
+        [JsonPropertyName("PassportIssueCountry")]
+        public string PassportIssueCountry { get; set; } = string.Empty;
+
+        [JsonPropertyName("GSTNumber")]
+        public string GSTNumber { get; set; } = string.Empty;
+
+        [JsonPropertyName("GSTCompanyName")]
+        public string GSTCompanyName { get; set; } = string.Empty;
+
+        [JsonPropertyName("GSTCompanyAddress")]
+        public string GSTCompanyAddress { get; set; } = string.Empty;
+
+        [JsonPropertyName("GSTCompanyEmail")]
+        public string GSTCompanyEmail { get; set; } = string.Empty;
+
+        [JsonPropertyName("GSTCompanyContactNumber")]
+        public string GSTCompanyContactNumber { get; set; } = string.Empty;
+    }
+
     public class HotelBookRequestDto
     {
-        public string EndUserIp { get; set; } = string.Empty;
-        public string ClientId { get; set; } = string.Empty;
-        public string UserName { get; set; } = string.Empty;
-        public string Password { get; set; } = string.Empty;
-        public string TraceId { get; set; } = string.Empty;
-        public string SrdvType { get; set; } = string.Empty;
-        public string SrdvIndex { get; set; } = string.Empty;
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("ResultIndex")]
         public string ResultIndex { get; set; } = string.Empty;
-        public string HotelCode { get; set; } = string.Empty;
-        public string HotelName { get; set; } = string.Empty;
-        public string? CouponCode { get; set; }
-        public string GuestNationality { get; set; } = string.Empty;
-        public int NoOfRooms { get; set; } = 1;
-        public int ClientReferenceNo { get; set; } = 0;
-        public bool IsVoucherBooking { get; set; } = true;
-        
+
+        [JsonPropertyName("HotelRoomsDetails")]
         public List<BookRoomDetailItemDto> HotelRoomsDetails { get; set; } = new();
 
-        // Flat properties for backward compatibility
-        public string GuestName { get; set; } = string.Empty;
-        public string GuestEmail { get; set; } = string.Empty;
-        public string GuestPhone { get; set; } = string.Empty;
-        public string RoomIndex { get; set; } = "45srlkt1srlkt29092750";
-        public string RoomTypeCode { get; set; } = "1";
-        public string RoomTypeName { get; set; } = string.Empty;
-        public string RatePlanCode { get; set; } = string.Empty;
+        [JsonPropertyName("ClientReferenceNo")]
+        public string ClientReferenceNo { get; set; } = string.Empty;
+
+        [JsonPropertyName("CouponCode")]
+        public string? CouponCode { get; set; }
+
+        // Optional convenience flat properties for single-guest booking / backward-compatibility
+        public string? GuestName { get; set; }
+        public string? GuestEmail { get; set; }
+        public string? GuestPhone { get; set; }
+        public string? PAN { get; set; }
+        public string? HotelCode { get; set; }
+        public string? HotelName { get; set; }
+        public string? RoomIndex { get; set; }
+        public string? RoomTypeCode { get; set; }
+        public string? RoomTypeName { get; set; }
+        public string? RatePlanCode { get; set; }
         public decimal Price { get; set; } = 0m;
-        
-        public string CheckInDate { get; set; } = string.Empty;
-        public string CheckOutDate { get; set; } = string.Empty;
+        public string? CheckInDate { get; set; }
+        public string? CheckOutDate { get; set; }
+        public int NoOfRooms { get; set; } = 1;
+
+        // Legacy metadata
+        public string? EndUserIp { get; set; }
+        public string? ClientId { get; set; }
+        public string? UserName { get; set; }
+        public string? Password { get; set; }
+        public string? SrdvType { get; set; }
+        public string? SrdvIndex { get; set; }
+        public string? GuestNationality { get; set; }
+        public bool IsVoucherBooking { get; set; } = true;
     }
 
     public class BookRoomDetailItemDto
@@ -242,10 +343,12 @@ namespace PickNBook.Api.Models.DTOs
         public string Phoneno { get; set; } = string.Empty;
         public string Email { get; set; } = string.Empty;
         public string PaxType { get; set; } = "1";
+        public int? Age { get; set; }
         public bool LeadPassenger { get; set; }
         public string? PassportNo { get; set; }
         public string? PassportIssueDate { get; set; }
         public string? PassportExpDate { get; set; }
+        public string? PassportIssueCountry { get; set; }
         public string? PAN { get; set; }
         public string? GSTCompanyAddress { get; set; }
         public string? GSTCompanyContactNumber { get; set; }
@@ -342,6 +445,14 @@ namespace PickNBook.Api.Models.DTOs
         public BlockRoomResultDto BlockRoomResult { get; set; } = new();
     }
 
+    public class BlockRoomPriceSummaryDto
+    {
+        public decimal ServedPrice { get; set; }
+        public decimal BlockedPrice { get; set; }
+        public decimal Difference { get; set; }
+        public string Currency { get; set; } = "INR";
+    }
+
     public class BlockRoomResultDto
     {
         public HotelSearchErrorDto Error { get; set; } = new();
@@ -352,6 +463,7 @@ namespace PickNBook.Api.Models.DTOs
         public bool IsPackageDetailsMandatory { get; set; }
         public bool IsPackageFare { get; set; }
         public bool IsPriceChanged { get; set; }
+        public BlockRoomPriceSummaryDto? PriceSummary { get; set; }
         public bool IsCancellationPolicyChanged { get; set; }
         public bool IsHotelPolicyChanged { get; set; }
         public string HotelNorms { get; set; } = string.Empty;
@@ -373,6 +485,7 @@ namespace PickNBook.Api.Models.DTOs
 
     public class BlockRoomDetailItemDto
     {
+        public string OptionId { get; set; } = string.Empty;
         public int ChildCount { get; set; }
         public bool RequireAllPaxDetails { get; set; }
         public string RoomId { get; set; } = string.Empty;
@@ -474,6 +587,22 @@ namespace PickNBook.Api.Models.DTOs
         public string RoomData { get; set; } = string.Empty;
         public string RoomFacilities { get; set; } = string.Empty;
         public string Services { get; set; } = string.Empty;
+        public HotelStaySummaryDto? StaySummary { get; set; }
+    }
+
+    public class HotelStaySummaryDto
+    {
+        public string CheckInDate { get; set; } = string.Empty;
+        public string CheckOutDate { get; set; } = string.Empty;
+        public int NoOfNights { get; set; }
+        public int RoomCount { get; set; }
+        public int AdultCount { get; set; }
+        public int ChildCount { get; set; }
+        public int TotalGuestCount { get; set; }
+        public List<RoomGuestDto> RoomGuests { get; set; } = new();
+        public string GuestNationality { get; set; } = string.Empty;
+        public string SupplierNationalityCode { get; set; } = string.Empty;
+        public string Currency { get; set; } = "INR";
     }
 
     public class HotelInfoDescriptionDto
@@ -543,6 +672,7 @@ namespace PickNBook.Api.Models.DTOs
 
     public class HotelRoomDetailItemDto
     {
+        public string OptionId { get; set; } = string.Empty;
         public int ChildCount { get; set; }
         public bool RequireAllPaxDetails { get; set; }
         public string RoomId { get; set; } = string.Empty;
@@ -647,6 +777,9 @@ namespace PickNBook.Api.Models.DTOs
         [JsonPropertyName("CityId")]
         public string CityId { get; set; } = string.Empty;
 
+        [JsonPropertyName("HotelCodes")]
+        public List<int>? HotelCodes { get; set; }
+
         [JsonPropertyName("ResultCount")]
         public string ResultCount { get; set; } = "50";
 
@@ -669,10 +802,10 @@ namespace PickNBook.Api.Models.DTOs
         public string PreferredHotel { get; set; } = string.Empty;
 
         [JsonPropertyName("MaxRating")]
-        public string MaxRating { get; set; } = "5";
+        public string MaxRating { get; set; } = "7";
 
         [JsonPropertyName("MinRating")]
-        public string MinRating { get; set; } = "1";
+        public string MinRating { get; set; } = "0";
 
         [JsonPropertyName("ReviewScore")]
         public decimal? ReviewScore { get; set; }
@@ -693,6 +826,56 @@ namespace PickNBook.Api.Models.DTOs
         public List<int>? ChildAge { get; set; } = new();
     }
 
+    public class SrdvSupplierHotelSearchRequest
+    {
+        [JsonPropertyName("CheckInDate")]
+        public string CheckInDate { get; set; } = string.Empty;
+
+        [JsonPropertyName("NoOfNights")]
+        public int NoOfNights { get; set; }
+
+        [JsonPropertyName("CityId")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? CityId { get; set; }
+
+        [JsonPropertyName("HotelCodes")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<int>? HotelCodes { get; set; }
+
+        [JsonPropertyName("GuestNationality")]
+        public string GuestNationality { get; set; } = "IN";
+
+        [JsonPropertyName("RoomGuests")]
+        public List<SrdvSupplierRoomGuest> RoomGuests { get; set; } = new();
+
+        [JsonPropertyName("MinRating")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? MinRating { get; set; }
+
+        [JsonPropertyName("MaxRating")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? MaxRating { get; set; }
+    }
+
+    public class SrdvSupplierRoomGuest
+    {
+        [JsonPropertyName("NoOfAdults")]
+        public int NoOfAdults { get; set; } = 1;
+
+        [JsonPropertyName("NoOfChild")]
+        public int NoOfChild { get; set; } = 0;
+
+        [JsonPropertyName("ChildAge")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public List<int>? ChildAge { get; set; }
+    }
+
+    public class SrdvHotelRecheckRequestDto
+    {
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
+    }
+
     // ==========================================
     // EXACT SRDV v8 HOTEL SEARCH RESPONSE DTOs
     // ==========================================
@@ -706,6 +889,10 @@ namespace PickNBook.Api.Models.DTOs
         public string CheckInDate { get; set; } = string.Empty;
         public string CheckOutDate { get; set; } = string.Empty;
         public string PreferredCurrency { get; set; } = "INR";
+        public string ResultStatus { get; set; } = "COMPLETED";
+        public int RecheckAfterMs { get; set; } = 0;
+        public int RecheckTimeoutSeconds { get; set; } = 0;
+        public long? ApiTimeMs { get; set; }
         public List<HotelSearchNoOfRoomsDto> NoOfRooms { get; set; } = new();
         public List<HotelSearchResultItemDto> Results { get; set; } = new();
     }
@@ -941,5 +1128,196 @@ namespace PickNBook.Api.Models.DTOs
         
         public bool IsCouponValid { get; set; }
         public string CouponMessage { get; set; } = string.Empty;
+    }
+
+    // =====================================
+    // HOTEL BOOKING DETAILS (SRDV v8)
+    // =====================================
+    public class HotelBookingDetailsRequestDto
+    {
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+    }
+
+    public class HotelBookingDetailsResponseDto
+    {
+        [JsonPropertyName("Success")]
+        public bool Success { get; set; }
+
+        [JsonPropertyName("Message")]
+        public string? Message { get; set; }
+
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("BookingStatus")]
+        public string? BookingStatus { get; set; } // PENDING, SUCCESS, FAILED, MANUAL_CHECK_REQUIRED, CANCELLED
+
+        [JsonPropertyName("CancellationStatus")]
+        public string? CancellationStatus { get; set; } // NOT_CANCELLED, PARTIALLY_CANCELLED, FULLY_CANCELLED
+
+        [JsonPropertyName("RefundStatus")]
+        public string? RefundStatus { get; set; } // PENDING, REFUNDED, NOT_REQUIRED, MANUAL_CHECK_REQUIRED
+
+        [JsonPropertyName("InvoiceAmount")]
+        public decimal InvoiceAmount { get; set; }
+
+        [JsonPropertyName("SupplierStatus")]
+        public string? SupplierStatus { get; set; }
+
+        [JsonPropertyName("FailureReason")]
+        public string? FailureReason { get; set; }
+
+        [JsonPropertyName("Result")]
+        public HotelBookingDetailsResultDto? Result { get; set; }
+
+        [JsonPropertyName("Error")]
+        public HotelBookingDetailsErrorDto? Error { get; set; }
+
+        [JsonPropertyName("RawResponse")]
+        public JsonElement? RawResponse { get; set; }
+    }
+
+    public class HotelBookingDetailsErrorDto
+    {
+        [JsonPropertyName("ErrorCode")]
+        public int ErrorCode { get; set; }
+
+        [JsonPropertyName("ErrorMessage")]
+        public string? ErrorMessage { get; set; }
+    }
+
+    public class HotelBookingDetailsResultDto
+    {
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("BookingStatus")]
+        public string? BookingStatus { get; set; }
+
+        [JsonPropertyName("CancellationStatus")]
+        public string? CancellationStatus { get; set; }
+
+        [JsonPropertyName("RefundStatus")]
+        public string? RefundStatus { get; set; }
+
+        [JsonPropertyName("InvoiceAmount")]
+        public decimal InvoiceAmount { get; set; }
+
+        [JsonPropertyName("SupplierStatus")]
+        public string? SupplierStatus { get; set; }
+
+        [JsonPropertyName("FailureReason")]
+        public string? FailureReason { get; set; }
+
+        [JsonPropertyName("ConfirmationNo")]
+        public string? ConfirmationNo { get; set; }
+
+        [JsonPropertyName("BookingReference")]
+        public string? BookingReference { get; set; }
+
+        [JsonPropertyName("HotelCode")]
+        public string? HotelCode { get; set; }
+
+        [JsonPropertyName("HotelName")]
+        public string? HotelName { get; set; }
+
+        [JsonPropertyName("CheckInDate")]
+        public string? CheckInDate { get; set; }
+
+        [JsonPropertyName("CheckOutDate")]
+        public string? CheckOutDate { get; set; }
+
+        [JsonPropertyName("Rooms")]
+        public List<HotelBookingDetailsRoomItemDto> Rooms { get; set; } = new();
+    }
+
+    public class HotelBookingDetailsRoomItemDto
+    {
+        [JsonPropertyName("RoomStatus")]
+        public string? RoomStatus { get; set; } // PENDING, CONFIRMED, FAILED, CANCELLED
+
+        [JsonPropertyName("RoomTypeName")]
+        public string? RoomTypeName { get; set; }
+
+        [JsonPropertyName("RoomTypeCode")]
+        public string? RoomTypeCode { get; set; }
+
+        [JsonPropertyName("OptionId")]
+        public string? OptionId { get; set; }
+
+        [JsonPropertyName("TotalFare")]
+        public decimal TotalFare { get; set; }
+
+        [JsonPropertyName("Passengers")]
+        public List<HotelPassengerDto> Passengers { get; set; } = new();
+    }
+
+    // =====================================
+    // HOTEL CANCELLATION (SRDV v8)
+    // =====================================
+    public class SrdvSupplierHotelCancelRequest
+    {
+        [JsonPropertyName("TraceId")]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("Remarks")]
+        public string Remarks { get; set; } = string.Empty;
+    }
+
+    public class HotelCancelResponseDto
+    {
+        [JsonPropertyName("Error")]
+        public HotelCancelErrorDto Error { get; set; } = new();
+
+        [JsonPropertyName("ResponseStatus")]
+        public int ResponseStatus { get; set; }
+
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long? TraceId { get; set; }
+
+        [JsonPropertyName("SrdvType")]
+        public string? SrdvType { get; set; }
+
+        [JsonPropertyName("SrdvIndex")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long? SrdvIndex { get; set; }
+
+        [JsonPropertyName("ChangeRequestId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public int? ChangeRequestId { get; set; }
+
+        [JsonPropertyName("ChangeRequestStatus")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public int? ChangeRequestStatus { get; set; }
+    }
+
+    public class HotelCancelErrorDto
+    {
+        [JsonPropertyName("ErrorCode")]
+        public int ErrorCode { get; set; }
+
+        [JsonPropertyName("ErrorMessage")]
+        public string ErrorMessage { get; set; } = string.Empty;
+    }
+
+    public class HotelCancelBookingRequestDto
+    {
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("Remarks")]
+        public string Remarks { get; set; } = "Cancellation requested by guest";
+
+        // Tolerated legacy parameters (accepted and ignored per v8 spec)
+        public int? BookingId { get; set; }
+        public int? RequestType { get; set; }
+        public int? BookingMode { get; set; }
+        public string? SrdvType { get; set; }
+        public string? SrdvIndex { get; set; }
+        public string? EndUserIp { get; set; }
     }
 }

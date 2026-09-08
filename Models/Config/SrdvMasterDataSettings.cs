@@ -3,6 +3,8 @@ namespace PickNBook.Api.Models.Config
     public class SrdvMasterDataSettings
     {
         public string BusResourceUrl { get; set; } = "https://www.srdvtechnologies.com/document/bus/v9/download-city-code-list-mysql";
+        public string HotelCitiesResourceUrl { get; set; } = "https://www.srdvtechnologies.com/static/hotel/cities.sql.zip";
+        public string HotelCitiesLocalPath { get; set; } = "Data/cities.sql";
         public string HotelSpecialResourceUrl { get; set; } = "https://www.srdvtechnologies.com/document/hotel/v8/download_city_code_list_mysql";
         public string HotelInternationalResourceUrl { get; set; } = "https://www.srdvtechnologies.com/document/hotel/v8/download_city_code_list_international_mysql";
         public string FlightAirportResourceUrl { get; set; } = "https://www.srdvtechnologies.com/document/flight/v8/download_airport_list_mysql";

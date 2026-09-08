@@ -54,12 +54,14 @@ namespace PickNBook.Api.Services.Background
                             CityId = cityId,
                             CheckInDate = checkInDate.ToString("yyyy-MM-dd"),
                             CheckOutDate = checkOutDate.ToString("yyyy-MM-dd"),
+                            NoOfNights = "2",
                             NoOfRooms = "1",
                             RoomGuests = new List<RoomGuestDto>
                             {
                                 new RoomGuestDto { NoOfAdults = "2", NoOfChild = "0", ChildAge = new List<int>() }
                             },
-                            ResultCount = "50" // Fast load
+                            MinRating = "0",
+                            MaxRating = "7"
                         };
 
                         _logger.LogInformation("Warming cache for CityId: {CityId} from {CheckIn} to {CheckOut}", cityId, request.CheckInDate, request.CheckOutDate);

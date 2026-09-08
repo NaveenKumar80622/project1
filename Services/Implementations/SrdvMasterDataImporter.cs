@@ -176,17 +176,42 @@ namespace PickNBook.Api.Services.Implementations
         {
             var sw = Stopwatch.StartNew();
             var result = new MasterDataImportResultDto { EntityType = "HotelCities" };
-            const string specialStaging = "hotel_special";
-            const string intlStaging = "hotel_intl";
+            const string hotelStaging = "hotel_v8";
 
-            _logger.LogInformation("Starting Hotel Cities import (Special & International) from SRDV...");
+            _logger.LogInformation("Starting Hotel Cities import from SRDV v8 master dataset...");
 
             using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
             try
             {
+                // 1. Resolve SQL file path (prefer local Data/cities.sql if available, else download)
+                string sqlFilePath = "";
+                var candidatePaths = new[]
+                {
+                    Path.Combine(AppContext.BaseDirectory, _settings.HotelCitiesLocalPath),
+                    Path.Combine(Directory.GetCurrentDirectory(), _settings.HotelCitiesLocalPath),
+                    Path.Combine(AppContext.BaseDirectory, "Data", "cities.sql"),
+                    Path.Combine(Directory.GetCurrentDirectory(), "Data", "cities.sql")
+                };
+
+                foreach (var path in candidatePaths)
+                {
+                    if (File.Exists(path))
+                    {
+                        sqlFilePath = path;
+                        _logger.LogInformation("Found local Hotel Cities SQL file at {Path}", sqlFilePath);
+                        break;
+                    }
+                }
+
+                if (string.IsNullOrEmpty(sqlFilePath))
+                {
+                    _logger.LogInformation("Local SQL file not found. Downloading from {Url}...", _settings.HotelCitiesResourceUrl);
+                    sqlFilePath = await _downloader.DownloadAndExtractAsync(_settings.HotelCitiesResourceUrl, hotelStaging, cancellationToken);
+                }
+
                 var existingCities = await _dbContext.HotelCities
-                    .ToDictionaryAsync(x => $"{x.RequestType}:{x.CityCode.Trim()}", StringComparer.OrdinalIgnoreCase, cancellationToken);
+                    .ToDictionaryAsync(x => x.CityId > 0 ? x.CityId.ToString() : x.CityCode.Trim(), cancellationToken);
 
                 var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var toInsert = new List<HotelCity>();
@@ -194,37 +219,48 @@ namespace PickNBook.Api.Services.Implementations
                 int readCount = 0;
                 int failedCount = 0;
 
-                // 1. Process Special Hotel Cities
-                var specialSqlFile = await _downloader.DownloadAndExtractAsync(_settings.HotelSpecialResourceUrl, specialStaging, cancellationToken);
-                await foreach (var row in _parser.ParseInsertRowsAsync(specialSqlFile, "hotel_city_code_special", cancellationToken))
+                await foreach (var row in _parser.ParseInsertRowsAsync(sqlFilePath, "hotel_cities", cancellationToken))
                 {
                     readCount++;
 
-                    row.TryGetValue("cityid", out var cityCode);
-                    row.TryGetValue("destination", out var cityName);
-                    row.TryGetValue("country", out var country);
+                    row.TryGetValue("cityid", out var rawCityId);
+                    row.TryGetValue("cityname", out var cityName);
+                    row.TryGetValue("districtname", out var districtName);
+                    row.TryGetValue("statename", out var stateName);
                     row.TryGetValue("countrycode", out var countryCode);
+                    row.TryGetValue("fullname", out var fullName);
+                    row.TryGetValue("type", out var type);
+                    row.TryGetValue("hotelcount", out var rawHotelCount);
 
-                    cityCode = cityCode?.Trim();
+                    rawCityId = rawCityId?.Trim();
                     cityName = cityName?.Trim();
 
-                    if (string.IsNullOrWhiteSpace(cityCode) || string.IsNullOrWhiteSpace(cityName))
+                    if (string.IsNullOrWhiteSpace(rawCityId) || string.IsNullOrWhiteSpace(cityName) || !long.TryParse(rawCityId, out var cityId))
                     {
                         failedCount++;
                         continue;
                     }
 
-                    var key = $"Special:{cityCode}";
-                    if (!seenKeys.Add(key)) continue;
+                    int.TryParse(rawHotelCount, out var hotelCount);
+                    if (hotelCount <= 0) hotelCount = 1;
 
-                    if (existingCities.TryGetValue(key, out var existing))
+                    if (!seenKeys.Add(rawCityId)) continue;
+
+                    if (existingCities.TryGetValue(rawCityId, out var existing))
                     {
-                        if (existing.CityName != cityName || existing.CountryName != country || !existing.IsActive)
+                        bool modified = false;
+                        if (existing.CityId != cityId) { existing.CityId = cityId; modified = true; }
+                        if (existing.CityName != cityName) { existing.CityName = cityName; modified = true; }
+                        if (existing.DistrictName != districtName) { existing.DistrictName = districtName; modified = true; }
+                        if (existing.StateName != stateName) { existing.StateName = stateName; modified = true; }
+                        if (existing.CountryCode != countryCode) { existing.CountryCode = countryCode; modified = true; }
+                        if (existing.FullName != fullName) { existing.FullName = fullName ?? cityName; modified = true; }
+                        if (existing.Type != (type ?? "CITY")) { existing.Type = type ?? "CITY"; modified = true; }
+                        if (existing.HotelCount != hotelCount) { existing.HotelCount = hotelCount; modified = true; }
+                        if (!existing.IsActive) { existing.IsActive = true; modified = true; }
+
+                        if (modified)
                         {
-                            existing.CityName = cityName;
-                            existing.CountryName = country;
-                            existing.CountryCode = countryCode;
-                            existing.IsActive = true;
                             existing.UpdatedAt = DateTime.UtcNow;
                             updatedCount++;
                         }
@@ -233,69 +269,16 @@ namespace PickNBook.Api.Services.Implementations
                     {
                         toInsert.Add(new HotelCity
                         {
-                            CityCode = cityCode,
+                            CityId = cityId,
+                            CityCode = rawCityId,
                             CityName = cityName,
-                            CountryName = country,
+                            DistrictName = districtName,
+                            StateName = stateName,
                             CountryCode = countryCode,
-                            RequestType = "Special",
-                            IsActive = true,
-                            CreatedAt = DateTime.UtcNow,
-                            UpdatedAt = DateTime.UtcNow
-                        });
-
-                        if (toInsert.Count >= BatchSize)
-                        {
-                            await _dbContext.HotelCities.AddRangeAsync(toInsert, cancellationToken);
-                            await _dbContext.SaveChangesAsync(cancellationToken);
-                            toInsert.Clear();
-                        }
-                    }
-                }
-
-                // 2. Process International Hotel Cities
-                var intlSqlFile = await _downloader.DownloadAndExtractAsync(_settings.HotelInternationalResourceUrl, intlStaging, cancellationToken);
-                await foreach (var row in _parser.ParseInsertRowsAsync(intlSqlFile, "hotel_city_code", cancellationToken))
-                {
-                    readCount++;
-
-                    row.TryGetValue("cityid", out var cityCode);
-                    row.TryGetValue("destination", out var cityName);
-                    row.TryGetValue("country", out var country);
-                    row.TryGetValue("countrycode", out var countryCode);
-
-                    cityCode = cityCode?.Trim();
-                    cityName = cityName?.Trim();
-
-                    if (string.IsNullOrWhiteSpace(cityCode) || string.IsNullOrWhiteSpace(cityName))
-                    {
-                        failedCount++;
-                        continue;
-                    }
-
-                    var key = $"International:{cityCode}";
-                    if (!seenKeys.Add(key)) continue;
-
-                    if (existingCities.TryGetValue(key, out var existing))
-                    {
-                        if (existing.CityName != cityName || existing.CountryName != country || !existing.IsActive)
-                        {
-                            existing.CityName = cityName;
-                            existing.CountryName = country;
-                            existing.CountryCode = countryCode;
-                            existing.IsActive = true;
-                            existing.UpdatedAt = DateTime.UtcNow;
-                            updatedCount++;
-                        }
-                    }
-                    else
-                    {
-                        toInsert.Add(new HotelCity
-                        {
-                            CityCode = cityCode,
-                            CityName = cityName,
-                            CountryName = country,
-                            CountryCode = countryCode,
-                            RequestType = "International",
+                            FullName = fullName ?? cityName,
+                            Type = type ?? "CITY",
+                            HotelCount = hotelCount,
+                            RequestType = "V8",
                             IsActive = true,
                             CreatedAt = DateTime.UtcNow,
                             UpdatedAt = DateTime.UtcNow
@@ -314,9 +297,10 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     await _dbContext.HotelCities.AddRangeAsync(toInsert, cancellationToken);
                     await _dbContext.SaveChangesAsync(cancellationToken);
+                    toInsert.Clear();
                 }
 
-                // Soft-deactivate missing records
+                // Soft-deactivate missing records (if any existing ones are obsolete)
                 int deactivatedCount = 0;
                 foreach (var kvp in existingCities)
                 {
@@ -350,8 +334,7 @@ namespace PickNBook.Api.Services.Implementations
             }
             finally
             {
-                await _downloader.CleanupStagingAsync(specialStaging);
-                await _downloader.CleanupStagingAsync(intlStaging);
+                await _downloader.CleanupStagingAsync(hotelStaging);
                 sw.Stop();
                 result.DurationMs = sw.ElapsedMilliseconds;
             }

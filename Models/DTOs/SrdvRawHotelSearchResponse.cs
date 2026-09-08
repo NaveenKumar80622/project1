@@ -15,6 +15,11 @@ namespace PickNBook.Api.Models.DTOs
         
         [JsonConverter(typeof(SafeStringConverter))] public string TraceId { get; set; } = "";
         
+        [JsonConverter(typeof(SafeStringConverter))] public string ResultStatus { get; set; } = "COMPLETED";
+        [JsonConverter(typeof(SafeIntConverter))] public int RecheckAfterMs { get; set; } = 0;
+        [JsonConverter(typeof(SafeIntConverter))] public int RecheckTimeoutSeconds { get; set; } = 0;
+        public long? ApiTimeMs { get; set; }
+        
         public SrdvRawError Error { get; set; }
         public List<SrdvRawNoOfRooms> NoOfRooms { get; set; } = new();
         public List<SrdvRawHotelResult> Results { get; set; } = new();

@@ -100,7 +100,8 @@ namespace PickNBook.Api.Services
             {
                 guestDetails = string.Join("_", request.RoomGuests.Select(rg => $"{rg.NoOfAdults}-{rg.NoOfChild}"));
             }
-            var cacheKey = $"HotelSearch_{request.CityId}_{request.CheckInDate}_{request.CheckOutDate}_{request.NoOfRooms}_{guestDetails}";
+            var hotelCodesKey = request.HotelCodes != null && request.HotelCodes.Count > 0 ? string.Join("-", request.HotelCodes) : "";
+            var cacheKey = $"HotelSearch_{request.CityId}_{hotelCodesKey}_{request.CheckInDate}_{request.CheckOutDate}_{request.NoOfRooms}_{guestDetails}";
 
             if (_cache.TryGetValue(cacheKey, out PickNBookHotelSearchResponseDto? cachedResponse))
             {
@@ -109,8 +110,8 @@ namespace PickNBook.Api.Services
 
             var response = await SearchHotelsMultiLevelRawAsync(request);
             
-            // Only cache if there's no error
-            if (response != null && (response.Error == null || response.Error.ErrorCode == 0))
+            // Only cache in main search cache if finished and valid
+            if (response != null && response.ResultStatus == "COMPLETED" && (response.Error == null || response.Error.ErrorCode == 0))
             {
                 _cache.Set(cacheKey, response, TimeSpan.FromMinutes(15));
             }
@@ -120,69 +121,89 @@ namespace PickNBook.Api.Services
 
         private async Task<PickNBookHotelSearchResponseDto> SearchHotelsMultiLevelRawAsync(SrdvHotelSearchRequestDto request)
         {
-            request.ClientId = _settings.ClientId;
-            request.UserName = _settings.UserName;
-            request.Password = _settings.Password;
-            
-            if (string.IsNullOrWhiteSpace(request.CountryCode)) request.CountryCode = "IN";
-            if (string.IsNullOrWhiteSpace(request.ResultCount)) request.ResultCount = "500";
-            if (string.IsNullOrWhiteSpace(request.PreferredCurrency)) request.PreferredCurrency = "INR";
-            if (string.IsNullOrWhiteSpace(request.GuestNationality)) request.GuestNationality = "IN";
-            if (request.RoomGuests == null || request.RoomGuests.Count == 0)
-            {
-                request.RoomGuests = new List<RoomGuestDto> { new RoomGuestDto { NoOfAdults = "1", NoOfChild = "0", ChildAge = new List<int>() } };
-            }
-
-            if (string.IsNullOrWhiteSpace(request.RequestType) && !string.IsNullOrWhiteSpace(request.CityId))
-            {
-                try
-                {
-                    using var scope = _serviceProvider.CreateScope();
-                    var db = scope.ServiceProvider.GetService<AppDbContext>();
-                    if (db != null)
-                    {
-                        var match = db.HotelCities.AsNoTracking().FirstOrDefault(h => h.CityCode == request.CityId && h.IsActive);
-                        if (match != null && !string.IsNullOrWhiteSpace(match.RequestType))
-                        {
-                            request.RequestType = match.RequestType;
-                        }
-                    }
-                }
-                catch { }
-
-                if (string.IsNullOrWhiteSpace(request.RequestType))
-                {
-                    var cacheSvc = _serviceProvider.GetService<HotelCityCacheService>();
-                    if (cacheSvc != null)
-                    {
-                        if (cacheSvc.SpecialCityIds.Contains(request.CityId))
-                        {
-                            request.RequestType = "Special";
-                        }
-                        else if (cacheSvc.InternationalCityIds.Contains(request.CityId))
-                        {
-                            request.RequestType = "International";
-                        }
-                    }
-                }
-            }
-
             if (!string.IsNullOrEmpty(_settings.ApiToken))
             {
                 _httpClient.DefaultRequestHeaders.Remove("Api-Token");
                 _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
             }
 
+            // Build clean supplier outbound request matching new SRDV v8 specification
+            var supplierReq = new SrdvSupplierHotelSearchRequest
+            {
+                CheckInDate = request.CheckInDate,
+                GuestNationality = string.IsNullOrWhiteSpace(request.GuestNationality) ? "IN" : request.GuestNationality.Trim().ToUpperInvariant()
+            };
+
+            // Calculate NoOfNights (1 to 30)
+            if (int.TryParse(request.NoOfNights, out var nightsVal) && nightsVal >= 1 && nightsVal <= 30)
+            {
+                supplierReq.NoOfNights = nightsVal;
+            }
+            else if (DateTime.TryParse(request.CheckInDate, out var cIn) && DateTime.TryParse(request.CheckOutDate, out var cOut) && cOut > cIn)
+            {
+                supplierReq.NoOfNights = Math.Clamp((cOut - cIn).Days, 1, 30);
+            }
+            else
+            {
+                supplierReq.NoOfNights = 1;
+            }
+
+            // CityId (integer)
+            if (int.TryParse(request.CityId, out var cid) && cid > 0)
+            {
+                supplierReq.CityId = cid;
+            }
+
+            // HotelCodes (integer[], max 200, positive integers)
+            if (request.HotelCodes != null && request.HotelCodes.Count > 0)
+            {
+                supplierReq.HotelCodes = request.HotelCodes.Where(h => h > 0).Distinct().Take(200).ToList();
+            }
+
+            // RoomGuests (1 to 9 rooms)
+            if (request.RoomGuests != null && request.RoomGuests.Count > 0)
+            {
+                foreach (var rg in request.RoomGuests.Take(9))
+                {
+                    int adults = int.TryParse(rg.NoOfAdults, out var a) ? Math.Clamp(a, 1, 6) : 1;
+                    int child = int.TryParse(rg.NoOfChild, out var c) ? Math.Clamp(c, 0, 4) : 0;
+                    List<int>? ages = null;
+                    if (child > 0)
+                    {
+                        ages = rg.ChildAge != null ? rg.ChildAge.Take(child).Select(age => Math.Clamp(age, 0, 17)).ToList() : new List<int>();
+                        while (ages.Count < child) ages.Add(5); // ChildAge count must equal NoOfChild
+                    }
+                    supplierReq.RoomGuests.Add(new SrdvSupplierRoomGuest
+                    {
+                        NoOfAdults = adults,
+                        NoOfChild = child,
+                        ChildAge = ages
+                    });
+                }
+            }
+            if (supplierReq.RoomGuests.Count == 0)
+            {
+                supplierReq.RoomGuests.Add(new SrdvSupplierRoomGuest { NoOfAdults = 1, NoOfChild = 0 });
+            }
+
+            // Ratings (0 to 7)
+            if (int.TryParse(request.MinRating, out var minR)) supplierReq.MinRating = Math.Clamp(minR, 0, 7);
+            if (int.TryParse(request.MaxRating, out var maxR)) supplierReq.MaxRating = Math.Clamp(maxR, 0, 7);
+            if (supplierReq.MinRating.HasValue && supplierReq.MaxRating.HasValue && supplierReq.MinRating > supplierReq.MaxRating)
+            {
+                supplierReq.MinRating = supplierReq.MaxRating;
+            }
+
             try
             {
-                // ── [SUPPLIER-DEBUG] Log the EXACT outbound payload ──
-                var outboundJson = JsonSerializer.Serialize(request, new JsonSerializerOptions { WriteIndented = true });
-                _logger?.LogWarning("[SUPPLIER-DEBUG] Outbound request to {Url}:\n{Payload}", $"{_settings.HotelBaseUrl}/Search", outboundJson);
+                var searchUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/Search";
+                var outboundJson = JsonSerializer.Serialize(supplierReq, new JsonSerializerOptions { WriteIndented = true });
+                _logger?.LogWarning("[SUPPLIER-DEBUG] Outbound request to {Url}:\n{Payload}", searchUrl, outboundJson);
 
-                var response = await _httpClient.PostAsJsonAsync($"{_settings.HotelBaseUrl}/Search", request);
+                var response = await _httpClient.PostAsJsonAsync(searchUrl, supplierReq);
                 response.EnsureSuccessStatusCode();
 
-                // ── [SUPPLIER-DEBUG] Streaming deserialization ──
+                // Streaming deserialization
                 using var stream = await response.Content.ReadAsStreamAsync();
                 var serializerOptions = new JsonSerializerOptions 
                 { 
@@ -204,7 +225,11 @@ namespace PickNBook.Api.Services
                     CheckInDate = string.IsNullOrEmpty(srdvResponse.CheckInDate) ? request.CheckInDate : srdvResponse.CheckInDate,
                     CheckOutDate = string.IsNullOrEmpty(srdvResponse.CheckOutDate) ? request.CheckOutDate : srdvResponse.CheckOutDate,
                     PreferredCurrency = srdvResponse.PreferredCurrency,
-                    TraceId = long.TryParse(srdvResponse.TraceId, out var tid) ? tid : (srdvResponse.TraceId != null ? srdvResponse.TraceId.GetHashCode() : 0)
+                    TraceId = long.TryParse(srdvResponse.TraceId, out var tid) ? tid : (srdvResponse.TraceId != null ? srdvResponse.TraceId.GetHashCode() : 0),
+                    ResultStatus = string.IsNullOrWhiteSpace(srdvResponse.ResultStatus) ? "COMPLETED" : srdvResponse.ResultStatus,
+                    RecheckAfterMs = srdvResponse.RecheckAfterMs,
+                    RecheckTimeoutSeconds = srdvResponse.RecheckTimeoutSeconds,
+                    ApiTimeMs = srdvResponse.ApiTimeMs
                 };
 
                 if (srdvResponse.Error != null)
@@ -240,7 +265,7 @@ namespace PickNBook.Api.Services
                 {
                     foreach (var rg in request.RoomGuests)
                     {
-                        responseDto.NoOfRooms.Add(new HotelSearchNoOfRoomsDto { NoOfAdults = rg.NoOfAdults, NoOfChild = rg.NoOfChild, ChildAge = new List<int>(rg.ChildAge) });
+                        responseDto.NoOfRooms.Add(new HotelSearchNoOfRoomsDto { NoOfAdults = rg.NoOfAdults, NoOfChild = rg.NoOfChild, ChildAge = new List<int>(rg.ChildAge ?? new List<int>()) });
                     }
                 }
 
@@ -251,117 +276,9 @@ namespace PickNBook.Api.Services
                 {
                     foreach (var hotel in srdvResponse.Results)
                     {
-                        var item = new HotelSearchResultItemDto
-                        {
-                            SrdvIndex = hotel.SrdvIndex,
-                            ResultIndex = hotel.ResultIndex,
-                            OfferedFare = hotel.OfferedFare,
-                            HotelCode = hotel.HotelCode,
-                            HotelName = hotel.HotelName,
-                            HotelCategory = hotel.HotelCategory,
-                            StarRating = hotel.StarRating,
-                            HotelDescription = hotel.HotelDescription,
-                            HotelPromotion = hotel.HotelPromotion,
-                            HotelPolicy = hotel.HotelPolicy,
-                            HotelPicture = hotel.HotelPicture,
-                            HotelAddress = hotel.HotelAddress,
-                            City = hotel.City,
-                            State = hotel.State,
-                            PinCode = hotel.PinCode,
-                            Country = hotel.Country,
-                            HotelContactNo = hotel.HotelContactNo,
-                            HotelMap = hotel.HotelMap,
-                            Latitude = hotel.Latitude,
-                            Longitude = hotel.Longitude,
-                            HotelLocation = hotel.HotelLocation,
-                            SupplierPrice = hotel.SupplierPrice
-                        };
+                        var item = MapRawHotelToResultItem(hotel);
 
-                        if (hotel.Facilities != null)
-                        {
-                            foreach (var fac in hotel.Facilities)
-                            {
-                                var facItem = new HotelSearchFacilityItemDto { RoomPrice = fac.RoomPrice };
-                                if (fac.FacilitiesNames != null)
-                                {
-                                    foreach (var fn in fac.FacilitiesNames)
-                                    {
-                                        if (fn.ValueKind == JsonValueKind.String) facItem.FacilitiesNames.Add(fn.GetString() ?? "");
-                                    }
-                                }
-                                item.Facilities.Add(facItem);
-                            }
-                        }
-
-                        if (hotel.Rooms != null)
-                        {
-                            foreach (var rm in hotel.Rooms)
-                            {
-                                item.Rooms.Add(new HotelSearchRoomCategoryDto { Cateogry = string.IsNullOrEmpty(rm.Category) ? rm.Cateogry : rm.Category });
-                            }
-                        }
-
-                        var rawPrice = hotel.Price;
-                        if (rawPrice != null)
-                        {
-                            item.Price = new HotelSearchPriceDto
-                            {
-                                CurrencyCode = rawPrice.CurrencyCode,
-                                RoomPrice = rawPrice.RoomPrice,
-                                Tax = rawPrice.Tax,
-                                ExtraGuestCharge = rawPrice.ExtraGuestCharge,
-                                ChildCharge = rawPrice.ChildCharge,
-                                OtherCharges = rawPrice.OtherCharges,
-                                Discount = rawPrice.Discount,
-                                PublishedPrice = rawPrice.PublishedPrice,
-                                PublishedPriceRoundedOff = rawPrice.PublishedPriceRoundedOff,
-                                OfferedPrice = rawPrice.OfferedPrice,
-                                OfferedPriceRoundedOff = rawPrice.OfferedPriceRoundedOff,
-                                ServiceTax = rawPrice.ServiceTax,
-                                TDS = rawPrice.TDS,
-                                ServiceCharge = rawPrice.ServiceCharge,
-                                TotalGSTAmount = rawPrice.TotalGSTAmount,
-                                B2CTotalPrice = rawPrice.OfferedPrice,
-                                B2CBasePrice = Math.Max(0m, rawPrice.OfferedPrice - rawPrice.TotalGSTAmount)
-                            };
-                            
-                            if (rawPrice.GST != null)
-                            {
-                                item.Price.GST = new HotelSearchGstDto
-                                {
-                                    CGSTAmount = rawPrice.GST.CGSTAmount,
-                                    CGSTRate = rawPrice.GST.CGSTRate,
-                                    CessAmount = rawPrice.GST.CessAmount,
-                                    CessRate = rawPrice.GST.CessRate,
-                                    IGSTAmount = rawPrice.GST.IGSTAmount,
-                                    IGSTRate = rawPrice.GST.IGSTRate,
-                                    SGSTAmount = rawPrice.GST.SGSTAmount,
-                                    SGSTRate = rawPrice.GST.SGSTRate,
-                                    TaxableAmount = rawPrice.GST.TaxableAmount
-                                };
-                            }
-                        }
-
-                        var offerDto = new HotelOfferDto
-                        {
-                            OfferId = item.ResultIndex,
-                            HotelId = item.HotelCode,
-                            HotelName = item.HotelName,
-                            CityCode = request.CityId,
-                            Latitude = double.TryParse(item.Latitude, out var ltVal) ? ltVal : null,
-                            Longitude = double.TryParse(item.Longitude, out var lgVal) ? lgVal : null,
-                            Address = item.HotelAddress,
-                            CheckInDate = request.CheckInDate,
-                            CheckOutDate = request.CheckOutDate,
-                            RoomQuantity = int.TryParse(request.NoOfRooms, out var rmQty) ? rmQty : 1,
-                            AdultQuantity = request.RoomGuests.Count > 0 && int.TryParse(request.RoomGuests[0].NoOfAdults, out var aq) ? aq : 1,
-                            ChildQuantity = request.RoomGuests.Count > 0 && int.TryParse(request.RoomGuests[0].NoOfChild, out var cq) ? cq : 0,
-                            Price = item.OfferedFare,
-                            Currency = item.Price?.CurrencyCode ?? "INR",
-                            SrdvIndex = int.TryParse(item.SrdvIndex, out var siVal) ? siVal : 0,
-                            TraceId = responseDto.TraceId.ToString(),
-                            ResultIndex = item.ResultIndex
-                        };
+                        var offerDto = MapToOfferDto(item, responseDto, request);
                         _cache.Set(item.HotelCode, offerDto, TimeSpan.FromMinutes(30));
                         _cache.Set(item.ResultIndex, offerDto, TimeSpan.FromMinutes(30));
 
@@ -384,6 +301,40 @@ namespace PickNBook.Api.Services
                     }
                 }
 
+                // Cache initial wave by TraceId
+                if (responseDto.TraceId != null)
+                {
+                    _cache.Set($"HotelSearch_Trace_{responseDto.TraceId}", responseDto, TimeSpan.FromMinutes(20));
+                }
+
+                // Server-side fast-poll if PARTIAL (up to 5 seconds)
+                if (responseDto.ResultStatus == "PARTIAL" && long.TryParse(responseDto.TraceId?.ToString(), out var traceIdNum) && traceIdNum > 0)
+                {
+                    _logger?.LogInformation("[SRDV-HOTEL] Search returned PARTIAL for TraceId {TraceId}. Fast-polling RecheckSearch...", traceIdNum);
+                    var pollStart = DateTime.UtcNow;
+                    var maxPollDuration = TimeSpan.FromSeconds(5);
+                    int delayMs = Math.Clamp(responseDto.RecheckAfterMs > 0 ? responseDto.RecheckAfterMs : 1000, 500, 3000);
+
+                    while (responseDto.ResultStatus == "PARTIAL" && (DateTime.UtcNow - pollStart) < maxPollDuration)
+                    {
+                        await Task.Delay(delayMs);
+                        var polled = await RecheckSearchAsync(traceIdNum);
+                        if (polled != null && (polled.Error == null || polled.Error.ErrorCode == 0))
+                        {
+                            responseDto = polled;
+                            if (responseDto.ResultStatus == "COMPLETED")
+                            {
+                                _logger?.LogInformation("[SRDV-HOTEL] Fast-poll COMPLETED for TraceId {TraceId} in {ElapsedMs}ms", traceIdNum, (DateTime.UtcNow - pollStart).TotalMilliseconds);
+                                break;
+                            }
+                            delayMs = Math.Clamp(responseDto.RecheckAfterMs > 0 ? responseDto.RecheckAfterMs : 1000, 500, 3000);
+                        }
+                        else
+                        {
+                            break;
+                        }
+                    }
+                }
 
                 return responseDto;
             }
@@ -392,6 +343,262 @@ namespace PickNBook.Api.Services
                 _logger?.LogError(ex, "SRDV API unreachable or error occurred during SearchHotels: {Error}", ex.Message);
                 return new PickNBookHotelSearchResponseDto();
             }
+        }
+
+        public async Task<PickNBookHotelSearchResponseDto> RecheckSearchAsync(long traceId)
+        {
+            if (traceId <= 0)
+            {
+                return new PickNBookHotelSearchResponseDto
+                {
+                    Error = new HotelSearchErrorDto { ErrorCode = 1, ErrorMessage = "Invalid TraceId" }
+                };
+            }
+
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
+            }
+
+            var recheckReq = new SrdvHotelRecheckRequestDto { TraceId = traceId };
+            var recheckUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/RecheckSearch";
+
+            try
+            {
+                var outboundJson = JsonSerializer.Serialize(recheckReq);
+                _logger?.LogInformation("[SUPPLIER-DEBUG] Outbound RecheckSearch to {Url}:\n{Payload}", recheckUrl, outboundJson);
+
+                var response = await _httpClient.PostAsJsonAsync(recheckUrl, recheckReq);
+                response.EnsureSuccessStatusCode();
+
+                using var stream = await response.Content.ReadAsStreamAsync();
+                var serializerOptions = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    NumberHandling = JsonNumberHandling.AllowReadingFromString
+                };
+                serializerOptions.Converters.Add(new PickNBook.Api.Models.DTOs.SafeListConverterFactory());
+
+                var srdvResponse = await JsonSerializer.DeserializeAsync<SrdvRawHotelSearchResponse>(stream, serializerOptions);
+                if (srdvResponse == null)
+                {
+                    return new PickNBookHotelSearchResponseDto();
+                }
+
+                // Check for cached initial wave rows
+                _cache.TryGetValue($"HotelSearch_Trace_{traceId}", out PickNBookHotelSearchResponseDto? cachedWave);
+
+                var responseDto = cachedWave ?? new PickNBookHotelSearchResponseDto();
+                responseDto.TraceId = traceId;
+                responseDto.ResultStatus = string.IsNullOrWhiteSpace(srdvResponse.ResultStatus) ? "COMPLETED" : srdvResponse.ResultStatus;
+                responseDto.RecheckAfterMs = srdvResponse.RecheckAfterMs;
+                responseDto.RecheckTimeoutSeconds = srdvResponse.RecheckTimeoutSeconds;
+                responseDto.ApiTimeMs = srdvResponse.ApiTimeMs;
+
+                if (srdvResponse.Error != null)
+                {
+                    responseDto.Error.ErrorCode = srdvResponse.Error.ErrorCode;
+                    responseDto.Error.ErrorMessage = srdvResponse.Error.ErrorMessage;
+                    if (srdvResponse.Error.ErrorCode != 0)
+                    {
+                        _logger?.LogWarning("SRDV RecheckSearch API returned error ({ErrorCode}): {ErrorMessage}", srdvResponse.Error.ErrorCode, srdvResponse.Error.ErrorMessage);
+                        return responseDto;
+                    }
+                }
+
+                // Per SRDV Docs: While still running, Results array is empty. Keep the rows you already have!
+                if (srdvResponse.Results != null && srdvResponse.Results.Count > 0)
+                {
+                    using var markupScope = _serviceProvider.CreateScope();
+                    var markupService = markupScope.ServiceProvider.GetService<IHotelMarkupService>();
+
+                    var processedResults = new List<HotelSearchResultItemDto>();
+                    foreach (var hotel in srdvResponse.Results)
+                    {
+                        var item = MapRawHotelToResultItem(hotel);
+
+                        var offerDto = new HotelOfferDto
+                        {
+                            OfferId = item.ResultIndex,
+                            HotelId = item.HotelCode,
+                            HotelName = item.HotelName,
+                            CityCode = responseDto.CityId,
+                            Latitude = double.TryParse(item.Latitude, out var ltVal) ? ltVal : null,
+                            Longitude = double.TryParse(item.Longitude, out var lgVal) ? lgVal : null,
+                            Address = item.HotelAddress,
+                            CheckInDate = responseDto.CheckInDate,
+                            CheckOutDate = responseDto.CheckOutDate,
+                            RoomQuantity = responseDto.NoOfRooms.Count > 0 ? responseDto.NoOfRooms.Count : 1,
+                            AdultQuantity = responseDto.NoOfRooms.Count > 0 && int.TryParse(responseDto.NoOfRooms[0].NoOfAdults, out var aq) ? aq : 1,
+                            ChildQuantity = responseDto.NoOfRooms.Count > 0 && int.TryParse(responseDto.NoOfRooms[0].NoOfChild, out var cq) ? cq : 0,
+                            Price = item.OfferedFare,
+                            Currency = item.Price?.CurrencyCode ?? "INR",
+                            SrdvIndex = int.TryParse(item.SrdvIndex, out var siVal) ? siVal : 0,
+                            TraceId = traceId.ToString(),
+                            ResultIndex = item.ResultIndex
+                        };
+
+                        if (markupService != null && item.Price != null)
+                        {
+                            try
+                            {
+                                await ApplyMarkupAndGstAsync(markupService, item.Price, responseDto.CityId, item.HotelCode, "B2C");
+                                item.OfferedFare = item.Price.OfferedPrice;
+                                offerDto.Price = item.OfferedFare;
+                            }
+                            catch (Exception mkEx)
+                            {
+                                _logger?.LogWarning(mkEx, "Failed to apply hotel search markup for HotelCode {HotelCode}", item.HotelCode);
+                            }
+                        }
+
+                        _cache.Set(item.HotelCode, offerDto, TimeSpan.FromMinutes(30));
+                        _cache.Set(item.ResultIndex, offerDto, TimeSpan.FromMinutes(30));
+
+                        processedResults.Add(item);
+                    }
+
+                    responseDto.Results = processedResults;
+                }
+
+                // Update cache under TraceId
+                _cache.Set($"HotelSearch_Trace_{traceId}", responseDto, TimeSpan.FromMinutes(20));
+                return responseDto;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "SRDV API unreachable or error occurred during RecheckSearch for TraceId {TraceId}: {Error}", traceId, ex.Message);
+                if (_cache.TryGetValue($"HotelSearch_Trace_{traceId}", out PickNBookHotelSearchResponseDto? cachedFallback))
+                {
+                    return cachedFallback;
+                }
+                return new PickNBookHotelSearchResponseDto
+                {
+                    TraceId = traceId,
+                    Error = new HotelSearchErrorDto { ErrorCode = 500, ErrorMessage = ex.Message }
+                };
+            }
+        }
+
+        private static HotelSearchResultItemDto MapRawHotelToResultItem(SrdvRawHotelResult hotel)
+        {
+            var item = new HotelSearchResultItemDto
+            {
+                SrdvIndex = hotel.SrdvIndex,
+                ResultIndex = hotel.ResultIndex,
+                OfferedFare = hotel.OfferedFare,
+                HotelCode = hotel.HotelCode,
+                HotelName = hotel.HotelName,
+                HotelCategory = hotel.HotelCategory,
+                StarRating = hotel.StarRating,
+                HotelDescription = hotel.HotelDescription,
+                HotelPromotion = hotel.HotelPromotion,
+                HotelPolicy = hotel.HotelPolicy,
+                HotelPicture = hotel.HotelPicture,
+                HotelAddress = hotel.HotelAddress,
+                City = hotel.City,
+                State = hotel.State,
+                PinCode = hotel.PinCode,
+                Country = hotel.Country,
+                HotelContactNo = hotel.HotelContactNo,
+                HotelMap = hotel.HotelMap,
+                Latitude = hotel.Latitude,
+                Longitude = hotel.Longitude,
+                HotelLocation = hotel.HotelLocation,
+                SupplierPrice = hotel.SupplierPrice
+            };
+
+            if (hotel.Facilities != null)
+            {
+                foreach (var fac in hotel.Facilities)
+                {
+                    var facItem = new HotelSearchFacilityItemDto { RoomPrice = fac.RoomPrice };
+                    if (fac.FacilitiesNames != null)
+                    {
+                        foreach (var fn in fac.FacilitiesNames)
+                        {
+                            if (fn.ValueKind == JsonValueKind.String) facItem.FacilitiesNames.Add(fn.GetString() ?? "");
+                        }
+                    }
+                    item.Facilities.Add(facItem);
+                }
+            }
+
+            if (hotel.Rooms != null)
+            {
+                foreach (var rm in hotel.Rooms)
+                {
+                    item.Rooms.Add(new HotelSearchRoomCategoryDto { Cateogry = string.IsNullOrEmpty(rm.Category) ? rm.Cateogry : rm.Category });
+                }
+            }
+
+            var rawPrice = hotel.Price;
+            if (rawPrice != null)
+            {
+                item.Price = new HotelSearchPriceDto
+                {
+                    CurrencyCode = rawPrice.CurrencyCode,
+                    RoomPrice = rawPrice.RoomPrice,
+                    Tax = rawPrice.Tax,
+                    ExtraGuestCharge = rawPrice.ExtraGuestCharge,
+                    ChildCharge = rawPrice.ChildCharge,
+                    OtherCharges = rawPrice.OtherCharges,
+                    Discount = rawPrice.Discount,
+                    PublishedPrice = rawPrice.PublishedPrice,
+                    PublishedPriceRoundedOff = rawPrice.PublishedPriceRoundedOff,
+                    OfferedPrice = rawPrice.OfferedPrice,
+                    OfferedPriceRoundedOff = rawPrice.OfferedPriceRoundedOff,
+                    ServiceTax = rawPrice.ServiceTax,
+                    TDS = rawPrice.TDS,
+                    ServiceCharge = rawPrice.ServiceCharge,
+                    TotalGSTAmount = rawPrice.TotalGSTAmount,
+                    B2CTotalPrice = rawPrice.OfferedPrice,
+                    B2CBasePrice = Math.Max(0m, rawPrice.OfferedPrice - rawPrice.TotalGSTAmount)
+                };
+
+                if (rawPrice.GST != null)
+                {
+                    item.Price.GST = new HotelSearchGstDto
+                    {
+                        CGSTAmount = rawPrice.GST.CGSTAmount,
+                        CGSTRate = rawPrice.GST.CGSTRate,
+                        CessAmount = rawPrice.GST.CessAmount,
+                        CessRate = rawPrice.GST.CessRate,
+                        IGSTAmount = rawPrice.GST.IGSTAmount,
+                        IGSTRate = rawPrice.GST.IGSTRate,
+                        SGSTAmount = rawPrice.GST.SGSTAmount,
+                        SGSTRate = rawPrice.GST.SGSTRate,
+                        TaxableAmount = rawPrice.GST.TaxableAmount
+                    };
+                }
+            }
+
+            return item;
+        }
+
+        private static HotelOfferDto MapToOfferDto(HotelSearchResultItemDto item, PickNBookHotelSearchResponseDto responseDto, SrdvHotelSearchRequestDto request)
+        {
+            return new HotelOfferDto
+            {
+                OfferId = item.ResultIndex,
+                HotelId = item.HotelCode,
+                HotelName = item.HotelName,
+                CityCode = request.CityId,
+                Latitude = double.TryParse(item.Latitude, out var ltVal) ? ltVal : null,
+                Longitude = double.TryParse(item.Longitude, out var lgVal) ? lgVal : null,
+                Address = item.HotelAddress,
+                CheckInDate = request.CheckInDate,
+                CheckOutDate = request.CheckOutDate,
+                RoomQuantity = int.TryParse(request.NoOfRooms, out var rmQty) ? rmQty : 1,
+                AdultQuantity = request.RoomGuests != null && request.RoomGuests.Count > 0 && int.TryParse(request.RoomGuests[0].NoOfAdults, out var aq) ? aq : 1,
+                ChildQuantity = request.RoomGuests != null && request.RoomGuests.Count > 0 && int.TryParse(request.RoomGuests[0].NoOfChild, out var cq) ? cq : 0,
+                Price = item.OfferedFare,
+                Currency = item.Price?.CurrencyCode ?? "INR",
+                SrdvIndex = int.TryParse(item.SrdvIndex, out var siVal) ? siVal : 0,
+                TraceId = responseDto.TraceId?.ToString(),
+                ResultIndex = item.ResultIndex
+            };
         }
 
         public async Task<HotelOfferDto?> GetOfferDetailsAsync(string offerId)
@@ -463,11 +670,13 @@ namespace PickNBook.Api.Services
             }
             else
             {
+                long.TryParse(offer.TraceId, out var otid);
                 var blockReq = new BlockRoomRequestDto
                 {
-                    TraceId = offer.TraceId,
-                    ResultIndex = offer.ResultIndex,
-                    HotelCode = offer.HotelCode!,
+                    TraceId = otid,
+                    ResultIndex = offer.ResultIndex ?? "",
+                    RoomIndex = "1",
+                    HotelCode = offer.HotelCode,
                     HotelName = offer.HotelName,
                     NoOfRooms = offer.RoomQuantity,
                     Price = offer.Price
@@ -782,80 +991,38 @@ namespace PickNBook.Api.Services
 
         public async Task<PickNBookHotelInfoResponseDto> GetHotelInfoAsync(HotelInfoRequestDto request)
         {
-            request.ClientId = _settings.ClientId;
-            request.UserName = _settings.UserName;
-            request.Password = _settings.Password;
-
-
-            using var scope = _serviceProvider.CreateScope();
-            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            // 1. Check cache first
-            var cachedInfo = await dbContext.HotelInfoCaches.FirstOrDefaultAsync(h => h.HotelCode == request.HotelCode);
-            if (cachedInfo != null && cachedInfo.LastUpdated > DateTime.UtcNow.AddDays(-30))
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
             {
-                var cachedDto = new PickNBookHotelInfoResponseDto();
-                var cRes = cachedDto.HotelInfoResult;
-                cRes.SrdvType = request.SrdvType;
-                cRes.ResultIndex = request.ResultIndex;
-                cRes.SrdvIndex = request.SrdvIndex;
-                cRes.TraceId = request.TraceId;
-                
-                var cDetails = cRes.HotelDetails;
-                cDetails.HotelCode = cachedInfo.HotelCode;
-                cDetails.HotelName = cachedInfo.HotelName;
-                cDetails.StarRating = cachedInfo.StarRating;
-                cDetails.HotelURL = cachedInfo.HotelURL;
-                cDetails.HotelPicture = cachedInfo.HotelPicture;
-                cDetails.Address = cachedInfo.Address;
-                cDetails.City = cachedInfo.City;
-                cDetails.State = cachedInfo.State;
-                cDetails.PinCode = cachedInfo.PinCode;
-                cDetails.CountryName = cachedInfo.CountryName;
-                cDetails.HotelContactNo = cachedInfo.HotelContactNo;
-                cDetails.FaxNumber = cachedInfo.FaxNumber;
-                cDetails.Email = cachedInfo.Email;
-                cDetails.Latitude = cachedInfo.Latitude;
-                cDetails.Longitude = cachedInfo.Longitude;
-                cDetails.OtherDetails = cachedInfo.OtherDetails;
-                cDetails.HotelPolicy = cachedInfo.HotelPolicy;
-                cDetails.SpecialInstructions = cachedInfo.SpecialInstructions;
-                cDetails.RoomData = cachedInfo.RoomData;
-                cDetails.RoomFacilities = cachedInfo.RoomFacilities;
-                cDetails.Services = cachedInfo.Services;
-                
-                if (!string.IsNullOrWhiteSpace(cachedInfo.DescriptionJson))
-                    cDetails.Description = JsonSerializer.Deserialize<List<HotelInfoDescriptionDto>>(cachedInfo.DescriptionJson) ?? new List<HotelInfoDescriptionDto>();
-                if (!string.IsNullOrWhiteSpace(cachedInfo.PolicyAndInstructionJson))
-                    cDetails.PolicyAndInstruction = JsonSerializer.Deserialize<List<HotelInfoPolicyAndInstructionDto>>(cachedInfo.PolicyAndInstructionJson) ?? new List<HotelInfoPolicyAndInstructionDto>();
-                if (!string.IsNullOrWhiteSpace(cachedInfo.AttractionsJson))
-                    cDetails.Attractions = JsonSerializer.Deserialize<List<string>>(cachedInfo.AttractionsJson) ?? new List<string>();
-                if (!string.IsNullOrWhiteSpace(cachedInfo.HotelFacilitiesJson))
-                {
-                    cDetails.HotelFacilities = JsonSerializer.Deserialize<List<HotelInfoFacilityDto>>(cachedInfo.HotelFacilitiesJson) ?? new List<HotelInfoFacilityDto>();
-                    foreach (var fac in cDetails.HotelFacilities) { cachedDto.Facilities.Add(fac.Name); }
-                }
-                if (!string.IsNullOrWhiteSpace(cachedInfo.ImagesJson))
-                    cDetails.Images = JsonSerializer.Deserialize<List<string>>(cachedInfo.ImagesJson) ?? new List<string>();
-
-                return cachedDto;
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
             }
+
+            long.TryParse(request.TraceId?.ToString(), out var tid);
+            var supplierReq = new SrdvSupplierHotelInfoRequest
+            {
+                TraceId = tid,
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty
+            };
+
+            var infoUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/GetHotelInfo";
 
             JsonElement root;
             JsonDocument? jsonDoc = null;
             try
             {
-                var response = await _httpClient.PostAsJsonAsync($"{_settings.HotelBaseUrl}/GetHotelInfo", request);
+                var outboundJson = JsonSerializer.Serialize(supplierReq);
+                _logger?.LogInformation("[SUPPLIER-DEBUG] Outbound GetHotelInfo to {Url}:\n{Payload}", infoUrl, outboundJson);
+
+                var response = await _httpClient.PostAsJsonAsync(infoUrl, supplierReq);
                 response.EnsureSuccessStatusCode();
 
                 using var contentStream = await response.Content.ReadAsStreamAsync();
-            jsonDoc = await JsonDocument.ParseAsync(contentStream);
+                jsonDoc = await JsonDocument.ParseAsync(contentStream);
                 root = jsonDoc.RootElement;
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "SRDV API GetHotelInfo failed for HotelCode {HotelCode}.", request.HotelCode);
-                // No mock logic anymore, return error DTO
+                _logger?.LogWarning(ex, "SRDV API GetHotelInfo failed for TraceId {TraceId}, ResultIndex {ResultIndex}.", tid, request.ResultIndex);
                 var errDto = new PickNBookHotelInfoResponseDto();
                 errDto.HotelInfoResult.Error.ErrorCode = 1;
                 errDto.HotelInfoResult.Error.ErrorMessage = $"Failed to fetch hotel info from SRDV. Exception: {ex.Message}";
@@ -883,7 +1050,7 @@ namespace PickNBook.Api.Services
                 if (target.TryGetProperty("SrdvType", out var stProp)) resDto.SrdvType = stProp.GetString() ?? request.SrdvType;
                 if (target.TryGetProperty("ResultIndex", out var riProp)) resDto.ResultIndex = riProp.ValueKind == JsonValueKind.Number ? riProp.GetRawText() : (riProp.GetString() ?? request.ResultIndex);
                 if (target.TryGetProperty("SrdvIndex", out var siProp)) resDto.SrdvIndex = siProp.ValueKind == JsonValueKind.Number ? siProp.GetRawText() : (siProp.GetString() ?? request.SrdvIndex);
-                if (target.TryGetProperty("TraceId", out var tiProp)) resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId);
+                if (target.TryGetProperty("TraceId", out var tiProp)) resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId?.ToString() ?? "");
 
                 if (target.TryGetProperty("HotelDetails", out var detailsProp) && detailsProp.ValueKind == JsonValueKind.Object)
                 {
@@ -1005,11 +1172,61 @@ namespace PickNBook.Api.Services
                         }
                     }
                     
+                    if (detailsProp.TryGetProperty("StaySummary", out var ssProp) && ssProp.ValueKind == JsonValueKind.Object)
+                    {
+                        var ss = new HotelStaySummaryDto();
+                        if (ssProp.TryGetProperty("CheckInDate", out var cidProp)) ss.CheckInDate = cidProp.GetString() ?? "";
+                        if (ssProp.TryGetProperty("CheckOutDate", out var codProp)) ss.CheckOutDate = codProp.GetString() ?? "";
+                        if (ssProp.TryGetProperty("NoOfNights", out var nonProp))
+                        {
+                            if (nonProp.ValueKind == JsonValueKind.Number) ss.NoOfNights = nonProp.GetInt32();
+                            else if (nonProp.ValueKind == JsonValueKind.String && int.TryParse(nonProp.GetString(), out var nonVal)) ss.NoOfNights = nonVal;
+                        }
+                        if (ssProp.TryGetProperty("RoomCount", out var rcProp))
+                        {
+                            if (rcProp.ValueKind == JsonValueKind.Number) ss.RoomCount = rcProp.GetInt32();
+                            else if (rcProp.ValueKind == JsonValueKind.String && int.TryParse(rcProp.GetString(), out var rcVal)) ss.RoomCount = rcVal;
+                        }
+                        if (ssProp.TryGetProperty("AdultCount", out var acProp))
+                        {
+                            if (acProp.ValueKind == JsonValueKind.Number) ss.AdultCount = acProp.GetInt32();
+                            else if (acProp.ValueKind == JsonValueKind.String && int.TryParse(acProp.GetString(), out var acVal)) ss.AdultCount = acVal;
+                        }
+                        if (ssProp.TryGetProperty("ChildCount", out var ccProp))
+                        {
+                            if (ccProp.ValueKind == JsonValueKind.Number) ss.ChildCount = ccProp.GetInt32();
+                            else if (ccProp.ValueKind == JsonValueKind.String && int.TryParse(ccProp.GetString(), out var ccVal)) ss.ChildCount = ccVal;
+                        }
+                        if (ssProp.TryGetProperty("TotalGuestCount", out var tgcProp))
+                        {
+                            if (tgcProp.ValueKind == JsonValueKind.Number) ss.TotalGuestCount = tgcProp.GetInt32();
+                            else if (tgcProp.ValueKind == JsonValueKind.String && int.TryParse(tgcProp.GetString(), out var tgcVal)) ss.TotalGuestCount = tgcVal;
+                        }
+                        if (ssProp.TryGetProperty("GuestNationality", out var gnProp)) ss.GuestNationality = gnProp.GetString() ?? "";
+                        if (ssProp.TryGetProperty("SupplierNationalityCode", out var sncProp)) ss.SupplierNationalityCode = sncProp.GetString() ?? "";
+                        if (ssProp.TryGetProperty("Currency", out var curProp)) ss.Currency = curProp.GetString() ?? "INR";
+
+                        if (ssProp.TryGetProperty("RoomGuests", out var rgProp) && rgProp.ValueKind == JsonValueKind.Array)
+                        {
+                            try
+                            {
+                                var parsedGuests = JsonSerializer.Deserialize<List<RoomGuestDto>>(rgProp.GetRawText());
+                                if (parsedGuests != null) ss.RoomGuests = parsedGuests;
+                            }
+                            catch { }
+                        }
+
+                        hd.StaySummary = ss;
+                    }
+
                     // Upsert to DB
                     if (!string.IsNullOrWhiteSpace(hd.HotelCode) && hd.HotelCode != "None")
                     {
                         try
                         {
+                            using var scope = _serviceProvider.CreateScope();
+                            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                            var cachedInfo = await dbContext.HotelInfoCaches.FirstOrDefaultAsync(h => h.HotelCode == hd.HotelCode);
                             var entity = cachedInfo ?? new HotelInfoCache { HotelCode = hd.HotelCode };
                             entity.HotelName = hd.HotelName;
                             entity.StarRating = hd.StarRating;
@@ -1062,39 +1279,41 @@ namespace PickNBook.Api.Services
         }
 
 
-        public async Task<PickNBookHotelRoomResponseDto> GetHotelRoomAsync(string traceId, string resultIndex, string hotelCode, string srdvIndex, string endUserIp)
+        public async Task<PickNBookHotelRoomResponseDto> GetHotelRoomAsync(long traceId, string resultIndex)
         {
             return await GetHotelRoomAsync(new HotelRoomRequestDto
             {
                 TraceId = traceId,
-                ResultIndex = resultIndex,
-                HotelCode = hotelCode,
-                SrdvIndex = srdvIndex,
-                EndUserIp = endUserIp
+                ResultIndex = resultIndex
             });
         }
 
         public async Task<PickNBookHotelRoomResponseDto> GetHotelRoomAsync(HotelRoomRequestDto request)
         {
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
+            }
+
             JsonElement root;
             JsonDocument? jsonDoc = null;
             try
             {
-                request.ClientId = _settings.ClientId;
-                request.UserName = _settings.UserName;
-                request.Password = _settings.Password;
+                var roomUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/GetHotelRoom";
+                var outboundJson = JsonSerializer.Serialize(request);
+                _logger?.LogInformation("[SUPPLIER-DEBUG] Outbound GetHotelRoom to {Url}:\n{Payload}", roomUrl, outboundJson);
 
-
-                var response = await _httpClient.PostAsJsonAsync($"{_settings.HotelBaseUrl}/GetHotelRoom", request);
+                var response = await _httpClient.PostAsJsonAsync(roomUrl, request);
                 response.EnsureSuccessStatusCode();
 
                 using var contentStream = await response.Content.ReadAsStreamAsync();
-            jsonDoc = await JsonDocument.ParseAsync(contentStream);
+                jsonDoc = await JsonDocument.ParseAsync(contentStream);
                 root = jsonDoc.RootElement;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "SRDV API GetHotelRoom failed for HotelCode {HotelCode}.", request.HotelCode);
+                _logger?.LogWarning(ex, "SRDV API GetHotelRoom failed for TraceId {TraceId}, ResultIndex {ResultIndex}.", request.TraceId, request.ResultIndex);
                 var errDto = new PickNBookHotelRoomResponseDto();
                 errDto.GetHotelRoomResult.Error.ErrorCode = 1;
                 errDto.GetHotelRoomResult.Error.ErrorMessage = $"Failed to fetch hotel rooms from SRDV. Exception: {ex.Message}";
@@ -1133,7 +1352,7 @@ namespace PickNBook.Api.Services
                     if (target.TryGetProperty("SrdvIndex", out var siProp)) resDto.SrdvIndex = siProp.GetString() ?? "15";
                     if (target.TryGetProperty("TraceId", out var tiProp))
                     {
-                        resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId);
+                        resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId.ToString());
                     }
                     if (target.TryGetProperty("IsPolicyPerStay", out var ipProp) && (ipProp.ValueKind == JsonValueKind.True || ipProp.ValueKind == JsonValueKind.False)) resDto.IsPolicyPerStay = ipProp.GetBoolean();
                     if (target.TryGetProperty("IsUnderCancellationAllowed", out var icProp) && (icProp.ValueKind == JsonValueKind.True || icProp.ValueKind == JsonValueKind.False)) resDto.IsUnderCancellationAllowed = icProp.GetBoolean();
@@ -1157,6 +1376,10 @@ namespace PickNBook.Api.Services
                     var rmDto = new HotelRoomDetailItemDto();
                     if (rmElem.ValueKind != JsonValueKind.Object) return rmDto;
 
+                    if (rmElem.TryGetProperty("OptionId", out var optProp))
+                    {
+                        rmDto.OptionId = optProp.ValueKind == JsonValueKind.Number ? optProp.GetRawText() : (optProp.GetString() ?? "");
+                    }
                     if (rmElem.TryGetProperty("ChildCount", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number) rmDto.ChildCount = ccProp.GetInt32();
                     if (rmElem.TryGetProperty("RequireAllPaxDetails", out var rapProp) && (rapProp.ValueKind == JsonValueKind.True || rapProp.ValueKind == JsonValueKind.False)) rmDto.RequireAllPaxDetails = rapProp.GetBoolean();
                     if (rmElem.TryGetProperty("RoomId", out var ridProp)) rmDto.RoomId = ridProp.GetString() ?? "";
@@ -1430,6 +1653,7 @@ namespace PickNBook.Api.Services
                     }
                 }
 
+                string? hotelCode = target.TryGetProperty("HotelCode", out var hcProp) ? hcProp.GetString() : null;
                 using var scope = _serviceProvider.CreateScope();
                 var markupService = scope.ServiceProvider.GetRequiredService<IHotelMarkupService>();
                 if (markupService != null)
@@ -1440,7 +1664,7 @@ namespace PickNBook.Api.Services
                         {
                             if (rm.Price != null)
                             {
-                                await ApplyMarkupAndGstAsync(markupService, rm.Price, null, request.HotelCode, "B2C");
+                                await ApplyMarkupAndGstAsync(markupService, rm.Price, null, hotelCode, "B2C");
                                 rm.OfferedPrice = rm.Price.OfferedPrice;
                                 rm.B2CBasePrice = rm.Price.B2CBasePrice;
                                 rm.B2CTotalPrice = rm.Price.B2CTotalPrice;
@@ -1460,44 +1684,57 @@ namespace PickNBook.Api.Services
 
         public async Task<PickNBookBlockRoomResponseDto> BlockRoomAsync(BlockRoomRequestDto request)
         {
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
+            }
+
+            if ((request.HotelRoomsDetails == null || request.HotelRoomsDetails.Count == 0) &&
+                (!string.IsNullOrWhiteSpace(request.OptionId) || !string.IsNullOrWhiteSpace(request.RoomTypeCode) || !string.IsNullOrWhiteSpace(request.RoomIndex)))
+            {
+                request.HotelRoomsDetails = new List<BlockRoomRequestRoomDto>
+                {
+                    new BlockRoomRequestRoomDto
+                    {
+                        OptionId = request.OptionId?.Trim() ?? "",
+                        RoomTypeCode = request.RoomTypeCode?.Trim() ?? "",
+                        RoomIndex = request.RoomIndex?.Trim() ?? ""
+                    }
+                };
+            }
+
+            var supplierReq = new SrdvSupplierBlockRoomRequest
+            {
+                TraceId = request.TraceId,
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty,
+                HotelRoomsDetails = (request.HotelRoomsDetails ?? new List<BlockRoomRequestRoomDto>())
+                    .Select(r => new BlockRoomRequestRoomDto
+                    {
+                        OptionId = r.OptionId?.Trim() ?? "",
+                        RoomTypeCode = r.RoomTypeCode?.Trim() ?? "",
+                        RoomIndex = r.RoomIndex?.Trim() ?? ""
+                    }).ToList()
+            };
+
             JsonElement root;
             JsonDocument? jsonDoc = null;
             try
             {
-                var cleanTraceId = request.TraceId?.TrimEnd('.') ?? "";
-                var blockReq = new
-                {
-                    EndUserIp = request.EndUserIp,
-                    ClientId = _settings.ClientId,
-                    UserName = _settings.UserName,
-                    Password = _settings.Password,
-                    TokenId = "",
-                    TraceId = int.TryParse(cleanTraceId, out var tid) ? (object)tid : cleanTraceId,
-                    SrdvType = request.SrdvType,
-                    SrdvIndex = request.SrdvIndex,
-                    ResultIndex = int.TryParse(request.ResultIndex, out var ri) ? (object)ri : request.ResultIndex,
-                    HotelCode = request.HotelCode,
-                    HotelName = request.HotelName,
-                    GuestNationality = request.GuestNationality,
-                    NoOfRooms = request.NoOfRooms > 0 ? request.NoOfRooms : 1,
-                    ClientReferenceNo = request.ClientReferenceNo,
-                    IsVoucherBooking = request.IsVoucherBooking,
-                    HotelRoomsDetails = request.HotelRoomsDetails
-                };
+                var blockUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/BlockRoom";
+                var jsonStr = JsonSerializer.Serialize(supplierReq);
+                _logger?.LogInformation("[SUPPLIER-DEBUG] Outbound BlockRoom to {Url}:\n{Payload}", blockUrl, jsonStr);
 
-                var jsonStr = JsonSerializer.Serialize(blockReq, new JsonSerializerOptions { PropertyNamingPolicy = null });
-                _logger?.LogWarning("BLOCK REQUEST PAYLOAD SENT TO SRDV: {JsonStr}", jsonStr);
-
-                var response = await _httpClient.PostAsJsonAsync($"{_settings.HotelBaseUrl}/BlockRoom", blockReq, new JsonSerializerOptions { PropertyNamingPolicy = null });
+                var response = await _httpClient.PostAsJsonAsync(blockUrl, supplierReq);
                 response.EnsureSuccessStatusCode();
 
                 using var contentStream = await response.Content.ReadAsStreamAsync();
-            jsonDoc = await JsonDocument.ParseAsync(contentStream);
+                jsonDoc = await JsonDocument.ParseAsync(contentStream);
                 root = jsonDoc.RootElement;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "SRDV API BlockRoom failed for HotelCode {HotelCode}.", request.HotelCode);
+                _logger?.LogWarning(ex, "SRDV API BlockRoom failed for TraceId {TraceId}, ResultIndex {ResultIndex}.", request.TraceId, request.ResultIndex);
                 var errDto = new PickNBookBlockRoomResponseDto();
                 errDto.BlockRoomResult.Error.ErrorCode = 1;
                 errDto.BlockRoomResult.Error.ErrorMessage = $"Failed to block room on SRDV. Exception: {ex.Message}";
@@ -1522,17 +1759,36 @@ namespace PickNBook.Api.Services
                     return responseDto;
                 }
                 if (target.TryGetProperty("AvailabilityType", out var atProp)) resDto.AvailabilityType = atProp.GetString() ?? "Confirm";
-                if (target.TryGetProperty("TraceId", out var tiProp)) resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId);
+                if (target.TryGetProperty("TraceId", out var tiProp)) resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId.ToString());
                 if (target.TryGetProperty("ResponseStatus", out var rsProp) && rsProp.ValueKind == JsonValueKind.Number) resDto.ResponseStatus = rsProp.GetInt32();
                 if (target.TryGetProperty("GSTAllowed", out var gaProp) && (gaProp.ValueKind == JsonValueKind.True || gaProp.ValueKind == JsonValueKind.False)) resDto.GSTAllowed = gaProp.GetBoolean();
                 if (target.TryGetProperty("IsPackageDetailsMandatory", out var pdmProp) && (pdmProp.ValueKind == JsonValueKind.True || pdmProp.ValueKind == JsonValueKind.False)) resDto.IsPackageDetailsMandatory = pdmProp.GetBoolean();
                 if (target.TryGetProperty("IsPackageFare", out var pfProp) && (pfProp.ValueKind == JsonValueKind.True || pfProp.ValueKind == JsonValueKind.False)) resDto.IsPackageFare = pfProp.GetBoolean();
                 if (target.TryGetProperty("IsPriceChanged", out var pcProp) && (pcProp.ValueKind == JsonValueKind.True || pcProp.ValueKind == JsonValueKind.False)) resDto.IsPriceChanged = pcProp.GetBoolean();
+
+                if (target.TryGetProperty("PriceSummary", out var psProp) && psProp.ValueKind == JsonValueKind.Object)
+                {
+                    var ps = new BlockRoomPriceSummaryDto();
+                    if (psProp.TryGetProperty("ServedPrice", out var spProp) && spProp.ValueKind == JsonValueKind.Number) ps.ServedPrice = spProp.GetDecimal();
+                    else if (psProp.TryGetProperty("ServedAmount", out var saProp) && saProp.ValueKind == JsonValueKind.Number) ps.ServedPrice = saProp.GetDecimal();
+                    else if (psProp.TryGetProperty("OfferedPrice", out var opProp) && opProp.ValueKind == JsonValueKind.Number) ps.ServedPrice = opProp.GetDecimal();
+
+                    if (psProp.TryGetProperty("BlockedPrice", out var bpProp) && bpProp.ValueKind == JsonValueKind.Number) ps.BlockedPrice = bpProp.GetDecimal();
+                    else if (psProp.TryGetProperty("BlockedAmount", out var baProp) && baProp.ValueKind == JsonValueKind.Number) ps.BlockedPrice = baProp.GetDecimal();
+
+                    if (psProp.TryGetProperty("Difference", out var diffProp) && diffProp.ValueKind == JsonValueKind.Number) ps.Difference = diffProp.GetDecimal();
+                    else if (psProp.TryGetProperty("PriceDifference", out var pdProp) && pdProp.ValueKind == JsonValueKind.Number) ps.Difference = pdProp.GetDecimal();
+
+                    if (psProp.TryGetProperty("Currency", out var curProp)) ps.Currency = curProp.GetString() ?? "INR";
+
+                    resDto.PriceSummary = ps;
+                }
+
                 if (target.TryGetProperty("IsCancellationPolicyChanged", out var cpcProp) && (cpcProp.ValueKind == JsonValueKind.True || cpcProp.ValueKind == JsonValueKind.False)) resDto.IsCancellationPolicyChanged = cpcProp.GetBoolean();
                 if (target.TryGetProperty("IsHotelPolicyChanged", out var hpcProp) && (hpcProp.ValueKind == JsonValueKind.True || hpcProp.ValueKind == JsonValueKind.False)) resDto.IsHotelPolicyChanged = hpcProp.GetBoolean();
 
                 if (target.TryGetProperty("HotelNorms", out var hnProp)) resDto.HotelNorms = hnProp.GetString() ?? "";
-                if (target.TryGetProperty("HotelName", out var hnameProp)) resDto.HotelName = hnameProp.GetString() ?? request.HotelName;
+                if (target.TryGetProperty("HotelName", out var hnameProp)) resDto.HotelName = hnameProp.GetString() ?? request.HotelName ?? "";
                 if (target.TryGetProperty("AddressLine1", out var ad1Prop)) resDto.AddressLine1 = ad1Prop.GetString() ?? "";
                 if (target.TryGetProperty("AddressLine2", out var ad2Prop)) resDto.AddressLine2 = ad2Prop.GetString() ?? "";
                 if (target.TryGetProperty("City", out var cityProp)) resDto.City = cityProp.GetString() ?? "";
@@ -1551,6 +1807,10 @@ namespace PickNBook.Api.Services
                     foreach (var rmElem in roomsDetailsProp.EnumerateArray())
                     {
                         var rmDto = new BlockRoomDetailItemDto();
+                        if (rmElem.TryGetProperty("OptionId", out var optProp))
+                        {
+                            rmDto.OptionId = optProp.ValueKind == JsonValueKind.Number ? optProp.GetRawText() : (optProp.GetString() ?? "");
+                        }
                         if (rmElem.TryGetProperty("ChildCount", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number) rmDto.ChildCount = ccProp.GetInt32();
                         if (rmElem.TryGetProperty("RequireAllPaxDetails", out var rapProp) && (rapProp.ValueKind == JsonValueKind.True || rapProp.ValueKind == JsonValueKind.False)) rmDto.RequireAllPaxDetails = rapProp.GetBoolean();
                         if (rmElem.TryGetProperty("RoomId", out var ridProp)) rmDto.RoomId = ridProp.GetString() ?? "";
@@ -1681,7 +1941,7 @@ namespace PickNBook.Api.Services
                             {
                                 ResultIndex = request.ResultIndex,
                                 HotelCode = request.HotelCode,
-                                TraceId = request.TraceId,
+                                TraceId = request.TraceId.ToString(),
                                 OfferedPrice = rm.Price.OfferedPrice,
                                 Tax = rm.Price.Tax + rm.Price.TotalGSTAmount, // Combined tax
                                 MarkupAmount = rm.Price.AgentMarkUp,
@@ -1711,164 +1971,119 @@ namespace PickNBook.Api.Services
 
         public async Task<PickNBookBookRoomResponseDto> BookRoomAsync(HotelBookRequestDto request)
         {
-            JsonDocument? jsonDoc = null;
-            try
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
             {
-                if (string.IsNullOrWhiteSpace(request.TraceId) || string.IsNullOrWhiteSpace(request.ResultIndex))
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
+            }
+
+            if (request.TraceId <= 0 || string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                var errDto = new PickNBookBookRoomResponseDto();
+                errDto.BookResult.Error.ErrorCode = 1;
+                errDto.BookResult.Error.ErrorMessage = "TraceId and ResultIndex are required for booking.";
+                return errDto;
+            }
+
+            var rooms = request.HotelRoomsDetails;
+            if ((rooms == null || rooms.Count == 0) && (!string.IsNullOrWhiteSpace(request.GuestName) || !string.IsNullOrWhiteSpace(request.GuestEmail)))
+            {
+                var nameParts = (request.GuestName ?? "Guest User").Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                string fName = nameParts.Length > 0 ? nameParts[0] : "Guest";
+                string lName = nameParts.Length > 1 ? nameParts[1] : "User";
+
+                rooms = new List<BookRoomDetailItemDto>
                 {
-                    var errDto = new PickNBookBookRoomResponseDto();
-                    errDto.BookResult.Error.ErrorCode = 1;
-                    errDto.BookResult.Error.ErrorMessage = "TraceId and ResultIndex are required for booking.";
-                    return errDto;
-                }
-
-                int resultIndexVal = 0;
-
-                int.TryParse(request.ResultIndex, out resultIndexVal);
-
-                var parts = request.GuestName.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
-                string firstName = parts.Length > 0 ? parts[0] : "Guest";
-                string lastName = parts.Length > 1 ? parts[1] : "User";
-
-                string leadPaxPan = request.HotelRoomsDetails?
-                    .SelectMany(r => r.HotelPassenger ?? new List<HotelPassengerDto>())
-                    .FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.PAN))?.PAN?.Trim() ?? "";
-
-                var payload = new
-                {
-                    EndUserIp = request.EndUserIp,
-                    ClientId = _settings.ClientId,
-                    UserName = _settings.UserName,
-                    Password = _settings.Password,
-                    TokenId = "",
-                    TraceId = int.TryParse(request.TraceId, out var tid) ? (object)tid : request.TraceId,
-                    SrdvType = request.SrdvType,
-                    SrdvIndex = request.SrdvIndex,
-                    ResultIndex = resultIndexVal != 0 ? (object)resultIndexVal : request.ResultIndex,
-                    HotelCode = request.HotelCode,
-                    HotelName = request.HotelName,
-                    GuestNationality = request.GuestNationality,
-                    NoOfRooms = (request.NoOfRooms <= 0 ? 1 : request.NoOfRooms).ToString(),
-                    ClientReferenceNo = request.ClientReferenceNo,
-                    IsVoucherBooking = request.IsVoucherBooking,
-                    PAN = leadPaxPan ?? "",
-                    HotelRoomsDetails = request.HotelRoomsDetails.Select(room => new
+                    new BookRoomDetailItemDto
                     {
-                        room.ChildCount,
-                        room.RequireAllPaxDetails,
-                        room.RoomId,
-                        room.RoomStatus,
-                        room.RoomIndex,
-                        room.RoomTypeCode,
-                        room.RoomTypeName,
-                        room.RatePlanCode,
-                        room.RatePlan,
-                        room.InfoSource,
-                        DayRates = room.DayRates != null ? (object)room.DayRates.Select(d => new { d.Amount, d.Date }).ToList() : new object[] { },
-                        room.SupplierPrice,
-                        room.Price,
-                        PAN = leadPaxPan ?? "",
-                        HotelPassenger = room.HotelPassenger != null ? (object)room.HotelPassenger.Select(p => new
+                        HotelPassenger = new List<HotelPassengerDto>
                         {
-                            Title = NormalizeTitle(p.Title),
-                            p.FirstName,
-                            MiddleName = string.IsNullOrWhiteSpace(p.MiddleName) ? null : p.MiddleName,
-                            p.LastName,
-                            p.Phoneno,
-                            p.Email,
-                            p.PaxType,
-                            p.LeadPassenger,
-                            PassportNo = string.IsNullOrWhiteSpace(p.PassportNo) ? null : p.PassportNo,
-                            PassportIssueDate = string.IsNullOrWhiteSpace(p.PassportIssueDate) ? null : p.PassportIssueDate,
-                            PassportExpDate = string.IsNullOrWhiteSpace(p.PassportExpDate) ? null : p.PassportExpDate,
-                            PAN = !string.IsNullOrWhiteSpace(p.PAN) ? p.PAN : (leadPaxPan ?? ""),
-                            GSTCompanyAddress = string.IsNullOrWhiteSpace(p.GSTCompanyAddress) ? null : p.GSTCompanyAddress,
-                            GSTCompanyContactNumber = string.IsNullOrWhiteSpace(p.GSTCompanyContactNumber) ? null : p.GSTCompanyContactNumber,
-                            GSTCompanyName = string.IsNullOrWhiteSpace(p.GSTCompanyName) ? null : p.GSTCompanyName,
-                            GSTNumber = string.IsNullOrWhiteSpace(p.GSTNumber) ? null : p.GSTNumber,
-                            GSTCompanyEmail = string.IsNullOrWhiteSpace(p.GSTCompanyEmail) ? null : p.GSTCompanyEmail
-                        }).ToList() : new object[] { },
-                        room.RoomPromotion,
-                        Amenities = room.Amenities != null ? (object)room.Amenities.Select(a => new { a.Name, a.FontAwesome, a.IcoFont }).ToList() : new object[] { },
-                        room.SmokingPreference,
-                        room.BedTypes,
-                        room.HotelSupplements,
-                        room.LastCancellationDate,
-                        CancellationPolicies = room.CancellationPolicies != null ? (object)room.CancellationPolicies.Select(cp => new { cp.Charge, cp.ChargeType, cp.Currency, cp.FromDate, cp.ToDate }).ToList() : new object[] { },
-                        room.BedTypeCode,
-                        room.Supplements
-                    }).ToList()
-                };
-
-                var jsonOptions = new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = null,
-                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-                };
-
-                var initialJsonStr = JsonSerializer.Serialize(payload, jsonOptions);
-                var rootObj = System.Text.Json.Nodes.JsonNode.Parse(initialJsonStr) as System.Text.Json.Nodes.JsonObject;
-                
-                if (rootObj != null)
-                {
-                    var rootPan = rootObj["PAN"]?.ToString() ?? "";
-                    rootObj["Pan"] = rootPan;
-                    rootObj["PANNo"] = rootPan;
-                    rootObj["PanNo"] = rootPan;
-
-                    if (rootObj["HotelRoomsDetails"] is System.Text.Json.Nodes.JsonArray roomsArr)
-                    {
-                        foreach (var rNode in roomsArr)
-                        {
-                            if (rNode is System.Text.Json.Nodes.JsonObject rObj)
+                            new HotelPassengerDto
                             {
-                                var rPan = rObj["PAN"]?.ToString() ?? "";
-                                rObj["Pan"] = rPan;
-                                rObj["PANNo"] = rPan;
-                                rObj["PanNo"] = rPan;
-                                
-                                if (rObj["HotelPassenger"] is System.Text.Json.Nodes.JsonArray paxArr)
-                                {
-                                    foreach (var pNode in paxArr)
-                                    {
-                                        if (pNode is System.Text.Json.Nodes.JsonObject pObj)
-                                        {
-                                            var pPan = pObj["PAN"]?.ToString() ?? "";
-                                            pObj["Pan"] = pPan;
-                                            pObj["PANNo"] = pPan;
-                                            pObj["PanNo"] = pPan;
-                                        }
-                                    }
-                                }
+                                Title = "Mr",
+                                FirstName = fName,
+                                LastName = lName,
+                                Email = request.GuestEmail ?? "",
+                                Phoneno = request.GuestPhone ?? "",
+                                PAN = request.PAN ?? "",
+                                LeadPassenger = true,
+                                PaxType = "1"
                             }
                         }
                     }
-                }
+                };
+            }
 
-                var jsonStr = rootObj?.ToJsonString() ?? initialJsonStr;
-                _logger?.LogWarning("BOOK REQUEST PAYLOAD SENT TO SRDV: {JsonStr}", jsonStr);
+            static string Trunc(string? val, int maxLen)
+            {
+                if (string.IsNullOrWhiteSpace(val)) return string.Empty;
+                var trimmed = val.Trim();
+                return trimmed.Length > maxLen ? trimmed.Substring(0, maxLen) : trimmed;
+            }
 
-                var httpRes = await _httpClient.PostAsync($"{_settings.HotelBaseUrl}/Book", new StringContent(jsonStr, System.Text.Encoding.UTF8, "application/json"));
-                if (!httpRes.IsSuccessStatusCode)
-                {
-                    var errDto = new PickNBookBookRoomResponseDto();
-                    errDto.BookResult.Error.ErrorCode = (int)httpRes.StatusCode;
-                    errDto.BookResult.Error.ErrorMessage = $"SRDV API returned {httpRes.StatusCode}";
-                    return errDto;
-                }
+            var supplierReq = new SrdvSupplierBookRequest
+            {
+                TraceId = request.TraceId,
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty,
+                ClientReferenceNo = Trunc(request.ClientReferenceNo, 200),
+                HotelRoomsDetails = (rooms ?? new List<BookRoomDetailItemDto>())
+                    .Take(9)
+                    .Select(r => new SrdvSupplierBookRoomDto
+                    {
+                        HotelPassenger = (r.HotelPassenger ?? new List<HotelPassengerDto>())
+                            .Take(12)
+                            .Select(p => new SrdvSupplierBookPassengerDto
+                            {
+                                Title = Trunc(NormalizeTitle(p.Title), 20),
+                                FirstName = Trunc(p.FirstName, 100),
+                                MiddleName = Trunc(p.MiddleName, 100),
+                                LastName = Trunc(p.LastName, 100),
+                                Phoneno = Trunc(p.Phoneno, 30),
+                                Email = Trunc(p.Email, 254),
+                                PaxType = Trunc(p.PaxType, 10),
+                                Age = p.Age,
+                                LeadPassenger = p.LeadPassenger,
+                                PAN = Trunc(p.PAN, 30),
+                                PassportNo = Trunc(p.PassportNo, 50),
+                                PassportExpDate = Trunc(p.PassportExpDate, 20),
+                                PassportIssueCountry = Trunc(p.PassportIssueCountry, 100),
+                                GSTNumber = Trunc(p.GSTNumber, 30),
+                                GSTCompanyName = Trunc(p.GSTCompanyName, 200),
+                                GSTCompanyAddress = Trunc(p.GSTCompanyAddress, 500),
+                                GSTCompanyEmail = Trunc(p.GSTCompanyEmail, 254),
+                                GSTCompanyContactNumber = Trunc(p.GSTCompanyContactNumber, 30)
+                            }).ToList()
+                    }).ToList()
+            };
 
-                using var contentStrStream = await httpRes.Content.ReadAsStreamAsync();
-            jsonDoc = await JsonDocument.ParseAsync(contentStrStream);
+            JsonDocument? jsonDoc = null;
+            try
+            {
+                var bookUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/Book";
+                var jsonStr = JsonSerializer.Serialize(supplierReq);
+                _logger?.LogInformation("[SUPPLIER-DEBUG] Outbound Book to {Url}:\n{Payload}", bookUrl, jsonStr);
+
+                var httpRes = await _httpClient.PostAsJsonAsync(bookUrl, supplierReq);
+                var contentStream = await httpRes.Content.ReadAsStreamAsync();
+                jsonDoc = await JsonDocument.ParseAsync(contentStream);
                 var root = jsonDoc.RootElement;
 
                 var responseDto = new PickNBookBookRoomResponseDto();
                 var resDto = responseDto.BookResult;
 
-                if (!root.TryGetProperty("BookResult", out var target))
-                {
-                    target = root; // fallback
-                }
+                var target = root.TryGetProperty("BookResult", out var brProp) && brProp.ValueKind == JsonValueKind.Object ? brProp : root;
 
+                // Extract TraceId
+                if (target.TryGetProperty("TraceId", out var tidProp))
+                    resDto.TraceId = tidProp.ValueKind == JsonValueKind.Number ? tidProp.GetRawText() : (tidProp.GetString() ?? "");
+
+                // Extract BookingId & BookingRefNo (published even beside Error block on failure with created booking row)
+                if (target.TryGetProperty("BookingId", out var bidProp) && bidProp.ValueKind == JsonValueKind.Number)
+                    resDto.BookingId = bidProp.GetInt32();
+                if (target.TryGetProperty("BookingRefNo", out var brnProp))
+                    resDto.BookingRefNo = brnProp.GetString() ?? (resDto.BookingId > 0 ? resDto.BookingId.ToString() : "");
+
+                // Check Error
                 if (target.TryGetProperty("Error", out var errProp) && errProp.ValueKind == JsonValueKind.Object)
                 {
                     if (errProp.TryGetProperty("ErrorCode", out var ec))
@@ -1879,29 +2094,39 @@ namespace PickNBook.Api.Services
                     if (errProp.TryGetProperty("ErrorMessage", out var em)) resDto.Error.ErrorMessage = em.GetString() ?? "";
                 }
 
-                if (resDto.Error.ErrorCode != 0 || !string.IsNullOrEmpty(resDto.Error.ErrorMessage))
+                // Status & HotelBookingStatus: 1 / Confirmed, 3 / Pending, 0 / BookFailed
+                if (target.TryGetProperty("ResponseStatus", out var rsProp) && rsProp.ValueKind == JsonValueKind.Number)
+                    resDto.ResponseStatus = rsProp.GetInt32();
+                if (target.TryGetProperty("Status", out var stProp))
+                    resDto.Status = stProp.GetString() ?? "";
+                if (target.TryGetProperty("HotelBookingStatus", out var hbsProp))
+                    resDto.HotelBookingStatus = hbsProp.GetString() ?? resDto.Status;
+
+                if (string.IsNullOrWhiteSpace(resDto.Status))
                 {
-                    return responseDto;
+                    resDto.Status = resDto.ResponseStatus switch
+                    {
+                        1 => "Confirmed",
+                        3 => "Pending",
+                        0 => "BookFailed",
+                        _ => resDto.Error.ErrorCode == 0 ? "Confirmed" : "BookFailed"
+                    };
                 }
+                if (string.IsNullOrWhiteSpace(resDto.HotelBookingStatus))
+                    resDto.HotelBookingStatus = resDto.Status;
 
-                if (target.TryGetProperty("VoucherStatus", out var vsProp) && (vsProp.ValueKind == JsonValueKind.True || vsProp.ValueKind == JsonValueKind.False)) resDto.VoucherStatus = vsProp.GetBoolean();
-                if (target.TryGetProperty("ResponseStatus", out var rsProp) && rsProp.ValueKind == JsonValueKind.Number) resDto.ResponseStatus = rsProp.GetInt32();
-                if (target.TryGetProperty("TraceId", out var tidProp)) resDto.TraceId = tidProp.ValueKind == JsonValueKind.Number ? tidProp.GetRawText() : (tidProp.GetString() ?? "");
-                if (target.TryGetProperty("Status", out var stProp)) resDto.Status = stProp.GetString() ?? "Confirmed";
-                if (target.TryGetProperty("HotelBookingStatus", out var hbsProp)) resDto.HotelBookingStatus = hbsProp.GetString() ?? "Confirmed";
-                if (target.TryGetProperty("InvoiceNumber", out var invProp)) resDto.InvoiceNumber = invProp.GetString() ?? "";
-                if (target.TryGetProperty("ConfirmationNo", out var cnoProp)) resDto.ConfirmationNo = cnoProp.GetString() ?? "";
-                if (target.TryGetProperty("BookingRefNo", out var brnProp)) resDto.BookingRefNo = brnProp.GetString() ?? "";
-                if (target.TryGetProperty("BookingId", out var bidProp) && bidProp.ValueKind == JsonValueKind.Number) resDto.BookingId = bidProp.GetInt32();
-                if (target.TryGetProperty("IsPriceChanged", out var ipcProp) && (ipcProp.ValueKind == JsonValueKind.True || ipcProp.ValueKind == JsonValueKind.False)) resDto.IsPriceChanged = ipcProp.GetBoolean();
-                if (target.TryGetProperty("IsCancellationPolicyChanged", out var icpcProp) && (icpcProp.ValueKind == JsonValueKind.True || icpcProp.ValueKind == JsonValueKind.False)) resDto.IsCancellationPolicyChanged = icpcProp.GetBoolean();
-
+                if (target.TryGetProperty("VoucherStatus", out var vsProp) && (vsProp.ValueKind == JsonValueKind.True || vsProp.ValueKind == JsonValueKind.False))
+                    resDto.VoucherStatus = vsProp.GetBoolean();
+                if (target.TryGetProperty("ConfirmationNo", out var cnoProp))
+                    resDto.ConfirmationNo = cnoProp.GetString() ?? "";
+                if (target.TryGetProperty("InvoiceNumber", out var invProp))
+                    resDto.InvoiceNumber = invProp.GetString() ?? "";
 
                 return responseDto;
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Exception during BookRoomAsync for HotelCode {HotelCode}.", request.HotelCode);
+                _logger?.LogWarning(ex, "Exception during BookRoomAsync for TraceId {TraceId}, ResultIndex {ResultIndex}.", request.TraceId, request.ResultIndex);
                 var errDto = new PickNBookBookRoomResponseDto();
                 errDto.BookResult.Error.ErrorCode = 1;
                 errDto.BookResult.Error.ErrorMessage = $"Failed to book room on SRDV. Exception: {ex.Message}";
@@ -1916,6 +2141,25 @@ namespace PickNBook.Api.Services
 
         public async Task<SendChangeResponseDto> CancelRoomAsync(HotelCancelRequestDto request)
         {
+            if (!string.IsNullOrWhiteSpace(request.TraceId) && long.TryParse(request.TraceId, out var parsedTid) && parsedTid > 0)
+            {
+                var v8Res = await CancelBookingAsync(parsedTid, request.Remarks);
+                return new SendChangeResponseDto
+                {
+                    Error = new HotelSearchErrorDto
+                    {
+                        ErrorCode = v8Res.Error?.ErrorCode ?? 0,
+                        ErrorMessage = v8Res.Error?.ErrorMessage ?? ""
+                    },
+                    ResponseStatus = v8Res.ResponseStatus,
+                    TraceId = v8Res.TraceId?.ToString() ?? request.TraceId,
+                    SrdvType = v8Res.SrdvType ?? request.SrdvType ?? "MixAPI",
+                    SrdvIndex = v8Res.SrdvIndex?.ToString() ?? request.SrdvIndex ?? "",
+                    ChangeRequestId = v8Res.ChangeRequestId ?? 0,
+                    ChangeRequestStatus = v8Res.ChangeRequestStatus ?? 1
+                };
+            }
+
             System.Text.Json.JsonDocument? jsonDoc = null;
             try
             {
@@ -2211,6 +2455,545 @@ namespace PickNBook.Api.Services
                 price.B2CTotalPrice = price.OfferedPrice + markup;
                 price.B2CBasePrice = Math.Max(0m, price.B2CTotalPrice - price.TotalGSTAmount);
                 price.B2CFinalFare = price.B2CTotalPrice;
+            }
+        }
+        public Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(HotelBookingDetailsRequestDto request)
+        {
+            if (request == null)
+            {
+                return Task.FromResult(new HotelBookingDetailsResponseDto
+                {
+                    Success = false,
+                    Message = "Request cannot be null.",
+                    Error = new HotelBookingDetailsErrorDto { ErrorCode = 1, ErrorMessage = "Request cannot be null." }
+                });
+            }
+            return GetBookingDetailsAsync(request.TraceId);
+        }
+
+        public async Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(long traceId)
+        {
+            var dto = new HotelBookingDetailsResponseDto
+            {
+                TraceId = traceId
+            };
+
+            if (traceId <= 0)
+            {
+                dto.Success = false;
+                dto.Message = "Invalid TraceId. TraceId must be a positive integer.";
+                dto.Error = new HotelBookingDetailsErrorDto
+                {
+                    ErrorCode = 1,
+                    ErrorMessage = "Invalid TraceId. TraceId must be a positive integer."
+                };
+                return dto;
+            }
+
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
+            }
+
+            var requestBody = new
+            {
+                TraceId = traceId
+            };
+
+            var url = $"{_settings.HotelBaseUrl.TrimEnd('/')}/BookingDetails";
+            _logger?.LogInformation("[SRDV-HOTEL] Outbound BookingDetails to {Url} with TraceId {TraceId}", url, traceId);
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await _httpClient.PostAsJsonAsync(url, requestBody);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "HTTP exception during Hotel BookingDetails for TraceId {TraceId}", traceId);
+                dto.Success = false;
+                dto.Message = $"HTTP Request Exception: {ex.Message}";
+                dto.Error = new HotelBookingDetailsErrorDto
+                {
+                    ErrorCode = -1,
+                    ErrorMessage = ex.Message
+                };
+                return dto;
+            }
+
+            var content = await response.Content.ReadAsStringAsync();
+            _logger?.LogInformation("[SRDV-HOTEL] BookingDetails response for TraceId {TraceId}: Status {Status}, Content: {Content}", traceId, response.StatusCode, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                dto.Success = false;
+                dto.Message = $"Supplier returned HTTP {(int)response.StatusCode}";
+                dto.Error = new HotelBookingDetailsErrorDto
+                {
+                    ErrorCode = (int)response.StatusCode,
+                    ErrorMessage = $"Supplier returned HTTP {(int)response.StatusCode}: {content}"
+                };
+                return dto;
+            }
+
+            JsonDocument? jsonDoc = null;
+            try
+            {
+                jsonDoc = JsonDocument.Parse(content);
+                var root = jsonDoc.RootElement;
+                dto.RawResponse = root.Clone();
+
+                // Target container: could be root, or wrapped under "BookingDetail", "BookingDetails", or "Result"
+                var target = root;
+                if (root.TryGetProperty("BookingDetail", out var bdProp) && bdProp.ValueKind == JsonValueKind.Object) target = bdProp;
+                else if (root.TryGetProperty("Result", out var rProp) && rProp.ValueKind == JsonValueKind.Object) target = rProp;
+                else if (root.TryGetProperty("BookingDetails", out var bdsProp) && bdsProp.ValueKind == JsonValueKind.Object) target = bdsProp;
+
+                // Error extraction
+                if (target.TryGetProperty("Error", out var errProp) && errProp.ValueKind == JsonValueKind.Object)
+                {
+                    int errCode = 0;
+                    string? errMsg = null;
+                    if (errProp.TryGetProperty("ErrorCode", out var ec))
+                    {
+                        if (ec.ValueKind == JsonValueKind.Number) errCode = ec.GetInt32();
+                        else if (ec.ValueKind == JsonValueKind.String && int.TryParse(ec.GetString(), out var parsedEc)) errCode = parsedEc;
+                    }
+                    if (errProp.TryGetProperty("ErrorMessage", out var em))
+                    {
+                        errMsg = em.GetString();
+                    }
+
+                    if (errCode != 0 || !string.IsNullOrWhiteSpace(errMsg))
+                    {
+                        dto.Error = new HotelBookingDetailsErrorDto
+                        {
+                            ErrorCode = errCode,
+                            ErrorMessage = errMsg
+                        };
+                    }
+                }
+
+                // TraceId
+                if (target.TryGetProperty("TraceId", out var tIdProp))
+                {
+                    if (tIdProp.ValueKind == JsonValueKind.Number) dto.TraceId = tIdProp.GetInt64();
+                    else if (tIdProp.ValueKind == JsonValueKind.String && long.TryParse(tIdProp.GetString(), out var parsedTid)) dto.TraceId = parsedTid;
+                }
+
+                // Status fields
+                if (target.TryGetProperty("BookingStatus", out var bsProp)) dto.BookingStatus = bsProp.GetString();
+                else if (target.TryGetProperty("Status", out var stProp)) dto.BookingStatus = stProp.GetString();
+                else if (target.TryGetProperty("HotelBookingStatus", out var hbsProp)) dto.BookingStatus = hbsProp.GetString();
+
+                if (target.TryGetProperty("CancellationStatus", out var csProp)) dto.CancellationStatus = csProp.GetString();
+                else if (target.TryGetProperty("CancelStatus", out var canProp)) dto.CancellationStatus = canProp.GetString();
+
+                if (target.TryGetProperty("RefundStatus", out var rfProp)) dto.RefundStatus = rfProp.GetString();
+                if (target.TryGetProperty("SupplierStatus", out var ssProp)) dto.SupplierStatus = ssProp.GetString();
+                if (target.TryGetProperty("FailureReason", out var frProp)) dto.FailureReason = frProp.GetString();
+
+                if (target.TryGetProperty("InvoiceAmount", out var invAmtProp))
+                {
+                    if (invAmtProp.ValueKind == JsonValueKind.Number) dto.InvoiceAmount = invAmtProp.GetDecimal();
+                    else if (invAmtProp.ValueKind == JsonValueKind.String && decimal.TryParse(invAmtProp.GetString(), out var parsedInv)) dto.InvoiceAmount = parsedInv;
+                }
+                else if (target.TryGetProperty("TotalFare", out var tfProp))
+                {
+                    if (tfProp.ValueKind == JsonValueKind.Number) dto.InvoiceAmount = tfProp.GetDecimal();
+                    else if (tfProp.ValueKind == JsonValueKind.String && decimal.TryParse(tfProp.GetString(), out var parsedTf)) dto.InvoiceAmount = parsedTf;
+                }
+
+                // Build Result DTO
+                var resultDto = new HotelBookingDetailsResultDto
+                {
+                    TraceId = dto.TraceId,
+                    BookingStatus = dto.BookingStatus,
+                    CancellationStatus = dto.CancellationStatus,
+                    RefundStatus = dto.RefundStatus,
+                    InvoiceAmount = dto.InvoiceAmount,
+                    SupplierStatus = dto.SupplierStatus,
+                    FailureReason = dto.FailureReason
+                };
+
+                if (target.TryGetProperty("ConfirmationNo", out var cNoProp)) resultDto.ConfirmationNo = cNoProp.GetString();
+                else if (target.TryGetProperty("ConfirmationNumber", out var cNumProp)) resultDto.ConfirmationNo = cNumProp.GetString();
+
+                if (target.TryGetProperty("BookingReference", out var bRefProp)) resultDto.BookingReference = bRefProp.GetString();
+                else if (target.TryGetProperty("BookingRefNo", out var bRefNoProp)) resultDto.BookingReference = bRefNoProp.GetString();
+                else if (target.TryGetProperty("BookingId", out var bIdProp)) resultDto.BookingReference = bIdProp.ValueKind == JsonValueKind.Number ? bIdProp.GetRawText() : bIdProp.GetString();
+
+                if (target.TryGetProperty("HotelCode", out var hcProp)) resultDto.HotelCode = hcProp.GetString();
+                if (target.TryGetProperty("HotelName", out var hnProp)) resultDto.HotelName = hnProp.GetString();
+                if (target.TryGetProperty("CheckInDate", out var cidProp)) resultDto.CheckInDate = cidProp.GetString();
+                if (target.TryGetProperty("CheckOutDate", out var codProp)) resultDto.CheckOutDate = codProp.GetString();
+
+                // Parse Rooms
+                JsonElement roomsElement = default;
+                bool hasRooms = false;
+                if (target.TryGetProperty("Rooms", out var rmsProp) && rmsProp.ValueKind == JsonValueKind.Array)
+                {
+                    roomsElement = rmsProp;
+                    hasRooms = true;
+                }
+                else if (target.TryGetProperty("HotelRoomsDetails", out var hrdProp) && hrdProp.ValueKind == JsonValueKind.Array)
+                {
+                    roomsElement = hrdProp;
+                    hasRooms = true;
+                }
+
+                if (hasRooms)
+                {
+                    foreach (var rm in roomsElement.EnumerateArray())
+                    {
+                        var roomItem = new HotelBookingDetailsRoomItemDto();
+                        if (rm.TryGetProperty("RoomStatus", out var rStatusProp)) roomItem.RoomStatus = rStatusProp.GetString();
+                        if (rm.TryGetProperty("RoomTypeName", out var rtnProp)) roomItem.RoomTypeName = rtnProp.GetString();
+                        else if (rm.TryGetProperty("RoomType", out var rtProp)) roomItem.RoomTypeName = rtProp.GetString();
+                        if (rm.TryGetProperty("RoomTypeCode", out var rtcProp)) roomItem.RoomTypeCode = rtcProp.GetString();
+                        if (rm.TryGetProperty("OptionId", out var optProp)) roomItem.OptionId = optProp.GetString();
+                        
+                        if (rm.TryGetProperty("TotalFare", out var fareProp))
+                        {
+                            if (fareProp.ValueKind == JsonValueKind.Number) roomItem.TotalFare = fareProp.GetDecimal();
+                            else if (fareProp.ValueKind == JsonValueKind.String && decimal.TryParse(fareProp.GetString(), out var pf)) roomItem.TotalFare = pf;
+                        }
+                        else if (rm.TryGetProperty("Price", out var pObjProp) && pObjProp.ValueKind == JsonValueKind.Object)
+                        {
+                            if (pObjProp.TryGetProperty("OfferedPrice", out var op))
+                            {
+                                if (op.ValueKind == JsonValueKind.Number) roomItem.TotalFare = op.GetDecimal();
+                                else if (op.ValueKind == JsonValueKind.String && decimal.TryParse(op.GetString(), out var pop)) roomItem.TotalFare = pop;
+                            }
+                        }
+
+                        // Passengers
+                        JsonElement paxElement = default;
+                        bool hasPax = false;
+                        if (rm.TryGetProperty("Passengers", out var pProp) && pProp.ValueKind == JsonValueKind.Array)
+                        {
+                            paxElement = pProp;
+                            hasPax = true;
+                        }
+                        else if (rm.TryGetProperty("HotelPassenger", out var hpProp) && hpProp.ValueKind == JsonValueKind.Array)
+                        {
+                            paxElement = hpProp;
+                            hasPax = true;
+                        }
+
+                        if (hasPax)
+                        {
+                            foreach (var px in paxElement.EnumerateArray())
+                            {
+                                var paxDto = new HotelPassengerDto();
+                                if (px.TryGetProperty("Title", out var tProp)) paxDto.Title = tProp.GetString() ?? "Mr";
+                                if (px.TryGetProperty("FirstName", out var fnProp)) paxDto.FirstName = fnProp.GetString() ?? "";
+                                if (px.TryGetProperty("MiddleName", out var mnProp)) paxDto.MiddleName = mnProp.GetString();
+                                if (px.TryGetProperty("LastName", out var lnProp)) paxDto.LastName = lnProp.GetString() ?? "";
+                                if (px.TryGetProperty("Email", out var emProp)) paxDto.Email = emProp.GetString() ?? "";
+                                if (px.TryGetProperty("Phoneno", out var phProp)) paxDto.Phoneno = phProp.GetString() ?? "";
+                                if (px.TryGetProperty("PAN", out var panProp)) paxDto.PAN = panProp.GetString();
+                                if (px.TryGetProperty("PaxType", out var ptProp)) paxDto.PaxType = ptProp.GetString() ?? "1";
+                                if (px.TryGetProperty("Age", out var aProp) && aProp.ValueKind == JsonValueKind.Number) paxDto.Age = aProp.GetInt32();
+                                if (px.TryGetProperty("LeadPassenger", out var lpProp) && (lpProp.ValueKind == JsonValueKind.True || lpProp.ValueKind == JsonValueKind.False)) paxDto.LeadPassenger = lpProp.GetBoolean();
+                                roomItem.Passengers.Add(paxDto);
+                            }
+                        }
+
+                        resultDto.Rooms.Add(roomItem);
+                    }
+                }
+
+                dto.Result = resultDto;
+                dto.Success = dto.Error == null || dto.Error.ErrorCode == 0;
+                dto.Message = dto.Success ? "Booking details retrieved successfully." : dto.Error?.ErrorMessage;
+
+                // Synchronize local database HotelReservation record
+                if (dto.Success && dto.TraceId > 0)
+                {
+                    try
+                    {
+                        using var scope = _serviceProvider.CreateScope();
+                        var dbContext = scope.ServiceProvider.GetRequiredService<Data.AppDbContext>();
+                        var traceIdStr = dto.TraceId.ToString();
+                        var reservation = await dbContext.HotelReservations
+                            .FirstOrDefaultAsync(r => r.TraceId == traceIdStr);
+
+                        if (reservation != null)
+                        {
+                            var statusUpper = (dto.BookingStatus ?? "").ToUpperInvariant();
+                            var cancelUpper = (dto.CancellationStatus ?? "").ToUpperInvariant();
+
+                            if (cancelUpper == "FULLY_CANCELLED")
+                            {
+                                reservation.Status = "Cancelled";
+                                reservation.CancelledAt = DateTime.UtcNow;
+                                if (!string.IsNullOrWhiteSpace(dto.FailureReason))
+                                    reservation.CancellationReason = dto.FailureReason;
+                            }
+                            else if (cancelUpper == "PARTIALLY_CANCELLED")
+                            {
+                                reservation.Status = "PartiallyCancelled";
+                                if (!string.IsNullOrWhiteSpace(dto.FailureReason))
+                                    reservation.CancellationReason = dto.FailureReason;
+                            }
+                            else if (statusUpper == "SUCCESS")
+                            {
+                                reservation.Status = "Confirmed";
+                            }
+                            else if (statusUpper == "FAILED")
+                            {
+                                reservation.Status = "Failed";
+                                if (!string.IsNullOrWhiteSpace(dto.FailureReason))
+                                    reservation.CancellationReason = dto.FailureReason;
+                            }
+                            else if (statusUpper == "CANCELLED")
+                            {
+                                reservation.Status = "Cancelled";
+                                reservation.CancelledAt = DateTime.UtcNow;
+                            }
+                            else if (statusUpper == "PENDING")
+                            {
+                                reservation.Status = "Pending";
+                            }
+                            else if (statusUpper == "MANUAL_CHECK_REQUIRED")
+                            {
+                                reservation.Status = "ManualCheckRequired";
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(resultDto.ConfirmationNo) && string.IsNullOrWhiteSpace(reservation.ConfirmationNo))
+                            {
+                                reservation.ConfirmationNo = resultDto.ConfirmationNo;
+                            }
+
+                            if (!string.IsNullOrWhiteSpace(resultDto.BookingReference) && string.IsNullOrWhiteSpace(reservation.ProviderBookingId))
+                            {
+                                reservation.ProviderBookingId = resultDto.BookingReference;
+                                reservation.SrdvBookingId = resultDto.BookingReference;
+                            }
+
+                            reservation.UpdatedAt = DateTime.UtcNow;
+                            await dbContext.SaveChangesAsync();
+                            _logger?.LogInformation("Synchronized HotelReservation ID {Id} for TraceId {TraceId} to status {Status}", reservation.Id, traceIdStr, reservation.Status);
+                        }
+                    }
+                    catch (Exception dbEx)
+                    {
+                        _logger?.LogWarning(dbEx, "Failed to synchronize local HotelReservation for TraceId {TraceId}", dto.TraceId);
+                    }
+                }
+
+                return dto;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to parse BookingDetails response for TraceId {TraceId}", traceId);
+                dto.Success = false;
+                dto.Message = $"Failed to parse BookingDetails response: {ex.Message}";
+                dto.Error = new HotelBookingDetailsErrorDto
+                {
+                    ErrorCode = -1,
+                    ErrorMessage = ex.Message
+                };
+                return dto;
+            }
+            finally
+            {
+                jsonDoc?.Dispose();
+            }
+        }
+
+        public Task<HotelCancelResponseDto> CancelBookingAsync(HotelCancelBookingRequestDto request)
+        {
+            if (request == null)
+            {
+                return Task.FromResult(new HotelCancelResponseDto
+                {
+                    ResponseStatus = 0,
+                    Error = new HotelCancelErrorDto { ErrorCode = 1, ErrorMessage = "Request cannot be null." }
+                });
+            }
+            return CancelBookingAsync(request.TraceId, request.Remarks);
+        }
+
+        public async Task<HotelCancelResponseDto> CancelBookingAsync(long traceId, string remarks)
+        {
+            var resDto = new HotelCancelResponseDto
+            {
+                TraceId = traceId
+            };
+
+            if (traceId <= 0)
+            {
+                resDto.ResponseStatus = 0;
+                resDto.Error = new HotelCancelErrorDto
+                {
+                    ErrorCode = 1,
+                    ErrorMessage = "TraceId is required and must be a positive integer."
+                };
+                return resDto;
+            }
+
+            var cleanRemarks = !string.IsNullOrWhiteSpace(remarks) ? remarks.Trim() : "Cancellation requested by guest";
+            if (cleanRemarks.Length > 2000)
+            {
+                cleanRemarks = cleanRemarks.Substring(0, 2000);
+            }
+
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
+            }
+
+            var supplierReq = new SrdvSupplierHotelCancelRequest
+            {
+                TraceId = traceId,
+                Remarks = cleanRemarks
+            };
+
+            var url = $"{_settings.HotelBaseUrl.TrimEnd('/')}/Cancel";
+            _logger?.LogInformation("[SRDV-HOTEL] Outbound Cancel to {Url} with TraceId {TraceId}, Remarks: {Remarks}", url, traceId, cleanRemarks);
+
+            HttpResponseMessage httpRes;
+            try
+            {
+                httpRes = await _httpClient.PostAsJsonAsync(url, supplierReq);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "HTTP Request Exception during Cancel for TraceId {TraceId}", traceId);
+                resDto.ResponseStatus = 0;
+                resDto.Error = new HotelCancelErrorDto
+                {
+                    ErrorCode = -1,
+                    ErrorMessage = $"HTTP Request Exception: {ex.Message}"
+                };
+                return resDto;
+            }
+
+            var content = await httpRes.Content.ReadAsStringAsync();
+            _logger?.LogInformation("[SRDV-HOTEL] Cancel response for TraceId {TraceId}: Status {Status}, Content: {Content}", traceId, httpRes.StatusCode, content);
+
+            if (!httpRes.IsSuccessStatusCode)
+            {
+                resDto.ResponseStatus = (int)httpRes.StatusCode;
+                resDto.Error = new HotelCancelErrorDto
+                {
+                    ErrorCode = (int)httpRes.StatusCode,
+                    ErrorMessage = $"Supplier returned HTTP {(int)httpRes.StatusCode}: {content}"
+                };
+                return resDto;
+            }
+
+            JsonDocument? jsonDoc = null;
+            try
+            {
+                jsonDoc = JsonDocument.Parse(content);
+                var root = jsonDoc.RootElement;
+
+                var target = root;
+                if (root.TryGetProperty("CancelResult", out var cr) && cr.ValueKind == JsonValueKind.Object) target = cr;
+                else if (root.TryGetProperty("SendChangeResponse", out var scr) && scr.ValueKind == JsonValueKind.Object) target = scr;
+
+                // Error
+                if (target.TryGetProperty("Error", out var errProp) && errProp.ValueKind == JsonValueKind.Object)
+                {
+                    if (errProp.TryGetProperty("ErrorCode", out var ec))
+                    {
+                        if (ec.ValueKind == JsonValueKind.Number) resDto.Error.ErrorCode = ec.GetInt32();
+                        else if (ec.ValueKind == JsonValueKind.String && int.TryParse(ec.GetString(), out var pec)) resDto.Error.ErrorCode = pec;
+                    }
+                    if (errProp.TryGetProperty("ErrorMessage", out var em))
+                    {
+                        resDto.Error.ErrorMessage = em.GetString() ?? "";
+                    }
+                }
+
+                // ResponseStatus
+                if (target.TryGetProperty("ResponseStatus", out var rsProp))
+                {
+                    if (rsProp.ValueKind == JsonValueKind.Number) resDto.ResponseStatus = rsProp.GetInt32();
+                    else if (rsProp.ValueKind == JsonValueKind.String && int.TryParse(rsProp.GetString(), out var prs)) resDto.ResponseStatus = prs;
+                }
+
+                // TraceId
+                if (target.TryGetProperty("TraceId", out var tidProp))
+                {
+                    if (tidProp.ValueKind == JsonValueKind.Number) resDto.TraceId = tidProp.GetInt64();
+                    else if (tidProp.ValueKind == JsonValueKind.String && long.TryParse(tidProp.GetString(), out var ptid)) resDto.TraceId = ptid;
+                }
+
+                // SrdvType
+                if (target.TryGetProperty("SrdvType", out var stProp)) resDto.SrdvType = stProp.GetString();
+
+                // SrdvIndex
+                if (target.TryGetProperty("SrdvIndex", out var siProp))
+                {
+                    if (siProp.ValueKind == JsonValueKind.Number) resDto.SrdvIndex = siProp.GetInt64();
+                    else if (siProp.ValueKind == JsonValueKind.String && long.TryParse(siProp.GetString(), out var psi)) resDto.SrdvIndex = psi;
+                }
+
+                // ChangeRequestId
+                if (target.TryGetProperty("ChangeRequestId", out var criProp))
+                {
+                    if (criProp.ValueKind == JsonValueKind.Number) resDto.ChangeRequestId = criProp.GetInt32();
+                    else if (criProp.ValueKind == JsonValueKind.String && int.TryParse(criProp.GetString(), out var pcri)) resDto.ChangeRequestId = pcri;
+                }
+
+                // ChangeRequestStatus
+                if (target.TryGetProperty("ChangeRequestStatus", out var crsProp))
+                {
+                    if (crsProp.ValueKind == JsonValueKind.Number) resDto.ChangeRequestStatus = crsProp.GetInt32();
+                    else if (crsProp.ValueKind == JsonValueKind.String && int.TryParse(crsProp.GetString(), out var pcrs)) resDto.ChangeRequestStatus = pcrs;
+                }
+
+                // If supplier acknowledged, sync local DB HotelReservation
+                bool isAcknowledged = resDto.Error.ErrorCode == 0 && (resDto.ResponseStatus == 1 || (resDto.ChangeRequestId.HasValue && resDto.ChangeRequestId.Value > 0));
+                if (isAcknowledged)
+                {
+                    try
+                    {
+                        using var scope = _serviceProvider.CreateScope();
+                        var dbContext = scope.ServiceProvider.GetRequiredService<Data.AppDbContext>();
+                        var traceIdStr = traceId.ToString();
+                        var reservation = await dbContext.HotelReservations
+                            .FirstOrDefaultAsync(r => r.TraceId == traceIdStr);
+
+                        if (reservation != null)
+                        {
+                            reservation.Status = "CancellationPending";
+                            reservation.CancelledAt = DateTime.UtcNow;
+                            reservation.CancellationReason = cleanRemarks;
+                            reservation.UpdatedAt = DateTime.UtcNow;
+
+                            await dbContext.SaveChangesAsync();
+                            _logger?.LogInformation("Updated HotelReservation ID {Id} for TraceId {TraceId} to CancellationPending.", reservation.Id, traceIdStr);
+                        }
+                    }
+                    catch (Exception dbEx)
+                    {
+                        _logger?.LogWarning(dbEx, "Failed to update local HotelReservation status on cancel for TraceId {TraceId}", traceId);
+                    }
+                }
+
+                return resDto;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Failed to parse Cancel response for TraceId {TraceId}", traceId);
+                resDto.ResponseStatus = 0;
+                resDto.Error = new HotelCancelErrorDto
+                {
+                    ErrorCode = -1,
+                    ErrorMessage = $"Failed to parse Cancel response: {ex.Message}"
+                };
+                return resDto;
+            }
+            finally
+            {
+                jsonDoc?.Dispose();
             }
         }
     }

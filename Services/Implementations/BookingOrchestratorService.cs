@@ -694,6 +694,7 @@ namespace PickNBook.Api.Services.Implementations
                     HotelName = request.HotelName,
                     OfferId = request.ResultIndex,
                     CityCode = "", // Not readily available in DTO
+                    TraceId = request.TraceId.ToString(),
                     GuestName = request.GuestName,
                     GuestEmail = request.GuestEmail,
                     GuestPhone = request.GuestPhone,
@@ -732,6 +733,7 @@ namespace PickNBook.Api.Services.Implementations
                 };
 
                 bool isSrdvSuccess = false;
+                bool isPending = false;
                 string? srdvErrorMessage = null;
                 string? srdvProviderBookingId = null;
                 string? srdvConfirmationNo = null;
@@ -740,7 +742,8 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (existingExecution != null)
                 {
-                    isSrdvSuccess = existingExecution.SupplierBookingStatus == "Success";
+                    isSrdvSuccess = existingExecution.SupplierBookingStatus == "Success" || existingExecution.SupplierBookingStatus == "Pending";
+                    isPending = existingExecution.SupplierBookingStatus == "Pending";
                     srdvErrorMessage = existingExecution.LastError;
                     srdvProviderBookingId = existingExecution.SupplierReference;
                     srdvResponseJson = existingExecution.SupplierResponseJson;
@@ -750,25 +753,21 @@ namespace PickNBook.Api.Services.Implementations
                     var srdvRes = await hotelService.BookRoomAsync(request);
                     var result = srdvRes.BookResult;
                     
-                    isSrdvSuccess = result != null && (result.ResponseStatus == 1 || result.Status?.ToUpperInvariant() == "CONFIRMED");
+                    bool isConfirmed = result != null && (result.ResponseStatus == 1 || result.Status?.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) == true);
+                    isPending = result != null && (result.ResponseStatus == 3 || result.Status?.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true);
+                    isSrdvSuccess = isConfirmed || isPending;
                     srdvErrorMessage = result?.Error?.ErrorMessage ?? "Unknown Error";
-                    srdvProviderBookingId = result?.BookingId.ToString();
+                    srdvProviderBookingId = result?.BookingId > 0 ? result.BookingId.ToString() : (!string.IsNullOrEmpty(result?.BookingRefNo) ? result.BookingRefNo : null);
                     srdvConfirmationNo = result?.ConfirmationNo;
                     srdvInvoiceNumber = result?.InvoiceNumber;
                     srdvResponseJson = JsonSerializer.Serialize(srdvRes);
-
-                    if (result != null && (result.IsPriceChanged || result.IsCancellationPolicyChanged))
-                    {
-                        isSrdvSuccess = false; // We treat this as a failure because we don't want to auto-book changed prices.
-                        srdvErrorMessage = "Price or Cancellation Policy changed at provider during booking.";
-                    }
 
                     var execution = new PickNBook.Api.Models.Entities.SupplierFulfillmentExecution
                     {
                         PaymentId = payment.Id,
                         BookingType = "Hotel",
                         SupplierReference = srdvProviderBookingId ?? "",
-                        SupplierBookingStatus = isSrdvSuccess ? "Success" : "Failed",
+                        SupplierBookingStatus = isConfirmed ? "Success" : (isPending ? "Pending" : "Failed"),
                         SupplierResponseJson = srdvResponseJson,
                         LastError = isSrdvSuccess ? null : srdvErrorMessage,
                         CreatedAt = DateTime.UtcNow,
@@ -805,33 +804,36 @@ namespace PickNBook.Api.Services.Implementations
                 reservation.SrdvBookingId = srdvProviderBookingId;
                 reservation.ConfirmationNo = srdvConfirmationNo;
                 reservation.InvoiceNumber = srdvInvoiceNumber;
-                reservation.Status = "Confirmed";
+                reservation.Status = isPending ? "Pending" : "Confirmed";
                 reservation.SrdvBookingResponseJson = srdvResponseJson;
                 reservation.UpdatedAt = DateTime.UtcNow;
                 
                 _dbContext.HotelReservations.Add(reservation);
                 await _dbContext.SaveChangesAsync();
                 
-                payment.FulfillmentStatus = "Success";
+                payment.FulfillmentStatus = isPending ? "Pending_Reconciliation" : "Success";
                 payment.BookingReferenceId = reservation.Id;
 
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Hotel");
 
-                await _notificationService.EnqueueAsync(
-                    eventType: "HotelBookingSuccess",
-                    channel: "Email",
-                    recipient: reservation.GuestEmail ?? payment.UserId,
-                    templateKey: "HOTEL_BOOKING_CONFIRMED",
-                    payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName, Amount = payment.FinalPayableAmount }
-                );
+                if (!isPending)
+                {
+                    await _notificationService.EnqueueAsync(
+                        eventType: "HotelBookingSuccess",
+                        channel: "Email",
+                        recipient: reservation.GuestEmail ?? payment.UserId,
+                        templateKey: "HOTEL_BOOKING_CONFIRMED",
+                        payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName, Amount = payment.FinalPayableAmount }
+                    );
 
-                await _notificationService.EnqueueAsync(
-                    eventType: "HotelBookingSuccess",
-                    channel: "SMS",
-                    recipient: reservation.GuestPhone ?? "",
-                    templateKey: "HOTEL_BOOKING_CONFIRMED_SMS",
-                    payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName }
-                );
+                    await _notificationService.EnqueueAsync(
+                        eventType: "HotelBookingSuccess",
+                        channel: "SMS",
+                        recipient: reservation.GuestPhone ?? "",
+                        templateKey: "HOTEL_BOOKING_CONFIRMED_SMS",
+                        payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName }
+                    );
+                }
 
                 await _dbContext.SaveChangesAsync();
 

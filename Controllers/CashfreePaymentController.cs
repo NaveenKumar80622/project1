@@ -234,8 +234,9 @@ namespace PickNBook.Api.Controllers
                             new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         if (payload == null) return BadRequest(new { message = "Invalid Hotel Payload" });
 
+                        var traceIdStr = payload.TraceId.ToString();
                         var blockedHotel = await _dbContext.HotelBlockedPrices
-                            .FirstOrDefaultAsync(h => h.ResultIndex == payload.ResultIndex && h.TraceId == payload.TraceId);
+                            .FirstOrDefaultAsync(h => h.ResultIndex == payload.ResultIndex && h.TraceId == traceIdStr);
 
                         if (blockedHotel != null)
                         {

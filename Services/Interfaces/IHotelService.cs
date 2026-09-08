@@ -23,6 +23,7 @@ namespace PickNBook.Api.Services
             string guestNationality = "IN");
 
         Task<PickNBookHotelSearchResponseDto> SearchHotelsMultiLevelAsync(SrdvHotelSearchRequestDto request);
+        Task<PickNBookHotelSearchResponseDto> RecheckSearchAsync(long traceId);
 
         Task<HotelOfferDto?> GetOfferDetailsAsync(string offerId);
 
@@ -39,12 +40,16 @@ namespace PickNBook.Api.Services
         Task<PickNBookHotelInfoResponseDto> GetHotelInfoAsync(HotelInfoRequestDto request);
         Task<PickNBookHotelInfoResponseDto> GetHotelInfoAsync(string traceId, string resultIndex, string hotelCode);
         Task<PickNBookHotelRoomResponseDto> GetHotelRoomAsync(HotelRoomRequestDto request);
-        Task<PickNBookHotelRoomResponseDto> GetHotelRoomAsync(string traceId, string resultIndex, string hotelCode, string srdvIndex, string endUserIp);
+        Task<PickNBookHotelRoomResponseDto> GetHotelRoomAsync(long traceId, string resultIndex);
         Task<PickNBookBlockRoomResponseDto> BlockRoomAsync(BlockRoomRequestDto request);
         Task<PickNBookBookRoomResponseDto> BookRoomAsync(HotelBookRequestDto request);
         Task<SendChangeResponseDto> CancelRoomAsync(HotelCancelRequestDto request);
         Task<BalanceResponseDto> GetBalanceAsync(BalanceRequestDto request);
         Task<BalanceLogResponseDto> GetBalanceLogAsync(BalanceLogRequestDto request);
+        Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(long traceId);
+        Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(HotelBookingDetailsRequestDto request);
+        Task<HotelCancelResponseDto> CancelBookingAsync(long traceId, string remarks);
+        Task<HotelCancelResponseDto> CancelBookingAsync(HotelCancelBookingRequestDto request);
     }
 }
 

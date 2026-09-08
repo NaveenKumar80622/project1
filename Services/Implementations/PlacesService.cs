@@ -109,21 +109,31 @@ namespace PickNBook.Api.Services.Implementations
                     hotelQuery = hotelQuery.Where(h =>
                         h.CityCode == queryLower ||
                         h.CityName.StartsWith(queryLower) ||
-                        h.CityName.Contains(queryLower));
+                        h.CityName.Contains(queryLower) ||
+                        h.FullName.Contains(queryLower) ||
+                        (h.StateName != null && h.StateName.StartsWith(queryLower)) ||
+                        (h.DistrictName != null && h.DistrictName.StartsWith(queryLower)));
                 }
 
                 var hotelCities = await hotelQuery
-                    .OrderBy(h => h.CityName)
+                    .OrderByDescending(h => h.CityName.StartsWith(queryLower) ? 1 : 0)
+                    .ThenByDescending(h => h.HotelCount)
+                    .ThenBy(h => h.CityName)
                     .Take(candidateLimit)
                     .Select(h => new PlaceSuggestionDto
                     {
                         CityName = h.CityName,
-                        CityId = h.CityCode,
+                        CityId = h.CityId > 0 ? h.CityId.ToString() : h.CityCode,
                         CityCode = h.CityCode,
                         CountryCode = h.CountryCode ?? "",
-                        CountryName = h.CountryName ?? "",
+                        CountryName = h.CountryName ?? h.StateName ?? "",
+                        StateName = h.StateName,
+                        DistrictName = h.DistrictName,
+                        FullName = h.FullName,
+                        Type = h.Type,
+                        HotelCount = h.HotelCount,
                         TripType = "hotel",
-                        UsageCount = 1
+                        UsageCount = h.HotelCount
                     })
                     .ToListAsync(cancellationToken);
 
@@ -185,7 +195,11 @@ namespace PickNBook.Api.Services.Implementations
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
                     .GroupBy(x => x.CityId ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
                     .Select(g => g.First())
-                    .OrderBy(x => x.CityName)
+                    .OrderByDescending(x =>
+                        !string.IsNullOrWhiteSpace(queryLower) &&
+                        x.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                    .ThenByDescending(x => x.HotelCount ?? 0)
+                    .ThenBy(x => x.CityName)
                     .Take(limit)
                     .ToList();
             }
@@ -275,6 +289,10 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     score += 45;
                 }
+                else if (!string.IsNullOrEmpty(item.FullName) && item.FullName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 40;
+                }
                 else
                 {
                     // Existing Levenshtein fuzzy distance fallback (allow up to 2 typos)
@@ -291,6 +309,11 @@ namespace PickNBook.Api.Services.Implementations
                     if (item.TripType == "bus" && item.UsageCount > 0)
                     {
                         score += Math.Min(item.UsageCount, 50);
+                    }
+                    // Hotel Inventory boost
+                    else if (item.TripType == "hotel" && item.HotelCount > 0)
+                    {
+                        score += Math.Min((int)(Math.Log10(item.HotelCount.Value + 1) * 15), 50);
                     }
 
                     scoredCandidates.Add((item, score, distance));
