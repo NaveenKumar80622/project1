@@ -1762,11 +1762,56 @@ namespace PickNBook.Api.Services
                 }
                 if (target.TryGetProperty("AvailabilityType", out var atProp)) resDto.AvailabilityType = atProp.GetString() ?? "Confirm";
                 if (target.TryGetProperty("TraceId", out var tiProp)) resDto.TraceId = tiProp.ValueKind == JsonValueKind.Number ? tiProp.GetRawText() : (tiProp.GetString() ?? request.TraceId.ToString());
+                if (target.TryGetProperty("ResultIndex", out var riProp)) resDto.ResultIndex = riProp.ValueKind == JsonValueKind.Number ? riProp.GetRawText() : (riProp.GetString() ?? request.ResultIndex);
+                else resDto.ResultIndex = request.ResultIndex;
                 if (target.TryGetProperty("ResponseStatus", out var rsProp) && rsProp.ValueKind == JsonValueKind.Number) resDto.ResponseStatus = rsProp.GetInt32();
                 if (target.TryGetProperty("GSTAllowed", out var gaProp) && (gaProp.ValueKind == JsonValueKind.True || gaProp.ValueKind == JsonValueKind.False)) resDto.GSTAllowed = gaProp.GetBoolean();
                 if (target.TryGetProperty("IsPackageDetailsMandatory", out var pdmProp) && (pdmProp.ValueKind == JsonValueKind.True || pdmProp.ValueKind == JsonValueKind.False)) resDto.IsPackageDetailsMandatory = pdmProp.GetBoolean();
                 if (target.TryGetProperty("IsPackageFare", out var pfProp) && (pfProp.ValueKind == JsonValueKind.True || pfProp.ValueKind == JsonValueKind.False)) resDto.IsPackageFare = pfProp.GetBoolean();
                 if (target.TryGetProperty("IsPriceChanged", out var pcProp) && (pcProp.ValueKind == JsonValueKind.True || pcProp.ValueKind == JsonValueKind.False)) resDto.IsPriceChanged = pcProp.GetBoolean();
+
+                // Multi-tier resolution for HotelCode (since SRDV BlockRoom request does not take HotelCode)
+                string resolvedHotelCode = string.Empty;
+
+                // Tier 1: Directly from SRDV Response (target.HotelCode or target.SupplierHotelCode)
+                if (target.TryGetProperty("HotelCode", out var hCodeProp) && hCodeProp.ValueKind != JsonValueKind.Null)
+                {
+                    resolvedHotelCode = hCodeProp.ValueKind == JsonValueKind.Number ? hCodeProp.GetRawText() : (hCodeProp.GetString() ?? "");
+                }
+                if (string.IsNullOrWhiteSpace(resolvedHotelCode) && target.TryGetProperty("SupplierHotelCode", out var shcProp) && shcProp.ValueKind != JsonValueKind.Null)
+                {
+                    resolvedHotelCode = shcProp.ValueKind == JsonValueKind.Number ? shcProp.GetRawText() : (shcProp.GetString() ?? "");
+                }
+
+                // Tier 2: Composite ResultIndex parsing ({SrdvIndex}_{HotelCode}, e.g. "60_100000030851")
+                if (string.IsNullOrWhiteSpace(resolvedHotelCode) && !string.IsNullOrWhiteSpace(request.ResultIndex))
+                {
+                    var parts = request.ResultIndex.Split('_');
+                    if (parts.Length >= 2 && !string.IsNullOrWhiteSpace(parts[1]))
+                    {
+                        resolvedHotelCode = parts[1].Trim();
+                    }
+                }
+
+                // Tier 3: In-Memory cache lookup from hotel search
+                if (string.IsNullOrWhiteSpace(resolvedHotelCode) && !string.IsNullOrWhiteSpace(request.ResultIndex) && _cache.TryGetValue(request.ResultIndex, out HotelOfferDto? cachedOffer) && cachedOffer != null && !string.IsNullOrWhiteSpace(cachedOffer.HotelId))
+                {
+                    resolvedHotelCode = cachedOffer.HotelId.Trim();
+                }
+
+                // Tier 4: Explicit request property if caller supplied it
+                if (string.IsNullOrWhiteSpace(resolvedHotelCode) && !string.IsNullOrWhiteSpace(request.HotelCode))
+                {
+                    resolvedHotelCode = request.HotelCode.Trim();
+                }
+
+                // Tier 5: Safe non-null fallback to guarantee database NOT NULL constraint
+                if (string.IsNullOrWhiteSpace(resolvedHotelCode))
+                {
+                    resolvedHotelCode = "UNKNOWN";
+                }
+
+                resDto.HotelCode = resolvedHotelCode;
 
                 if (target.TryGetProperty("PriceSummary", out var psProp) && psProp.ValueKind == JsonValueKind.Object)
                 {
@@ -1930,7 +1975,7 @@ namespace PickNBook.Api.Services
                     {
                         if (rm.Price != null)
                         {
-                            await ApplyMarkupAndGstAsync(markupService, rm.Price, null, request.HotelCode, "B2C");
+                            await ApplyMarkupAndGstAsync(markupService, rm.Price, null, resolvedHotelCode, "B2C");
                             rm.OfferedPrice = rm.Price.OfferedPrice;
                             rm.B2CBasePrice = rm.Price.B2CBasePrice;
                             rm.B2CTotalPrice = rm.Price.B2CTotalPrice;
@@ -1939,7 +1984,7 @@ namespace PickNBook.Api.Services
                             var blockedPrice = new PickNBook.Api.Models.Entities.HotelBlockedPrice
                             {
                                 ResultIndex = request.ResultIndex,
-                                HotelCode = request.HotelCode,
+                                HotelCode = resolvedHotelCode,
                                 TraceId = request.TraceId.ToString(),
                                 OfferedPrice = rm.Price.OfferedPrice,
                                 Tax = rm.Price.Tax + rm.Price.TotalGSTAmount, // Combined tax
@@ -1952,7 +1997,15 @@ namespace PickNBook.Api.Services
                             dbContext.HotelBlockedPrices.Add(blockedPrice);
                         }
                     }
-                    await dbContext.SaveChangesAsync();
+                    
+                    try
+                    {
+                        await dbContext.SaveChangesAsync();
+                    }
+                    catch (Exception dbEx)
+                    {
+                        _logger?.LogError(dbEx, "Failed to persist HotelBlockedPrice record for ResultIndex {ResultIndex}, HotelCode {HotelCode}", request.ResultIndex, resolvedHotelCode);
+                    }
                 }
                 
                 if (responseDto.BlockRoomResult != null && responseDto.BlockRoomResult.Error.ErrorCode == 0)

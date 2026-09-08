@@ -458,6 +458,8 @@ namespace PickNBook.Api.Models.DTOs
         public HotelSearchErrorDto Error { get; set; } = new();
         public string AvailabilityType { get; set; } = string.Empty;
         public string TraceId { get; set; } = string.Empty;
+        public string ResultIndex { get; set; } = string.Empty;
+        public string HotelCode { get; set; } = string.Empty;
         public int ResponseStatus { get; set; }
         public bool GSTAllowed { get; set; }
         public bool IsPackageDetailsMandatory { get; set; }
