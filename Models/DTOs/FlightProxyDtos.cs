@@ -152,12 +152,12 @@ namespace PickNBook.Api.Models.DTOs
 
     public class FlightTicketLCCProxyRequestDto
     {
-
         [JsonPropertyName("SrdvType")]
-        public string SrdvType { get; set; }
+        public string? SrdvType { get; set; } = "MixAPI";
 
         [JsonPropertyName("SrdvIndex")]
-        public string SrdvIndex { get; set; }
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? SrdvIndex { get; set; } = "1";
 
         [JsonPropertyName("TraceId")]
         [JsonConverter(typeof(SafeLongConverter))]
@@ -179,9 +179,11 @@ namespace PickNBook.Api.Models.DTOs
         public string? BookedByName { get; set; } = string.Empty;
 
         [JsonPropertyName("CustomerFare")]
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
         public decimal? CustomerFare { get; set; }
 
         [JsonPropertyName("ReturnCustomerFare")]
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
         public decimal? ReturnCustomerFare { get; set; }
 
         [JsonPropertyName("CouponCode")]
@@ -202,12 +204,12 @@ namespace PickNBook.Api.Models.DTOs
 
     public class FlightHoldGDSProxyRequestDto
     {
-
         [JsonPropertyName("SrdvType")]
-        public string SrdvType { get; set; }
+        public string? SrdvType { get; set; } = "MixAPI";
 
         [JsonPropertyName("SrdvIndex")]
-        public string SrdvIndex { get; set; }
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? SrdvIndex { get; set; } = "1";
 
         [JsonPropertyName("TraceId")]
         public string TraceId { get; set; }
@@ -233,12 +235,12 @@ namespace PickNBook.Api.Models.DTOs
 
     public class FlightTicketGDSProxyRequestDto
     {
-
         [JsonPropertyName("SrdvType")]
-        public string SrdvType { get; set; }
+        public string? SrdvType { get; set; } = "MixAPI";
 
         [JsonPropertyName("SrdvIndex")]
-        public string SrdvIndex { get; set; }
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? SrdvIndex { get; set; } = "1";
 
         [JsonPropertyName("TraceId")]
         public string TraceId { get; set; }

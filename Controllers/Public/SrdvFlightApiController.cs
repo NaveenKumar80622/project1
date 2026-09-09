@@ -746,11 +746,16 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("/api/flight/v8/TicketLCC")]
         public async Task<IActionResult> TicketLCC([FromBody] FlightTicketLCCProxyRequestDto proxyRequest)
         {
+            var srdvIndex = string.IsNullOrWhiteSpace(proxyRequest.SrdvIndex)
+                ? (proxyRequest.ResultIndex?.Contains('_') == true ? proxyRequest.ResultIndex.Split('_')[0] : "1")
+                : proxyRequest.SrdvIndex.Trim();
+            var srdvType = string.IsNullOrWhiteSpace(proxyRequest.SrdvType) ? "MixAPI" : proxyRequest.SrdvType.Trim();
+
             var request = new TicketLCCRequestDto
             {
                 EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                SrdvType = proxyRequest.SrdvType,
-                SrdvIndex = proxyRequest.SrdvIndex,
+                SrdvType = srdvType,
+                SrdvIndex = srdvIndex,
                 TraceId = proxyRequest.TraceId.ToString(),
                 ResultIndex = proxyRequest.ResultIndex,
                 RefID = proxyRequest.RefID,

@@ -197,4 +197,110 @@ namespace PickNBook.Api.Models.DTOs
             writer.WriteStringValue(value);
         }
     }
+
+    public class SafeNullableDecimalConverter : JsonConverter<decimal?>
+    {
+        public override decimal? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return null;
+            }
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                return reader.GetDecimal();
+            }
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                var str = reader.GetString();
+                if (string.IsNullOrWhiteSpace(str))
+                    return null;
+                if (decimal.TryParse(str, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var val))
+                    return val;
+                return null;
+            }
+            return null;
+        }
+
+        public override void Write(Utf8JsonWriter writer, decimal? value, JsonSerializerOptions options)
+        {
+            if (value.HasValue)
+                writer.WriteNumberValue(value.Value);
+            else
+                writer.WriteNullValue();
+        }
+    }
+
+    public class SafeNullableDoubleConverter : JsonConverter<double?>
+    {
+        public override double? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return null;
+            }
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                return reader.GetDouble();
+            }
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                var str = reader.GetString();
+                if (string.IsNullOrWhiteSpace(str))
+                    return null;
+                if (double.TryParse(str, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var val))
+                    return val;
+                return null;
+            }
+            return null;
+        }
+
+        public override void Write(Utf8JsonWriter writer, double? value, JsonSerializerOptions options)
+        {
+            if (value.HasValue)
+                writer.WriteNumberValue(value.Value);
+            else
+                writer.WriteNullValue();
+        }
+    }
+
+    public class SafePassengerFareConverter : JsonConverter<LCCPassengerFareDto?>
+    {
+        public override LCCPassengerFareDto? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return null;
+            }
+            if (reader.TokenType == JsonTokenType.StartArray)
+            {
+                using var doc = JsonDocument.ParseValue(ref reader);
+                var root = doc.RootElement;
+                if (root.GetArrayLength() > 0)
+                {
+                    return JsonSerializer.Deserialize<LCCPassengerFareDto>(root[0].GetRawText(), options);
+                }
+                return new LCCPassengerFareDto();
+            }
+            if (reader.TokenType == JsonTokenType.StartObject)
+            {
+                using var doc = JsonDocument.ParseValue(ref reader);
+                return JsonSerializer.Deserialize<LCCPassengerFareDto>(doc.RootElement.GetRawText(), options);
+            }
+            return new LCCPassengerFareDto();
+        }
+
+        public override void Write(Utf8JsonWriter writer, LCCPassengerFareDto? value, JsonSerializerOptions options)
+        {
+            if (value == null)
+            {
+                writer.WriteNullValue();
+            }
+            else
+            {
+                JsonSerializer.Serialize(writer, value, options);
+            }
+        }
+    }
 }
+

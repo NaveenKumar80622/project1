@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace PickNBook.Api.Models.DTOs
@@ -164,10 +165,10 @@ namespace PickNBook.Api.Models.DTOs
         public string Password { get; set; } = string.Empty;
 
         [JsonPropertyName("SrdvType")]
-        public string SrdvType { get; set; } = string.Empty;
+        public string? SrdvType { get; set; } = "MixAPI";
 
         [JsonPropertyName("SrdvIndex")]
-        public string SrdvIndex { get; set; } = string.Empty;
+        public string? SrdvIndex { get; set; } = "1";
 
         [JsonPropertyName("TraceId")]
         public string TraceId { get; set; } = string.Empty;
@@ -228,7 +229,8 @@ namespace PickNBook.Api.Models.DTOs
 
 
         [JsonPropertyName("PaxType")]
-        public int PaxType { get; set; }
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int PaxType { get; set; } = 1;
 
         [JsonPropertyName("DateOfBirth")]
         public string DateOfBirth { get; set; } = string.Empty;
@@ -296,7 +298,8 @@ namespace PickNBook.Api.Models.DTOs
 
 
         [JsonPropertyName("Fare")]
-        public LCCPassengerFareDto Fare { get; set; } = new();
+        [JsonConverter(typeof(SafePassengerFareConverter))]
+        public LCCPassengerFareDto? Fare { get; set; } = new();
 
         [JsonPropertyName("Baggage")]
         public List<LCCBaggageDto> Baggage { get; set; } = new();
@@ -371,7 +374,8 @@ namespace PickNBook.Api.Models.DTOs
         public string Currency { get; set; } = "INR";
 
         [JsonPropertyName("Price")]
-        public decimal Price { get; set; }
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
+        public decimal? Price { get; set; }
 
         [JsonPropertyName("Origin")]
         public string Origin { get; set; } = string.Empty;
@@ -407,7 +411,8 @@ namespace PickNBook.Api.Models.DTOs
         public string Currency { get; set; } = "INR";
 
         [JsonPropertyName("Price")]
-        public decimal Price { get; set; }
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
+        public decimal? Price { get; set; }
 
         [JsonPropertyName("Origin")]
         public string Origin { get; set; } = string.Empty;
@@ -437,7 +442,8 @@ namespace PickNBook.Api.Models.DTOs
         public bool IsAisle { get; set; }
 
         [JsonPropertyName("Amount")]
-        public double Amount { get; set; }
+        [JsonConverter(typeof(SafeNullableDoubleConverter))]
+        public double? Amount { get; set; }
 
         [JsonPropertyName("Code")]
         public string Code { get; set; } = string.Empty;
