@@ -75,42 +75,24 @@ namespace PickNBook.Api.Services
 
         public async Task<string> SearchFlightsRawAsync(AirSearchRequestDto request)
         {
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId) 
-                ? _settings.ClientId 
-                : request.ClientId.Trim();
-                
-            var userName = string.IsNullOrWhiteSpace(request.UserName) 
-                ? _settings.UserName 
-                : request.UserName.Trim();
-                
-            var password = string.IsNullOrWhiteSpace(request.Password) 
-                ? _settings.Password 
-                : request.Password.Trim();
-                
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp) 
-                ? "127.0.0.1" 
-                : request.EndUserIp.Trim();
-
             var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
                 AdultCount = request.AdultCount,
                 ChildCount = request.ChildCount,
                 InfantCount = request.InfantCount,
-                JourneyType = request.JourneyType,
+                JourneyType = string.IsNullOrWhiteSpace(request.JourneyType) ? "1" : request.JourneyType.Trim(),
+                CurrencyCode = string.IsNullOrWhiteSpace(request.CurrencyCode) ? "INR" : request.CurrencyCode.Trim().ToUpperInvariant(),
+                FareType = string.IsNullOrWhiteSpace(request.FareType) ? "1" : request.FareType.Trim(),
                 DirectFlight = request.DirectFlight ?? false,
                 Segments = request.Segments.Select(s => new
                 {
-                    s.Origin,
-                    s.Destination,
-                    FlightCabinClass = s.FlightCabinClass,
+                    Origin = s.Origin?.Trim().ToUpperInvariant() ?? string.Empty,
+                    Destination = s.Destination?.Trim().ToUpperInvariant() ?? string.Empty,
+                    FlightCabinClass = string.IsNullOrWhiteSpace(s.FlightCabinClass) ? "1" : s.FlightCabinClass.Trim(),
                     PreferredDepartureTime = s.PreferredDepartureTime.ToString("yyyy-MM-ddT00:00:00"),
                     PreferredArrivalTime = s.PreferredArrivalTime.ToString("yyyy-MM-ddT00:00:00")
                 }).ToArray()
@@ -132,38 +114,43 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<string> GetFareRuleRawAsync(AirFareRuleRequestDto request)
+        public async Task<string> RecheckSearchRawAsync(AirRecheckSearchRequestDto request)
         {
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId) 
-                ? _settings.ClientId 
-                : request.ClientId.Trim();
-                
-            var userName = string.IsNullOrWhiteSpace(request.UserName) 
-                ? _settings.UserName 
-                : request.UserName.Trim();
-                
-            var password = string.IsNullOrWhiteSpace(request.Password) 
-                ? _settings.Password 
-                : request.Password.Trim();
-                
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp) 
-                ? "127.0.0.1" 
-                : request.EndUserIp.Trim();
-
             var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
-                SrdvType = request.SrdvType,
-                SrdvIndex = request.SrdvIndex,
+                TraceId = request.TraceId
+            };
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/RecheckSearch")
+            {
+                Content = JsonContent.Create(requestBody, options: _jsonOptions)
+            };
+
+            if (!string.IsNullOrEmpty(apiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadAsStringAsync();
+        }
+
+        public async Task<string> GetFareRuleRawAsync(AirFareRuleRequestDto request)
+        {
+            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+                ? _settings.ApiToken
+                : request.ApiToken.Trim();
+
+            var requestBody = new
+            {
                 TraceId = request.TraceId,
-                ResultIndex = request.ResultIndex
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty
             };
 
             var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/FareRule")
@@ -358,6 +345,34 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
+        public async Task<string> GetFareQuoteRawAsync(AirFareQuoteRequestDto request)
+        {
+            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+                ? _settings.ApiToken
+                : request.ApiToken.Trim();
+
+            var requestBody = new
+            {
+                TraceId = request.TraceId,
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty
+            };
+
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/FareQuote")
+            {
+                Content = JsonContent.Create(requestBody, options: _jsonOptions)
+            };
+
+            if (!string.IsNullOrEmpty(apiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadAsStringAsync();
+        }
+
         public async Task<FlightBookingResponseDto> BookFlightAsync(FlightBookingRequestDto request)
         {
             var token = await AuthenticateAsync();
@@ -482,39 +497,18 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetSSRRawAsync(AirFareRuleRequestDto request)
         {
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
-                ? _settings.ClientId
-                : request.ClientId.Trim();
-
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
-                ? _settings.UserName
-                : request.UserName.Trim();
-
-            var password = string.IsNullOrWhiteSpace(request.Password)
-                ? _settings.Password
-                : request.Password.Trim();
-
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
-                ? "127.0.0.1"
-                : request.EndUserIp.Trim();
-
             var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
-                SrdvType = request.SrdvType,
-                SrdvIndex = request.SrdvIndex,
                 TraceId = request.TraceId,
-                ResultIndex = request.ResultIndex
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/SSR")
+            var ssrUrl = $"{_settings.FlightBaseUrl.TrimEnd('/')}/SSR";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, ssrUrl)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
@@ -532,39 +526,18 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetSeatMapRawAsync(AirFareRuleRequestDto request)
         {
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
-                ? _settings.ClientId
-                : request.ClientId.Trim();
-
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
-                ? _settings.UserName
-                : request.UserName.Trim();
-
-            var password = string.IsNullOrWhiteSpace(request.Password)
-                ? _settings.Password
-                : request.Password.Trim();
-
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
-                ? "127.0.0.1"
-                : request.EndUserIp.Trim();
-
             var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
-                SrdvType = request.SrdvType,
-                SrdvIndex = request.SrdvIndex,
                 TraceId = request.TraceId,
-                ResultIndex = request.ResultIndex
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/SeatMap")
+            var seatMapUrl = $"{_settings.FlightBaseUrl.TrimEnd('/')}/SeatMap";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, seatMapUrl)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
@@ -582,59 +555,30 @@ namespace PickNBook.Api.Services
 
         public async Task<string> TicketLCCRawAsync(TicketLCCRequestDto request)
         {
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId) 
-                ? _settings.ClientId 
-                : request.ClientId.Trim();
-
-            var userName = string.IsNullOrWhiteSpace(request.UserName) 
-                ? _settings.UserName 
-                : request.UserName.Trim();
-
-            var password = string.IsNullOrWhiteSpace(request.Password) 
-                ? _settings.Password 
-                : request.Password.Trim();
-
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp) 
-                ? "127.0.0.1" 
-                : request.EndUserIp.Trim();
-
             var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
-            if (request.Passengers != null)
-            {
-                foreach (var passenger in request.Passengers)
-                {
-                    if (passenger.Baggage != null)
-                    {
-                        passenger.Baggage.RemoveAll(b => 
-                            string.IsNullOrWhiteSpace(b.Code) || 
-                            b.Code.Equals("string", StringComparison.OrdinalIgnoreCase));
-                    }
-                }
-            }
-
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
-                SrdvType = request.SrdvType,
-                SrdvIndex = request.SrdvIndex,
-                TraceId = request.TraceId,
-                ResultIndex = request.ResultIndex,
-                PromoCode = request.PromoCode,
+                TraceId = long.TryParse(request.TraceId, out var tid) ? tid : 0L,
+                ResultIndex = request.ResultIndex?.Trim() ?? string.Empty,
+                RefID = request.RefID ?? string.Empty,
+                Module = string.IsNullOrWhiteSpace(request.Module) ? "b2c" : request.Module,
+                BookedById = request.BookedById,
+                BookedByName = request.BookedByName ?? string.Empty,
+                CustomerFare = request.CustomerFare,
+                ReturnCustomerFare = request.ReturnCustomerFare,
                 Passengers = request.Passengers?.Select(p => {
-                    string gender = string.IsNullOrWhiteSpace(p.Gender) ? "1" : p.Gender.ToString();
+                    string gender = string.IsNullOrWhiteSpace(p.Gender) ? "" : p.Gender.ToString();
                     string title = (p.Title ?? "").Trim();
+                    int paxTypeInt = p.PaxType;
                     
-                    if (p.PaxType == 1 && string.IsNullOrEmpty(title))
-                        title = gender == "1" ? "Mr" : "Ms";
-                    else if ((p.PaxType == 2 || p.PaxType == 3) && string.IsNullOrEmpty(title))
-                        title = gender == "1" ? "Mstr" : "Miss";
-                    else if (p.PaxType == 2 || p.PaxType == 3)
+                    if (paxTypeInt == 1 && string.IsNullOrEmpty(title))
+                        title = gender == "2" ? "Ms" : "Mr";
+                    else if ((paxTypeInt == 2 || paxTypeInt == 3) && string.IsNullOrEmpty(title))
+                        title = gender == "2" ? "Miss" : "Mstr";
+                    else if (paxTypeInt == 2 || paxTypeInt == 3)
                     {
                         if (gender == "1" && title.Equals("Mr", StringComparison.OrdinalIgnoreCase)) title = "Mstr";
                         if (gender == "2" && (title.Equals("Ms", StringComparison.OrdinalIgnoreCase) || title.Equals("Mrs", StringComparison.OrdinalIgnoreCase))) title = "Miss";
@@ -642,50 +586,47 @@ namespace PickNBook.Api.Services
 
                     return new
                     {
-                        Title = title,
+                        Title = string.IsNullOrEmpty(title) ? "Mr" : title,
                         FirstName = p.FirstName ?? "",
                         LastName = p.LastName ?? "",
                         MiddleName = p.MiddleName ?? "",
-                        PaxType = p.PaxType,
+                        PaxType = p.PaxType.ToString(),
                         DateOfBirth = string.IsNullOrWhiteSpace(p.DateOfBirth) ? "" : (DateTime.TryParse(p.DateOfBirth, out var d) ? d.ToString("yyyy-MM-dd") : p.DateOfBirth),
                         Gender = gender,
-                        PassportNo = string.IsNullOrWhiteSpace(p.PassportNo) ? "" : p.PassportNo,
+                        PassportNo = p.PassportNo ?? "",
                         PassportExpiry = string.IsNullOrWhiteSpace(p.PassportExpiry) ? "" : (DateTime.TryParse(p.PassportExpiry, out var pe) ? pe.ToString("yyyy-MM-dd") : p.PassportExpiry),
                         PassportIssueDate = string.IsNullOrWhiteSpace(p.PassportIssueDate) ? "" : (DateTime.TryParse(p.PassportIssueDate, out var pid) ? pid.ToString("yyyy-MM-dd") : p.PassportIssueDate),
-                        PassportIssueCountryCode = string.IsNullOrWhiteSpace(p.PassportIssueCountryCode) ? "" : p.PassportIssueCountryCode,
-                        AddressLine1 = p.AddressLine1 ?? "",
-                        City = p.City ?? "",
+                        PassportIssueCountryCode = p.PassportIssueCountryCode ?? "",
                         CountryCode = p.CountryCode ?? "",
                         CountryName = p.CountryName ?? "",
+                        AddressLine1 = p.AddressLine1 ?? "",
+                        City = p.City ?? "",
+                        CellCountryCode = p.CellCountryCode ?? "",
                         ContactNo = p.ContactNo ?? "",
                         Email = p.Email ?? "",
-                        IsLeadPax = p.IsLeadPax ? 1 : 0,
-                        DocumentType = string.IsNullOrWhiteSpace(p.DocumentType) ? "" : p.DocumentType,
-                        DocumentId = string.IsNullOrWhiteSpace(p.DocumentId) ? "" : p.DocumentId,
-                        Fare = new {
-                            Currency = "INR",
-                            BaseFare = p.Fare?.BaseFare ?? 0,
-                            Tax = p.Fare?.Tax ?? 0,
-                            YQTax = p.Fare?.YQTax ?? 0,
-                            OtherCharges = p.Fare?.OtherCharges ?? 0,
-                            TransactionFee = p.Fare?.TransactionFee ?? 0,
-                            AdditionalTxnFeeOfrd = p.Fare?.AdditionalTxnFeeOfrd ?? 0,
-                            AdditionalTxnFeePub = p.Fare?.AdditionalTxnFeePub ?? 0,
-                            AirTransFee = p.Fare?.AirTransFee ?? 0
-                        },
-                        Baggage = p.Baggage ?? new List<LCCBaggageDto>(),
-                        MealDynamic = p.MealDynamic ?? new List<LCCMealDynamicDto>(),
-                        Seat = p.Seat ?? new List<LCCSeatDto>(),
-                        GSTCompanyAddress = p.GSTCompanyAddress ?? "",
-                        GSTCompanyContactNumber = p.GSTCompanyContactNumber ?? "",
-                        GSTCompanyName = p.GSTCompanyName ?? "",
+                        IsLeadPax = p.IsLeadPax,
+                        DocumentType = p.DocumentType ?? "",
+                        DocumentId = p.DocumentId ?? "",
+                        Baggage = p.Baggage?.Where(b => !string.IsNullOrWhiteSpace(b.Code) && !b.Code.Equals("string", StringComparison.OrdinalIgnoreCase))
+                            .Select(b => new { Code = b.Code, Price = (object?)b.Price }).ToList() ?? new(),
+                        MealDynamic = p.MealDynamic?.Where(m => !string.IsNullOrWhiteSpace(m.Code) && !m.Code.Equals("string", StringComparison.OrdinalIgnoreCase))
+                            .Select(m => new { Code = m.Code, Price = (object?)m.Price }).ToList() ?? new(),
+                        Seat = p.Seat?.Where(s => !string.IsNullOrWhiteSpace(s.Code) && !s.Code.Equals("string", StringComparison.OrdinalIgnoreCase))
+                            .Select(s => new { Code = s.Code, Amount = (object?)s.Amount }).ToList() ?? new(),
                         GSTNumber = p.GSTNumber ?? "",
-                        GSTCompanyEmail = p.GSTCompanyEmail ?? ""
+                        GSTCompanyName = p.GSTCompanyName ?? "",
+                        GSTCompanyAddress = p.GSTCompanyAddress ?? "",
+                        GSTCompanyEmail = p.GSTCompanyEmail ?? "",
+                        GSTCompanyContactNumber = p.GSTCompanyContactNumber ?? "",
+                        EContactName = p.EContactName ?? "",
+                        EContactEmail = p.EContactEmail ?? "",
+                        EContactMobile = p.EContactMobile ?? ""
                     };
                 }).ToList()
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/TicketLCC")
+            var ticketUrl = $"{_settings.FlightBaseUrl.TrimEnd('/')}/TicketLCC";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, ticketUrl)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
@@ -844,6 +785,39 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
+        public Task<string> GetBookingDetailsRawAsync(long traceId)
+        {
+            return GetBookingDetailsRawAsync(new AirBookingDetailsRequestDto { TraceId = traceId });
+        }
+
+        public async Task<string> GetBookingDetailsRawAsync(AirBookingDetailsRequestDto request)
+        {
+            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+                ? _settings.ApiToken
+                : request.ApiToken.Trim();
+
+            var requestBody = new
+            {
+                TraceId = request.TraceId
+            };
+
+            var targetUrl = $"{_settings.FlightBaseUrl.TrimEnd('/')}/BookingDetails";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, targetUrl)
+            {
+                Content = JsonContent.Create(requestBody, options: _jsonOptions)
+            };
+
+            if (!string.IsNullOrEmpty(apiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
+            response.EnsureSuccessStatusCode();
+
+            return await response.Content.ReadAsStringAsync();
+        }
+
         public async Task<string> GetCalendarFareRawAsync(CalendarFareRequestDto request)
         {
             var clientId = string.IsNullOrWhiteSpace(request.ClientId) 
@@ -896,47 +870,40 @@ namespace PickNBook.Api.Services
 
         public async Task<string> SendChangeRequestRawAsync(SendChangeRequestDto request)
         {
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
-                ? "127.0.0.1"
-                : request.EndUserIp.Trim();
-
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
-                ? _settings.ClientId
-                : request.ClientId.Trim();
-
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
-                ? _settings.UserName
-                : request.UserName.Trim();
-
-            var password = string.IsNullOrWhiteSpace(request.Password)
-                ? _settings.Password
-                : request.Password.Trim();
+            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+                ? _settings.ApiToken
+                : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
                 BookingId = request.BookingId,
-                RequestType = request.RequestType.ToString(),
+                RequestType = request.RequestType,
                 CancellationType = request.CancellationType,
-                Remarks = request.Remarks,
-                Sectors = request.Sectors.Select(s => new { s.Origin, s.Destination }).ToList(),
-                SrdvType = request.SrdvType,
-                SrdvIndex = request.SrdvIndex,
-                TicketData = request.TicketData.Select(t => new { t.TicketId, t.FirstName, t.LastName }).ToList(),
-                PNR = request.PNR
+                PNR = request.PNR?.Trim() ?? string.Empty,
+                Remarks = request.Remarks?.Trim() ?? string.Empty,
+                ClientRefId = request.ClientRefId ?? string.Empty,
+                Sectors = (request.Sectors ?? new List<ChangeRequestSectorDto>()).Select(s => new
+                {
+                    Origin = s.Origin?.Trim().ToUpperInvariant() ?? string.Empty,
+                    Destination = s.Destination?.Trim().ToUpperInvariant() ?? string.Empty
+                }).ToList(),
+                TicketData = (request.TicketData ?? new List<ChangeRequestTicketDataDto>()).Select(t => new
+                {
+                    FirstName = t.FirstName?.Trim() ?? string.Empty,
+                    LastName = t.LastName?.Trim() ?? string.Empty,
+                    TicketId = t.TicketId?.Trim() ?? string.Empty
+                }).ToList()
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/SendChangeRequest")
+            var targetUrl = $"{_settings.FlightBaseUrl.TrimEnd('/')}/SendChangeRequest";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, targetUrl)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
 
-            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            if (!string.IsNullOrEmpty(apiToken))
             {
-                requestMessage.Headers.TryAddWithoutValidation("Api-Token", _settings.ApiToken);
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
             }
 
             var response = await _httpClient.SendAsync(requestMessage);
@@ -947,39 +914,24 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetCancelStatusRawAsync(GetCancelStatusRequestDto request)
         {
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
-                ? "127.0.0.1"
-                : request.EndUserIp.Trim();
-
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
-                ? _settings.ClientId
-                : request.ClientId.Trim();
-
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
-                ? _settings.UserName
-                : request.UserName.Trim();
-
-            var password = string.IsNullOrWhiteSpace(request.Password)
-                ? _settings.Password
-                : request.Password.Trim();
+            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+                ? _settings.ApiToken
+                : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
                 ChangeRequestId = request.ChangeRequestId
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/GetCancelStatus")
+            var targetUrl = $"{_settings.FlightBaseUrl.TrimEnd('/')}/GetCancelStatus";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, targetUrl)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
 
-            if (!string.IsNullOrEmpty(request.ApiToken))
+            if (!string.IsNullOrEmpty(apiToken))
             {
-                requestMessage.Headers.TryAddWithoutValidation("Api-Token", request.ApiToken);
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
             }
 
             var response = await _httpClient.SendAsync(requestMessage);

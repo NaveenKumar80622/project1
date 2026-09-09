@@ -16,13 +16,17 @@ namespace PickNBook.Api.Services
             int childCount = 0, 
             int infantCount = 0);
         Task<string> SearchFlightsRawAsync(AirSearchRequestDto request);
+        Task<string> RecheckSearchRawAsync(AirRecheckSearchRequestDto request);
         Task<string> GetFareRuleRawAsync(AirFareRuleRequestDto request);
+        Task<string> GetFareQuoteRawAsync(AirFareQuoteRequestDto request);
         Task<string> GetFareQuoteRawAsync(AirFareRuleRequestDto request);
         Task<string> GetSSRRawAsync(AirFareRuleRequestDto request);
         Task<string> GetSeatMapRawAsync(AirFareRuleRequestDto request);
         Task<string> TicketLCCRawAsync(TicketLCCRequestDto request);
         Task<string> HoldGDSRawAsync(HoldGDSRequestDto request);
         Task<string> TicketGDSRawAsync(TicketGDSRequestDto request);
+        Task<string> GetBookingDetailsRawAsync(AirBookingDetailsRequestDto request);
+        Task<string> GetBookingDetailsRawAsync(long traceId);
         Task<string> GetCalendarFareRawAsync(CalendarFareRequestDto request);
         Task<FlightFareQuoteDto> GetFareQuoteAsync(string traceId, string resultIndex);
         Task<FlightBookingResponseDto> BookFlightAsync(FlightBookingRequestDto request);

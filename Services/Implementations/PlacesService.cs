@@ -60,38 +60,38 @@ namespace PickNBook.Api.Services.Implementations
             // 1. Bus Popularity Stats
             var busPlacePopularity = await GetBusPopularityAsync(cancellationToken);
 
-            // 2. Query Flight Airports from DB
+            // 2. Query Flight Airports from DB (New SRDV Table)
             if (normalizedTripType is "all" or "flight")
             {
-                var airportQuery = _dbContext.Airports.AsNoTracking().Where(a => a.IsActive);
+                var newAirportQuery = _dbContext.FlightAirports.AsNoTracking().Where(a => a.IsActive);
 
                 if (!string.IsNullOrWhiteSpace(queryLower))
                 {
-                    airportQuery = airportQuery.Where(a =>
-                        a.IataCode == queryLower ||
+                    newAirportQuery = newAirportQuery.Where(a =>
+                        a.AirportCode == queryLower ||
                         a.CityName.StartsWith(queryLower) ||
                         a.CityName.Contains(queryLower) ||
                         a.AirportName.StartsWith(queryLower) ||
                         a.AirportName.Contains(queryLower));
                 }
 
-                var airports = await airportQuery
+                var flightAirports = await newAirportQuery
                     .OrderBy(a => a.CityName)
                     .Take(candidateLimit)
                     .Select(a => new PlaceSuggestionDto
                     {
                         CityName = a.CityName,
-                        AirportCode = a.IataCode,
+                        AirportCode = a.AirportCode,
                         AirportName = a.AirportName,
-                        CityCode = a.CityCode ?? a.IataCode,
-                        CountryCode = a.CountryCode ?? "",
-                        CountryName = a.CountryName ?? "",
+                        CityCode = a.AirportCode,
+                        CountryCode = a.CountryCode,
+                        CountryName = a.CountryCode,
                         TripType = "flight",
                         UsageCount = 1
                     })
                     .ToListAsync(cancellationToken);
 
-                cityCandidates.AddRange(airports);
+                cityCandidates.AddRange(flightAirports);
             }
 
             // 3. Query Hotel Cities from DB
@@ -314,6 +314,11 @@ namespace PickNBook.Api.Services.Implementations
                     else if (item.TripType == "hotel" && item.HotelCount > 0)
                     {
                         score += Math.Min((int)(Math.Log10(item.HotelCount.Value + 1) * 15), 50);
+                    }
+                    // Flight Domestic Hub boost (e.g. HYD India before HDD Pakistan)
+                    else if (item.TripType == "flight" && string.Equals(item.CountryCode, "IN", StringComparison.OrdinalIgnoreCase))
+                    {
+                        score += 5;
                     }
 
                     scoredCandidates.Add((item, score, distance));

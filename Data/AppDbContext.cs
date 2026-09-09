@@ -44,7 +44,9 @@ namespace PickNBook.Api.Data
         public DbSet<PlaceSearchStat> PlaceSearchStats => Set<PlaceSearchStat>();
         public DbSet<BusCity> BusCities => Set<BusCity>();
         public DbSet<HotelCity> HotelCities => Set<HotelCity>();
-        public DbSet<Airport> Airports => Set<Airport>();
+
+        public DbSet<FlightAirport> FlightAirports => Set<FlightAirport>();
+        public DbSet<FlightAirline> FlightAirlines => Set<FlightAirline>();
 
         public DbSet<BusCoupon> BusCoupons => Set<BusCoupon>();
         public DbSet<BusCouponCondition> BusCouponConditions => Set<BusCouponCondition>();
@@ -1368,29 +1370,28 @@ namespace PickNBook.Api.Data
                 entity.HasIndex(x => x.IsActive);
             });
 
-            modelBuilder.Entity<Airport>(entity =>
+            modelBuilder.Entity<PickNBook.Api.Models.Entities.FlightAirport>(entity =>
             {
-                entity.ToTable("airports");
-                entity.Property(x => x.IataCode).HasMaxLength(10).IsRequired();
-                entity.Property(x => x.IcaoCode).HasMaxLength(10);
+                entity.ToTable("flight_airports");
+                entity.HasKey(x => x.AirportCode);
+                entity.Property(x => x.AirportCode).HasMaxLength(3).IsRequired();
                 entity.Property(x => x.AirportName).HasMaxLength(200).IsRequired();
-                entity.Property(x => x.CityCode).HasMaxLength(20);
                 entity.Property(x => x.CityName).HasMaxLength(200).IsRequired();
-                entity.Property(x => x.CountryCode).HasMaxLength(20);
-                entity.Property(x => x.CountryName).HasMaxLength(150);
-                entity.Property(x => x.Latitude).HasPrecision(10, 7);
-                entity.Property(x => x.Longitude).HasPrecision(10, 7);
-                entity.HasIndex(x => x.IataCode).IsUnique();
-                entity.HasIndex(x => x.CityName);
+                entity.Property(x => x.CountryCode).HasMaxLength(2).IsRequired();
+                entity.Property(x => x.IsActive).HasDefaultValue(true);
                 entity.HasIndex(x => x.AirportName);
-                entity.HasIndex(x => x.CityCode);
+                entity.HasIndex(x => x.CityName);
+                entity.HasIndex(x => x.CountryCode);
                 entity.HasIndex(x => x.IsActive);
             });
 
-            modelBuilder.Entity<Airline>(entity =>
+            modelBuilder.Entity<PickNBook.Api.Models.Entities.FlightAirline>(entity =>
             {
-                entity.HasIndex(x => x.Code);
-                entity.HasIndex(x => x.Name);
+                entity.ToTable("flight_airlines");
+                entity.HasKey(x => x.AirlineCode);
+                entity.Property(x => x.AirlineCode).HasMaxLength(2).IsRequired();
+                entity.Property(x => x.AirlineName).HasMaxLength(200).IsRequired();
+                entity.HasIndex(x => x.AirlineName);
             });
         }
     }

@@ -134,6 +134,7 @@ builder.Services.AddHttpClient<PickNBook.Api.Services.Interfaces.ISrdvMasterData
 builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.ISrdvSqlDumpParser, PickNBook.Api.Services.Implementations.SrdvSqlDumpParser>();
 builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.ISrdvMasterDataImporter, PickNBook.Api.Services.Implementations.SrdvMasterDataImporter>();
 builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.IPlacesService, PickNBook.Api.Services.Implementations.PlacesService>();
+builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.IAirlineLookupService, PickNBook.Api.Services.Implementations.AirlineLookupService>();
 // Email Settings
 builder.Services.Configure<EmailSettings>(
     builder.Configuration.GetSection("EmailSettings"));

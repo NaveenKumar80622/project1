@@ -356,11 +356,11 @@ namespace PickNBook.Api.Services.Implementations
             {
                 var sqlFile = await _downloader.DownloadAndExtractAsync(_settings.FlightAirportResourceUrl, stagingDir, cancellationToken);
 
-                var existingAirports = await _dbContext.Airports
-                    .ToDictionaryAsync(x => x.IataCode.Trim(), StringComparer.OrdinalIgnoreCase, cancellationToken);
+                var existingAirports = await _dbContext.FlightAirports
+                    .ToDictionaryAsync(x => x.AirportCode.Trim(), StringComparer.OrdinalIgnoreCase, cancellationToken);
 
                 var seenIataCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var toInsert = new List<Airport>();
+                var toInsert = new List<PickNBook.Api.Models.Entities.FlightAirport>();
                 int updatedCount = 0;
                 int readCount = 0;
                 int failedCount = 0;
@@ -375,8 +375,6 @@ namespace PickNBook.Api.Services.Implementations
                     row.TryGetValue("airport_city_name", out var cityName);
                     row.TryGetValue("airport_country_code", out var countryCode);
                     row.TryGetValue("airport_country_name", out var countryName);
-                    row.TryGetValue("airport_lat", out var latStr);
-                    row.TryGetValue("airport_lon", out var lonStr);
 
                     iataCode = iataCode?.Trim().ToUpperInvariant();
                     airportName = airportName?.Trim();
@@ -390,45 +388,32 @@ namespace PickNBook.Api.Services.Implementations
 
                     if (!seenIataCodes.Add(iataCode)) continue;
 
-                    decimal? lat = decimal.TryParse(latStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedLat) ? parsedLat : null;
-                    decimal? lon = decimal.TryParse(lonStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedLon) ? parsedLon : null;
-
                     if (existingAirports.TryGetValue(iataCode, out var existing))
                     {
-                        if (existing.AirportName != airportName || existing.CityName != cityName || !existing.IsActive)
+                        if (existing.AirportName != airportName || existing.CityName != cityName)
                         {
                             existing.AirportName = airportName;
-                            existing.CityCode = cityCode?.Trim();
-                            existing.CityName = cityName ?? string.Empty;
-                            existing.CountryCode = countryCode?.Trim();
-                            existing.CountryName = countryName?.Trim();
-                            existing.Latitude = lat;
-                            existing.Longitude = lon;
-                            existing.IsActive = true;
+                            existing.CityName = cityName ?? airportName;
+                            existing.CountryCode = countryCode?.Trim() ?? "";
                             existing.UpdatedAt = DateTime.UtcNow;
                             updatedCount++;
                         }
                     }
                     else
                     {
-                        toInsert.Add(new Airport
+                        toInsert.Add(new PickNBook.Api.Models.Entities.FlightAirport
                         {
-                            IataCode = iataCode,
+                            AirportCode = iataCode,
                             AirportName = airportName,
-                            CityCode = cityCode?.Trim(),
-                            CityName = cityName ?? string.Empty,
-                            CountryCode = countryCode?.Trim(),
-                            CountryName = countryName?.Trim(),
-                            Latitude = lat,
-                            Longitude = lon,
-                            IsActive = true,
+                            CityName = cityName ?? airportName,
+                            CountryCode = countryCode?.Trim() ?? "",
                             CreatedAt = DateTime.UtcNow,
                             UpdatedAt = DateTime.UtcNow
                         });
 
                         if (toInsert.Count >= BatchSize)
                         {
-                            await _dbContext.Airports.AddRangeAsync(toInsert, cancellationToken);
+                            await _dbContext.FlightAirports.AddRangeAsync(toInsert, cancellationToken);
                             await _dbContext.SaveChangesAsync(cancellationToken);
                             toInsert.Clear();
                         }
@@ -437,7 +422,7 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (toInsert.Count > 0)
                 {
-                    await _dbContext.Airports.AddRangeAsync(toInsert, cancellationToken);
+                    await _dbContext.FlightAirports.AddRangeAsync(toInsert, cancellationToken);
                     await _dbContext.SaveChangesAsync(cancellationToken);
                 }
 
@@ -497,11 +482,11 @@ namespace PickNBook.Api.Services.Implementations
             {
                 var sqlFile = await _downloader.DownloadAndExtractAsync(_settings.FlightAirlineResourceUrl, stagingDir, cancellationToken);
 
-                var existingAirlines = await _dbContext.Airlines
-                    .ToDictionaryAsync(x => x.Code.Trim(), StringComparer.OrdinalIgnoreCase, cancellationToken);
+                var existingFlightAirlines = await _dbContext.FlightAirlines
+                    .ToDictionaryAsync(x => x.AirlineCode.Trim(), StringComparer.OrdinalIgnoreCase, cancellationToken);
 
                 var seenCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var toInsert = new List<Airline>();
+                var toInsert = new List<PickNBook.Api.Models.Entities.FlightAirline>();
                 int updatedCount = 0;
                 int readCount = 0;
                 int failedCount = 0;
@@ -512,7 +497,6 @@ namespace PickNBook.Api.Services.Implementations
 
                     row.TryGetValue("airline_code", out var code);
                     row.TryGetValue("airline_name", out var name);
-                    row.TryGetValue("Active", out var activeStr);
 
                     code = code?.Trim().ToUpperInvariant();
                     name = name?.Trim();
@@ -525,29 +509,28 @@ namespace PickNBook.Api.Services.Implementations
 
                     if (!seenCodes.Add(code)) continue;
 
-                    var status = string.Equals(activeStr, "false", StringComparison.OrdinalIgnoreCase) ? "Inactive" : "Active";
-
-                    if (existingAirlines.TryGetValue(code, out var existing))
+                    if (existingFlightAirlines.TryGetValue(code, out var existing))
                     {
-                        if (existing.Name != name || existing.Status != status)
+                        if (existing.AirlineName != name)
                         {
-                            existing.Name = name;
-                            existing.Status = status;
+                            existing.AirlineName = name;
+                            existing.UpdatedAt = DateTime.UtcNow;
                             updatedCount++;
                         }
                     }
                     else
                     {
-                        toInsert.Add(new Airline
+                        toInsert.Add(new PickNBook.Api.Models.Entities.FlightAirline
                         {
-                            Code = code,
-                            Name = name,
-                            Status = status
+                            AirlineCode = code,
+                            AirlineName = name,
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
                         });
 
                         if (toInsert.Count >= BatchSize)
                         {
-                            await _dbContext.Airlines.AddRangeAsync(toInsert, cancellationToken);
+                            await _dbContext.FlightAirlines.AddRangeAsync(toInsert, cancellationToken);
                             await _dbContext.SaveChangesAsync(cancellationToken);
                             toInsert.Clear();
                         }
@@ -556,12 +539,16 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (toInsert.Count > 0)
                 {
-                    await _dbContext.Airlines.AddRangeAsync(toInsert, cancellationToken);
+                    await _dbContext.FlightAirlines.AddRangeAsync(toInsert, cancellationToken);
                     await _dbContext.SaveChangesAsync(cancellationToken);
                 }
 
                 await _dbContext.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
+
+                // Invalidate in-memory airline cache
+                _cache.Remove("cache:flight:airlines:map");
+                _cache.Remove("cache:flight:airlines:list");
 
                 result.Success = true;
                 result.RecordsRead = readCount;
@@ -611,10 +598,10 @@ namespace PickNBook.Api.Services.Implementations
                 ["HotelCitiesTotal"] = await _dbContext.HotelCities.CountAsync(cancellationToken),
                 ["HotelCitiesSpecialActive"] = await _dbContext.HotelCities.CountAsync(x => x.RequestType == "Special" && x.IsActive, cancellationToken),
                 ["HotelCitiesIntlActive"] = await _dbContext.HotelCities.CountAsync(x => x.RequestType == "International" && x.IsActive, cancellationToken),
-                ["AirportsTotal"] = await _dbContext.Airports.CountAsync(cancellationToken),
-                ["AirportsActive"] = await _dbContext.Airports.CountAsync(x => x.IsActive, cancellationToken),
-                ["AirlinesTotal"] = await _dbContext.Airlines.CountAsync(cancellationToken),
-                ["AirlinesActive"] = await _dbContext.Airlines.CountAsync(x => x.Status == "Active", cancellationToken)
+                ["AirportsTotal"] = await _dbContext.FlightAirports.CountAsync(cancellationToken),
+                ["AirportsActive"] = await _dbContext.FlightAirports.CountAsync(cancellationToken),
+                ["AirlinesTotal"] = await _dbContext.FlightAirlines.CountAsync(cancellationToken),
+                ["AirlinesActive"] = await _dbContext.FlightAirlines.CountAsync(cancellationToken)
             };
 
             return status;

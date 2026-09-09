@@ -902,7 +902,58 @@ namespace PickNBook.Api.Services.Implementations
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Flight Booking failed for Payment {Id}", payment.Id);
+                _logger.LogError(ex, "Flight Booking failed for Payment {Id}. Attempting recovery via BookingDetails.", payment.Id);
+
+                // Check if we can recover via BookingDetails using TraceId
+                string? recoveryTraceId = null;
+                string? recoveryResultIndex = null;
+                List<LCCPassengerDto>? recoveryPassengers = null;
+
+                try
+                {
+                    if (isGds)
+                    {
+                        var flightProxy = JsonSerializer.Deserialize<FlightTicketGDSProxyRequestDto>(pending.BookingPayloadJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        recoveryTraceId = flightProxy?.TraceId.ToString();
+                        recoveryResultIndex = flightProxy?.ResultIndex;
+                        recoveryPassengers = flightProxy?.Passengers;
+                    }
+                    else
+                    {
+                        var flightProxy = JsonSerializer.Deserialize<FlightTicketLCCProxyRequestDto>(pending.BookingPayloadJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        recoveryTraceId = flightProxy?.TraceId.ToString();
+                        recoveryResultIndex = flightProxy?.ResultIndex;
+                        recoveryPassengers = flightProxy?.Passengers;
+                    }
+
+                    if (long.TryParse(recoveryTraceId, out var tid) && tid > 0)
+                    {
+                        var recoveryDetails = await srdvFlightService.GetBookingDetailsRawAsync(tid);
+                        using var rDoc = JsonDocument.Parse(recoveryDetails);
+                        var rRoot = rDoc.RootElement;
+                        var bookingStatus = rRoot.TryGetProperty("BookingStatus", out var bsProp) ? bsProp.GetString() : null;
+
+                        if (string.Equals(bookingStatus, "SUCCESS", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogInformation("BookingDetails recovery SUCCEEDED for Payment {PaymentId}, TraceId {TraceId}. Proceeding with fulfillment.", payment.Id, tid);
+                            return await HandleFlightResponseAsync(payment, recoveryDetails, recoveryTraceId ?? "", recoveryResultIndex ?? "", !isGds, recoveryPassengers, null);
+                        }
+                        else if (string.Equals(bookingStatus, "MANUAL_CHECK_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(bookingStatus, "PENDING", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogWarning("BookingDetails indicates {Status} for Payment {PaymentId}, TraceId {TraceId}. Money is reserved at supplier.", bookingStatus, payment.Id, tid);
+                            payment.FulfillmentStatus = bookingStatus.ToUpperInvariant();
+                            payment.FailureReason = $"Supplier ticketing status: {bookingStatus}. Awaiting supplier resolution.";
+                            await _dbContext.SaveChangesAsync();
+                            return (false, $"Ticketing status is {bookingStatus} at supplier. Please do not re-book.");
+                        }
+                    }
+                }
+                catch (Exception recoveryEx)
+                {
+                    _logger.LogError(recoveryEx, "Recovery via BookingDetails failed for Payment {PaymentId}", payment.Id);
+                }
+
                 return (false, ex.Message);
             }
         }
@@ -923,6 +974,19 @@ namespace PickNBook.Api.Services.Implementations
                 if (status.ValueKind == JsonValueKind.String && status.ToString() == "1") isSuccess = true;
             }
             
+            if (root.TryGetProperty("BookingStatus", out var bsNode))
+            {
+                var bs = bsNode.GetString();
+                if (string.Equals(bs, "SUCCESS", StringComparison.OrdinalIgnoreCase)) isSuccess = true;
+                else if (string.Equals(bs, "MANUAL_CHECK_REQUIRED", StringComparison.OrdinalIgnoreCase))
+                {
+                    payment.FulfillmentStatus = "MANUAL_CHECK_REQUIRED";
+                    payment.FailureReason = "Supplier ticketing status: MANUAL_CHECK_REQUIRED. Funds reserved.";
+                    await _dbContext.SaveChangesAsync();
+                    return (false, "Ticketing is under supplier review (MANUAL_CHECK_REQUIRED). Please do not re-book.");
+                }
+            }
+
             var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
             if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCode))
             {
@@ -933,6 +997,27 @@ namespace PickNBook.Api.Services.Implementations
 
             string pnr = resp.TryGetProperty("PNR", out var pnrProp) ? (pnrProp.ToString() ?? "") : "";
             string bookingId = resp.TryGetProperty("BookingId", out var bIdProp) ? (bIdProp.ToString() ?? "") : "";
+
+            string returnPnr = "";
+            if (root.TryGetProperty("Legs", out var legsNode) && legsNode.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var leg in legsNode.EnumerateArray())
+                {
+                    var legType = leg.TryGetProperty("Direction", out var dirProp) ? dirProp.GetString() : (leg.TryGetProperty("LegType", out var ltProp) ? ltProp.GetString() : "");
+                    var legPnr = leg.TryGetProperty("PNR", out var lpProp) ? lpProp.GetString() : "";
+                    if (!string.IsNullOrEmpty(legPnr))
+                    {
+                        if (string.Equals(legType, "RETURN", StringComparison.OrdinalIgnoreCase))
+                        {
+                            returnPnr = legPnr;
+                        }
+                        else if (string.IsNullOrEmpty(pnr))
+                        {
+                            pnr = legPnr;
+                        }
+                    }
+                }
+            }
 
             bool isPriceChanged = resp.TryGetProperty("IsPriceChanged", out var ipc) && ipc.ValueKind == JsonValueKind.True;
 
@@ -1009,6 +1094,7 @@ namespace PickNBook.Api.Services.Implementations
                     reservation.Status = "Booked";
                     reservation.SrdvTicketResponseJson = responseRaw;
                     reservation.TicketStatus = resp.TryGetProperty("TicketStatus", out var ts) ? ts.ToString() : reservation.TicketStatus;
+                    if (!string.IsNullOrEmpty(returnPnr)) reservation.ReturnPnr = returnPnr;
                 }
             }
             else
@@ -1037,7 +1123,9 @@ namespace PickNBook.Api.Services.Implementations
                     Infants = requestPassengers?.Count(p => p.PaxType == 3) ?? 0,
                     SeatsBooked = requestPassengers?.Count(p => p.PaxType == 1 || p.PaxType == 2) ?? 1,
                     SrdvBookingId = bookingId,
-                    IsLcc = true
+                    IsLcc = true,
+                    ReturnPnr = !string.IsNullOrEmpty(returnPnr) ? returnPnr : (resp.TryGetProperty("ReturnPNR", out var rpNode) ? rpNode.ToString() : null),
+                    TicketStatus = resp.TryGetProperty("TicketStatus", out var tsNode) ? tsNode.ToString() : null
                 };
                 
                 _dbContext.FlightReservations.Add(reservation);
@@ -1047,6 +1135,124 @@ namespace PickNBook.Api.Services.Implementations
             {
                 payment.FulfillmentStatus = "Success";
                 payment.BookingReferenceId = reservation.Id;
+
+                // Ensure passenger records with ticket numbers are populated
+                if (requestPassengers != null && requestPassengers.Any())
+                {
+                    var existingPax = await _dbContext.FlightReservationPassengers
+                        .Where(p => p.FlightReservationId == reservation.Id)
+                        .ToListAsync();
+
+                    if (!existingPax.Any())
+                    {
+                        var responsePassengers = new List<JsonElement>();
+                        if (resp.TryGetProperty("Passengers", out var pArray) && pArray.ValueKind == JsonValueKind.Array)
+                        {
+                            responsePassengers = pArray.EnumerateArray().ToList();
+                        }
+                        else if (root.TryGetProperty("Passengers", out var rootPArray) && rootPArray.ValueKind == JsonValueKind.Array)
+                        {
+                            responsePassengers = rootPArray.EnumerateArray().ToList();
+                        }
+
+                        // Also check return leg ticket numbers from Legs if available
+                        var returnTicketNumbers = new List<string>();
+                        if (root.TryGetProperty("Legs", out var legsNode2) && legsNode2.ValueKind == JsonValueKind.Array)
+                        {
+                            foreach (var leg in legsNode2.EnumerateArray())
+                            {
+                                var legType = leg.TryGetProperty("Direction", out var dirProp) ? dirProp.GetString() : (leg.TryGetProperty("LegType", out var ltProp) ? ltProp.GetString() : "");
+                                if (string.Equals(legType, "RETURN", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (leg.TryGetProperty("ReturnTicketNumber", out var rtnProp) && rtnProp.ValueKind == JsonValueKind.String)
+                                    {
+                                        returnTicketNumbers.Add(rtnProp.GetString()!);
+                                    }
+                                    else if (leg.TryGetProperty("TicketNumber", out var tnProp) && tnProp.ValueKind == JsonValueKind.String)
+                                    {
+                                        returnTicketNumbers.Add(tnProp.GetString()!);
+                                    }
+                                }
+                            }
+                        }
+
+                        var reservationPassengers = new List<FlightReservationPassenger>();
+                        for (int i = 0; i < requestPassengers.Count; i++)
+                        {
+                            var p = requestPassengers[i];
+                            var passObj = new FlightReservationPassenger
+                            {
+                                FlightReservation = reservation,
+                                FullName = $"{p.FirstName} {p.LastName}".Trim(),
+                                FirstName = p.FirstName,
+                                LastName = p.LastName,
+                                Title = p.Title,
+                                PassportNo = p.PassportNo,
+                                Nationality = p.CountryName,
+                                Email = p.Email,
+                                ContactNo = p.ContactNo,
+                                DateOfBirth = DateTime.TryParse(p.DateOfBirth, out var dob) ? dob : null,
+                                PassengerType = p.PaxType == 1 ? "Adult" : p.PaxType == 2 ? "Child" : "Infant",
+                                Gender = p.Gender == "1" ? "Male" : "Female",
+                                Status = "Booked"
+                            };
+
+                            if (p.Seat != null && p.Seat.Any())
+                            {
+                                var rawSeats = p.Seat.Select(s => s.SeatNumber ?? string.Empty).Where(s => !string.IsNullOrWhiteSpace(s));
+                                passObj.SeatNumber = rawSeats.Any() ? string.Join(", ", rawSeats) : null;
+                            }
+
+                            if (i < responsePassengers.Count)
+                            {
+                                var matchedPax = responsePassengers.FirstOrDefault(r =>
+                                    r.TryGetProperty("FirstName", out var fn) && fn.ToString()?.Equals(p.FirstName, StringComparison.OrdinalIgnoreCase) == true &&
+                                    r.TryGetProperty("LastName", out var ln) && ln.ToString()?.Equals(p.LastName, StringComparison.OrdinalIgnoreCase) == true
+                                );
+
+                                var rPax = matchedPax.ValueKind != JsonValueKind.Undefined ? matchedPax : responsePassengers[i];
+
+                                if (rPax.TryGetProperty("PaxId", out var paxIdNode))
+                                {
+                                    if (paxIdNode.ValueKind == JsonValueKind.Number)
+                                        passObj.PaxId = paxIdNode.GetInt32();
+                                    else if (paxIdNode.ValueKind == JsonValueKind.String && int.TryParse(paxIdNode.ToString(), out var parsedPaxId))
+                                        passObj.PaxId = parsedPaxId;
+                                }
+
+                                if (rPax.TryGetProperty("Ticket", out var tktNode))
+                                {
+                                    var tIdStr = tktNode.TryGetProperty("TicketId", out var tId) ? tId.ToString() : null;
+                                    passObj.TicketId = string.IsNullOrWhiteSpace(tIdStr) ? null : tIdStr;
+
+                                    var tNumStr = tktNode.TryGetProperty("TicketNumber", out var tNum) ? tNum.ToString() : null;
+                                    passObj.TicketNumber = string.IsNullOrWhiteSpace(tNumStr) ? null : tNumStr;
+                                }
+
+                                if (rPax.TryGetProperty("SegmentAdditionalInfo", out var segInfo) && segInfo.ValueKind == JsonValueKind.Array)
+                                {
+                                    var confirmedSeats = segInfo.EnumerateArray()
+                                        .Select(s => s.TryGetProperty("Seat", out var seatProp) ? seatProp.GetString() : null)
+                                        .Where(s => !string.IsNullOrWhiteSpace(s));
+
+                                    if (confirmedSeats.Any())
+                                    {
+                                        passObj.SeatNumber = string.Join(", ", confirmedSeats);
+                                    }
+                                }
+                            }
+
+                            if (string.IsNullOrEmpty(passObj.TicketNumber) && i < returnTicketNumbers.Count)
+                            {
+                                passObj.TicketNumber = returnTicketNumbers[i];
+                            }
+
+                            reservationPassengers.Add(passObj);
+                        }
+
+                        _dbContext.FlightReservationPassengers.AddRange(reservationPassengers);
+                    }
+                }
 
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Flight");
                 

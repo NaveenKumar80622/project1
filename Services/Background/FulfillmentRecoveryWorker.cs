@@ -185,10 +185,17 @@ namespace PickNBook.Api.Services.Background
                         continue;
                     }
 
+                    if (!long.TryParse(cancelRecord.SrdvChangeRequestId, out var crId) || crId <= 0)
+                    {
+                        cancelRecord.Status = "Failed";
+                        cancelRecord.FailureReason = "Invalid SrdvChangeRequestId.";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        continue;
+                    }
+
                     var request = new PickNBook.Api.Models.DTOs.GetCancelStatusRequestDto
                     {
-                        EndUserIp = "127.0.0.1",
-                        ChangeRequestId = cancelRecord.SrdvChangeRequestId!
+                        ChangeRequestId = crId
                     };
 
                     var responseRaw = await srdvFlightService.GetCancelStatusRawAsync(request);
@@ -214,14 +221,74 @@ namespace PickNBook.Api.Services.Background
                         continue;
                     }
 
-                    string cStatus = "Completed";
-                    if (resp.TryGetProperty("CancelStatus", out var csNode))
-                        cStatus = csNode.ToString() ?? "Completed";
-                    
-                    cancelReq.CancellationStatus = cStatus;
-                    cancelReq.CustomerRefundStatus = cStatus;
-                    cancelReq.AdminRefundStatus = cStatus;
-                    cancelRecord.SrdvStatus = cStatus;
+                    string cancellationStatus = "PENDING";
+                    if (resp.TryGetProperty("CancellationStatus", out var csNode))
+                    {
+                        cancellationStatus = csNode.GetString() ?? "PENDING";
+                    }
+                    else if (resp.TryGetProperty("CancelStatus", out var legacyCsNode))
+                    {
+                        cancellationStatus = legacyCsNode.ToString() ?? "PENDING";
+                    }
+
+                    int changeRequestStatusCode = 1;
+                    if (resp.TryGetProperty("ChangeRequestStatus", out var crsNode) && crsNode.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        changeRequestStatusCode = crsNode.GetInt32();
+                    }
+                    else if (resp.TryGetProperty("Status", out var sNode) && sNode.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        changeRequestStatusCode = sNode.GetInt32();
+                    }
+
+                    bool isSettled = false;
+                    if (resp.TryGetProperty("IsSettled", out var isSettledNode))
+                    {
+                        if (isSettledNode.ValueKind == System.Text.Json.JsonValueKind.True) isSettled = true;
+                        else if (isSettledNode.ValueKind == System.Text.Json.JsonValueKind.String && bool.TryParse(isSettledNode.GetString(), out var parsedSettled)) isSettled = parsedSettled;
+                    }
+
+                    // If not settled yet (e.g. PENDING or IN_PROCESS), record current progress and keep polling
+                    if (!isSettled && (string.Equals(cancellationStatus, "PENDING", StringComparison.OrdinalIgnoreCase) ||
+                                       string.Equals(cancellationStatus, "IN_PROCESS", StringComparison.OrdinalIgnoreCase) ||
+                                       changeRequestStatusCode == 1))
+                    {
+                        cancelReq.CancellationStatus = cancellationStatus;
+                        cancelRecord.SrdvStatus = cancellationStatus;
+                        cancelRecord.Status = "Pending"; // Re-queue for next polling cycle
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        continue;
+                    }
+
+                    // If supplier explicitly rejected or failed
+                    if (string.Equals(cancellationStatus, "FAILED", StringComparison.OrdinalIgnoreCase) || changeRequestStatusCode == 4)
+                    {
+                        cancelReq.CancellationStatus = "Rejected";
+                        cancelReq.CustomerRefundStatus = "Rejected";
+                        cancelReq.AdminRefundStatus = "Rejected";
+                        cancelRecord.SrdvStatus = "Rejected";
+                        cancelRecord.Status = "Rejected";
+                        cancelRecord.FailureReason = "Cancellation was rejected or failed at supplier.";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        continue;
+                    }
+
+                    // If MANUAL_CHECK_REQUIRED
+                    if (string.Equals(cancellationStatus, "MANUAL_CHECK_REQUIRED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        cancelReq.CancellationStatus = "MANUAL_CHECK_REQUIRED";
+                        cancelRecord.SrdvStatus = "MANUAL_CHECK_REQUIRED";
+                        cancelRecord.Status = "MANUAL_CHECK_REQUIRED";
+                        cancelRecord.FailureReason = "Supplier reported MANUAL_CHECK_REQUIRED. Operational inspection required.";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        continue;
+                    }
+
+                    // Otherwise, if settled and processed/cancelled
+                    cancelReq.CancellationStatus = cancellationStatus;
+                    cancelReq.CustomerRefundStatus = "Processed";
+                    cancelReq.AdminRefundStatus = "Processed";
+                    cancelRecord.SrdvStatus = cancellationStatus;
 
                     decimal refundAmount = 0;
                     if (resp.TryGetProperty("RefundAmount", out var rAmt))

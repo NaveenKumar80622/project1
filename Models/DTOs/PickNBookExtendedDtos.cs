@@ -189,6 +189,7 @@ namespace PickNBook.Api.Models.DTOs
         public List<SrdvSupplierBookRoomDto> HotelRoomsDetails { get; set; } = new();
 
         [JsonPropertyName("ClientReferenceNo")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string ClientReferenceNo { get; set; } = string.Empty;
     }
 
@@ -268,6 +269,7 @@ namespace PickNBook.Api.Models.DTOs
         public List<BookRoomDetailItemDto> HotelRoomsDetails { get; set; } = new();
 
         [JsonPropertyName("ClientReferenceNo")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string ClientReferenceNo { get; set; } = string.Empty;
 
         [JsonPropertyName("CouponCode")]
@@ -287,6 +289,8 @@ namespace PickNBook.Api.Models.DTOs
         public decimal Price { get; set; } = 0m;
         public string? CheckInDate { get; set; }
         public string? CheckOutDate { get; set; }
+        [JsonPropertyName("NoOfRooms")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
         public int NoOfRooms { get; set; } = 1;
 
         // Legacy metadata

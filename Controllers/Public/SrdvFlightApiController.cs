@@ -31,6 +31,7 @@ namespace PickNBook.Api.Controllers.Public
         private readonly SrdvSettings _srdvSettings;
         private readonly ILogger<SrdvFlightApiController> _logger;
         private readonly ICancellationRefundCalculator _refundCalculator;
+        private readonly IAirlineLookupService _airlineLookup;
 
         public SrdvFlightApiController(
             ISrdvFlightService srdvFlightService, 
@@ -40,6 +41,7 @@ namespace PickNBook.Api.Controllers.Public
             IAgentWalletService walletService,
             IOptions<SrdvSettings> srdvSettings,
             ICancellationRefundCalculator refundCalculator,
+            IAirlineLookupService airlineLookup,
             ILogger<SrdvFlightApiController> logger)
         {
             _srdvFlightService = srdvFlightService;
@@ -49,7 +51,16 @@ namespace PickNBook.Api.Controllers.Public
             _walletService = walletService;
             _srdvSettings = srdvSettings.Value;
             _refundCalculator = refundCalculator;
+            _airlineLookup = airlineLookup;
             _logger = logger;
+        }
+
+        [HttpGet("Airlines")]
+        [ResponseCache(Duration = 86400)]
+        public async Task<IActionResult> GetAirlines(CancellationToken cancellationToken)
+        {
+            var airlines = await _airlineLookup.GetAllAirlinesAsync(cancellationToken);
+            return Ok(airlines);
         }
 
         [HttpPost("Search")]
@@ -57,13 +68,68 @@ namespace PickNBook.Api.Controllers.Public
         {
             try
             {
+                if (proxyRequest == null)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." });
+                }
+
+                if (proxyRequest.AdultCount < 1 || proxyRequest.AdultCount > 9)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "AdultCount must be between 1 and 9." });
+                }
+
+                if (proxyRequest.ChildCount < 0 || proxyRequest.ChildCount > 8)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "ChildCount must be between 0 and 8." });
+                }
+
+                if (proxyRequest.InfantCount < 0 || proxyRequest.InfantCount > 9)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "InfantCount must be between 0 and 9." });
+                }
+
+                if (proxyRequest.InfantCount > proxyRequest.AdultCount)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "InfantCount cannot exceed AdultCount." });
+                }
+
+                if (proxyRequest.Segments == null || proxyRequest.Segments.Count == 0)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "At least one flight segment is required." });
+                }
+
+                foreach (var seg in proxyRequest.Segments)
+                {
+                    if (string.IsNullOrWhiteSpace(seg.Origin) || seg.Origin.Trim().Length != 3)
+                    {
+                        return BadRequest(new { ErrorCode = 1, ErrorMessage = $"Invalid segment origin '{seg.Origin}'. Must be a 3-character airport/city code." });
+                    }
+                    if (string.IsNullOrWhiteSpace(seg.Destination) || seg.Destination.Trim().Length != 3)
+                    {
+                        return BadRequest(new { ErrorCode = 1, ErrorMessage = $"Invalid segment destination '{seg.Destination}'. Must be a 3-character airport/city code." });
+                    }
+                    seg.Origin = seg.Origin.Trim().ToUpperInvariant();
+                    seg.Destination = seg.Destination.Trim().ToUpperInvariant();
+                    if (string.IsNullOrWhiteSpace(seg.FlightCabinClass))
+                    {
+                        seg.FlightCabinClass = "1";
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(proxyRequest.CurrencyCode) && proxyRequest.CurrencyCode.Trim().Length != 3)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "CurrencyCode must be a 3-character ISO currency code (e.g. INR)." });
+                }
+
                 var request = new AirSearchRequestDto
                 {
                     EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                     AdultCount = proxyRequest.AdultCount,
                     ChildCount = proxyRequest.ChildCount,
                     InfantCount = proxyRequest.InfantCount,
-                    JourneyType = proxyRequest.JourneyType,
+                    JourneyType = string.IsNullOrWhiteSpace(proxyRequest.JourneyType) ? "1" : proxyRequest.JourneyType.Trim(),
+                    CurrencyCode = string.IsNullOrWhiteSpace(proxyRequest.CurrencyCode) ? "INR" : proxyRequest.CurrencyCode.Trim().ToUpperInvariant(),
+                    FareType = string.IsNullOrWhiteSpace(proxyRequest.FareType) ? "1" : proxyRequest.FareType.Trim(),
                     DirectFlight = proxyRequest.DirectFlight,
                     Segments = proxyRequest.Segments
                 };
@@ -75,7 +141,8 @@ namespace PickNBook.Api.Controllers.Public
                 
                 var errorCode = responseObj?["Error"]?["ErrorCode"]?.ToString();
                 
-                var requestTripType = request.JourneyType == 2 ? TripType.RoundTrip : (request.JourneyType == 3 ? TripType.MultiCity : TripType.OneWay);
+                var jType = (request.JourneyType ?? "1").Trim();
+                var requestTripType = jType == "2" ? TripType.RoundTrip : (jType == "3" ? TripType.MultiCity : TripType.OneWay);
                 
                 _logger.LogInformation("Search Flight API triggered. SRDV ErrorCode: {ErrorCode}", errorCode);
                 
@@ -95,7 +162,7 @@ namespace PickNBook.Api.Controllers.Public
                             Adults = request.AdultCount,
                             Children = request.ChildCount,
                             Infants = request.InfantCount,
-                            TripType = request.JourneyType.ToString(),
+                            TripType = jType,
                             UserId = string.IsNullOrEmpty(userId) ? null : userId,
                             IsGuest = string.IsNullOrEmpty(userId),
                             UserOrGuestId = userId,
@@ -122,139 +189,239 @@ namespace PickNBook.Api.Controllers.Public
                     }
                 }
 
-                var resultsArr = responseObj?["Results"]?.AsArray();
-                    if (resultsArr != null)
-                    {
-                        foreach (var flightList in resultsArr)
-                        {
-                            var flightsArr = flightList?.AsArray();
-                            if (flightsArr != null)
-                            {
-                                foreach (var result in flightsArr)
-                                {
-                                    if (result == null) continue;
-                                    
-                                    var segmentsArr = result["Segments"]?[0]?.AsArray();
-                                    if (segmentsArr == null || segmentsArr.Count == 0) continue;
-                                    
-                                    var firstSegment = segmentsArr[0];
-                                    var lastSegment = segmentsArr[segmentsArr.Count - 1];
-                                    
-                                    var airlineCode = firstSegment?["Airline"]?["AirlineCode"]?.GetValue<string>() ?? "";
-                                    var airlineName = firstSegment?["Airline"]?["AirlineName"]?.GetValue<string>() ?? "";
-                                    var origin = firstSegment?["Origin"]?["Airport"]?["CityCode"]?.GetValue<string>() ?? "";
-                                    var destination = lastSegment?["Destination"]?["Airport"]?["CityCode"]?.GetValue<string>() ?? "";
-                                    
-                                    var depTimeNode = firstSegment?["DepTime"] ?? firstSegment?["Origin"]?["DepTime"];
-                                    var depTime = depTimeNode?.GetValue<DateTime>() ?? DateTime.UtcNow;
-                                    
-                                    var travelClassStr = firstSegment?["CabinClass"]?.GetValue<int>() switch
-                                    {
-                                        2 => "Economy",
-                                        3 => "PremiumEconomy",
-                                        4 => "Business",
-                                        5 => "PremiumBusiness",
-                                        6 => "First",
-                                        _ => "Economy"
-                                    };
+                await EnrichFlightResultsAsync(responseObj, requestTripType, request.AdultCount + request.ChildCount + request.InfantCount, userId);
 
-                                    var fareDataMultipleArr = result["FareDataMultiple"]?.AsArray();
-                                    if (fareDataMultipleArr != null && fareDataMultipleArr.Count > 0)
-                                    {
-                                        decimal? firstFinalAmount = null;
-                                        foreach (var fareData in fareDataMultipleArr)
-                                        {
-                                            if (fareData == null) continue;
-                                            var fObj = fareData["Fare"];
-                                            if (fObj != null)
-                                            {
-                                                var bf = fObj["BaseFare"]?.GetValue<decimal>() ?? 0m;
-                                                var tx = fObj["Tax"]?.GetValue<decimal>() ?? 0m;
-                                                
-                                                var breakdown = await _pricingService.CalculatePricingAsync(
-                                                    supplierBaseFare: bf,
-                                                    supplierTaxAmount: tx,
-                                                    airlineCode: airlineCode,
-                                                    airlineName: airlineName,
-                                                    origin: origin,
-                                                    destination: destination,
-                                                    departureDate: depTime,
-                                                    travelClass: travelClassStr,
-                                                    tripType: requestTripType,
-                                                    passengerCount: request.AdultCount + request.ChildCount + request.InfantCount,
-                                                    couponCode: null,
-                                                    userId: userId
-                                                );
-                                                
-                                                fObj["B2CFinalFare"] = breakdown.FinalAmount;
-                                                fObj["B2CPublishedFare"] = breakdown.SupplierTotalFare + breakdown.MarkupAmount;
-                                                fObj["B2CMarkupAmount"] = breakdown.MarkupAmount;
-                                                if (fareData["OfferedFare"] != null) 
-                                                {
-                                                    fareData["B2CFinalFare"] = breakdown.FinalAmount;
-                                                    fareData["B2CPublishedFare"] = breakdown.SupplierTotalFare + breakdown.MarkupAmount;
-                                                    fareData["B2CMarkupAmount"] = breakdown.MarkupAmount;
-                                                }
-                                                
-                                                fareData["PickNBookMarkup"] = breakdown.MarkupAmount;
-                                                fareData["PickNBookDiscount"] = breakdown.PromotionDiscount + breakdown.CouponDiscount;
-
-                                                if (firstFinalAmount == null)
-                                                    firstFinalAmount = breakdown.FinalAmount;
-                                            }
-                                        }
-                                        if (firstFinalAmount != null && result["OfferedFare"] != null)
-                                        {
-                                            result["B2CFinalFare"] = firstFinalAmount;
-                                        }
-                                    }
-                                    else
-                                    {
-                                        var fareObj = result["Fare"];
-                                        var baseFare = fareObj?["BaseFare"]?.GetValue<decimal>() ?? 0m;
-                                        var tax = fareObj?["Tax"]?.GetValue<decimal>() ?? 0m;
-                                        
-                                        var pricingBreakdown = await _pricingService.CalculatePricingAsync(
-                                            supplierBaseFare: baseFare,
-                                            supplierTaxAmount: tax,
-                                            airlineCode: airlineCode,
-                                            airlineName: airlineName,
-                                            origin: origin,
-                                            destination: destination,
-                                            departureDate: depTime,
-                                            travelClass: travelClassStr,
-                                            tripType: requestTripType,
-                                            passengerCount: request.AdultCount + request.ChildCount + request.InfantCount,
-                                            couponCode: null,
-                                            userId: userId
-                                        );
-                                        
-                                        if (fareObj != null)
-                                        {
-                                            fareObj["B2CFinalFare"] = pricingBreakdown.FinalAmount;
-                                            fareObj["B2CPublishedFare"] = pricingBreakdown.SupplierTotalFare + pricingBreakdown.MarkupAmount;
-                                            fareObj["B2CMarkupAmount"] = pricingBreakdown.MarkupAmount;
-                                        }
-                                        if (result["OfferedFare"] != null) 
-                                        {
-                                            result["B2CFinalFare"] = pricingBreakdown.FinalAmount;
-                                            result["B2CPublishedFare"] = pricingBreakdown.SupplierTotalFare + pricingBreakdown.MarkupAmount;
-                                            result["B2CMarkupAmount"] = pricingBreakdown.MarkupAmount;
-                                        }
-                                        
-                                        result["PickNBookMarkup"] = pricingBreakdown.MarkupAmount;
-                                        result["PickNBookDiscount"] = pricingBreakdown.PromotionDiscount + pricingBreakdown.CouponDiscount;
-                                    }
-                                }
-                            }
-                        }
-                    }
                 return Ok(jsonNode);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error searching flights.");
                 return StatusCode(500, new { message = "Failed to search flights.", error = ex.Message });
+            }
+        }
+
+        [HttpPost("RecheckSearch")]
+        public async Task<IActionResult> RecheckSearch([FromBody] FlightRecheckSearchProxyRequestDto proxyRequest)
+        {
+            try
+            {
+                if (proxyRequest == null || proxyRequest.TraceId <= 0)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive TraceId is required." });
+                }
+
+                var request = new AirRecheckSearchRequestDto
+                {
+                    TraceId = proxyRequest.TraceId
+                };
+
+                var responseRaw = await _srdvFlightService.RecheckSearchRawAsync(request);
+                var jsonNode = JsonNode.Parse(responseRaw);
+                var responseObj = jsonNode;
+
+                var errorCode = responseObj?["Error"]?["ErrorCode"]?.ToString();
+                _logger.LogInformation("RecheckSearch API triggered for TraceId {TraceId}. ErrorCode: {ErrorCode}", proxyRequest.TraceId, errorCode);
+
+                if (errorCode == "0")
+                {
+                    // Lookup original search context from DB if available to apply exact pricing rules
+                    var traceIdStr = proxyRequest.TraceId.ToString();
+                    var searchLog = await _dbContext.FlightSearchLogs.AsNoTracking()
+                        .FirstOrDefaultAsync(x => x.TraceId == traceIdStr);
+
+                    var tripType = TripType.OneWay;
+                    var passengerCount = 1;
+                    var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "";
+
+                    if (searchLog != null)
+                    {
+                        var jType = (searchLog.TripType ?? "1").Trim();
+                        tripType = jType == "2" ? TripType.RoundTrip : (jType == "3" ? TripType.MultiCity : TripType.OneWay);
+                        passengerCount = Math.Max(1, searchLog.Adults + searchLog.Children + searchLog.Infants);
+                        if (string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(searchLog.UserId))
+                        {
+                            userId = searchLog.UserId;
+                        }
+                    }
+
+                    await EnrichFlightResultsAsync(responseObj, tripType, passengerCount, userId);
+                }
+                else
+                {
+                    if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
+                    {
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                    }
+                }
+
+                return Ok(jsonNode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error executing RecheckSearch for TraceId {TraceId}", proxyRequest?.TraceId);
+                return StatusCode(500, new { message = "Failed to recheck search.", error = ex.Message });
+            }
+        }
+
+        private async Task EnrichFlightResultsAsync(
+            JsonNode? responseObj, 
+            TripType requestTripType, 
+            int passengerCount, 
+            string userId)
+        {
+            var resultsArr = responseObj?["Results"]?.AsArray();
+            if (resultsArr == null) return;
+
+            foreach (var flightList in resultsArr)
+            {
+                var flightsArr = flightList?.AsArray();
+                if (flightsArr == null) continue;
+
+                foreach (var result in flightsArr)
+                {
+                    if (result == null) continue;
+                    
+                    var segmentsArr = result["Segments"]?[0]?.AsArray();
+                    if (segmentsArr == null || segmentsArr.Count == 0) continue;
+
+                    // Match and enrich all segments in every leg with canonical display name from flight_airlines
+                    var allSegmentLists = result["Segments"]?.AsArray();
+                    if (allSegmentLists != null)
+                    {
+                        foreach (var segList in allSegmentLists)
+                        {
+                            var innerSegs = segList?.AsArray();
+                            if (innerSegs == null) continue;
+                            foreach (var seg in innerSegs)
+                            {
+                                if (seg?["Airline"] is JsonObject alObj)
+                                {
+                                    var rawCode = alObj["AirlineCode"]?.GetValue<string>() ?? "";
+                                    var rawName = alObj["AirlineName"]?.GetValue<string>() ?? "";
+                                    var canonicalName = _airlineLookup.GetAirlineName(rawCode, rawName);
+                                    if (!string.IsNullOrEmpty(canonicalName))
+                                    {
+                                        alObj["AirlineName"] = canonicalName;
+                                    }
+                                    if (!string.IsNullOrEmpty(rawCode))
+                                    {
+                                        alObj["AirlineCode"] = rawCode.Trim().ToUpperInvariant();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    var firstSegment = segmentsArr[0];
+                    var lastSegment = segmentsArr[segmentsArr.Count - 1];
+                    
+                    var airlineCode = firstSegment?["Airline"]?["AirlineCode"]?.GetValue<string>() ?? "";
+                    var rawAirlineName = firstSegment?["Airline"]?["AirlineName"]?.GetValue<string>() ?? "";
+                    var airlineName = _airlineLookup.GetAirlineName(airlineCode, rawAirlineName);
+                    var origin = firstSegment?["Origin"]?["Airport"]?["CityCode"]?.GetValue<string>() ?? "";
+                    var destination = lastSegment?["Destination"]?["Airport"]?["CityCode"]?.GetValue<string>() ?? "";
+                    
+                    var depTimeNode = firstSegment?["DepTime"] ?? firstSegment?["Origin"]?["DepTime"];
+                    var depTime = depTimeNode?.GetValue<DateTime>() ?? DateTime.UtcNow;
+                    
+                    var travelClassStr = firstSegment?["CabinClass"]?.GetValue<int>() switch
+                    {
+                        2 => "Economy",
+                        3 => "PremiumEconomy",
+                        4 => "Business",
+                        5 => "PremiumBusiness",
+                        6 => "First",
+                        _ => "Economy"
+                    };
+
+                    var fareDataMultipleArr = result["FareDataMultiple"]?.AsArray();
+                    if (fareDataMultipleArr != null && fareDataMultipleArr.Count > 0)
+                    {
+                        decimal? firstFinalAmount = null;
+                        foreach (var fareData in fareDataMultipleArr)
+                        {
+                            if (fareData == null) continue;
+                            var fObj = fareData["Fare"];
+                            if (fObj != null)
+                            {
+                                var bf = fObj["BaseFare"]?.GetValue<decimal>() ?? 0m;
+                                var tx = fObj["Tax"]?.GetValue<decimal>() ?? 0m;
+                                
+                                var breakdown = await _pricingService.CalculatePricingAsync(
+                                    supplierBaseFare: bf,
+                                    supplierTaxAmount: tx,
+                                    airlineCode: airlineCode,
+                                    airlineName: airlineName,
+                                    origin: origin,
+                                    destination: destination,
+                                    departureDate: depTime,
+                                    travelClass: travelClassStr,
+                                    tripType: requestTripType,
+                                    passengerCount: passengerCount,
+                                    couponCode: null,
+                                    userId: userId
+                                );
+                                
+                                fObj["B2CFinalFare"] = breakdown.FinalAmount;
+                                fObj["B2CPublishedFare"] = breakdown.SupplierTotalFare + breakdown.MarkupAmount;
+                                fObj["B2CMarkupAmount"] = breakdown.MarkupAmount;
+                                if (fareData["OfferedFare"] != null) 
+                                {
+                                    fareData["B2CFinalFare"] = breakdown.FinalAmount;
+                                    fareData["B2CPublishedFare"] = breakdown.SupplierTotalFare + breakdown.MarkupAmount;
+                                    fareData["B2CMarkupAmount"] = breakdown.MarkupAmount;
+                                }
+                                
+                                fareData["PickNBookMarkup"] = breakdown.MarkupAmount;
+                                fareData["PickNBookDiscount"] = breakdown.PromotionDiscount + breakdown.CouponDiscount;
+
+                                if (firstFinalAmount == null)
+                                    firstFinalAmount = breakdown.FinalAmount;
+                            }
+                        }
+                        if (firstFinalAmount != null && result["OfferedFare"] != null)
+                        {
+                            result["B2CFinalFare"] = firstFinalAmount;
+                        }
+                    }
+                    else
+                    {
+                        var fareObj = result["Fare"];
+                        var baseFare = fareObj?["BaseFare"]?.GetValue<decimal>() ?? 0m;
+                        var tax = fareObj?["Tax"]?.GetValue<decimal>() ?? 0m;
+                        
+                        var pricingBreakdown = await _pricingService.CalculatePricingAsync(
+                            supplierBaseFare: baseFare,
+                            supplierTaxAmount: tax,
+                            airlineCode: airlineCode,
+                            airlineName: airlineName,
+                            origin: origin,
+                            destination: destination,
+                            departureDate: depTime,
+                            travelClass: travelClassStr,
+                            tripType: requestTripType,
+                            passengerCount: passengerCount,
+                            couponCode: null,
+                            userId: userId
+                        );
+                        
+                        if (fareObj != null)
+                        {
+                            fareObj["B2CFinalFare"] = pricingBreakdown.FinalAmount;
+                            fareObj["B2CPublishedFare"] = pricingBreakdown.SupplierTotalFare + pricingBreakdown.MarkupAmount;
+                            fareObj["B2CMarkupAmount"] = pricingBreakdown.MarkupAmount;
+                        }
+                        if (result["OfferedFare"] != null) 
+                        {
+                            result["B2CFinalFare"] = pricingBreakdown.FinalAmount;
+                            result["B2CPublishedFare"] = pricingBreakdown.SupplierTotalFare + pricingBreakdown.MarkupAmount;
+                            result["B2CMarkupAmount"] = pricingBreakdown.MarkupAmount;
+                        }
+                        
+                        result["PickNBookMarkup"] = pricingBreakdown.MarkupAmount;
+                        result["PickNBookDiscount"] = pricingBreakdown.PromotionDiscount + pricingBreakdown.CouponDiscount;
+                    }
+                }
             }
         }
 
@@ -287,49 +454,110 @@ namespace PickNBook.Api.Controllers.Public
         {
             try
             {
+                if (proxyRequest == null)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." });
+                }
+
+                if (proxyRequest.TraceId <= 0)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive TraceId is required." });
+                }
+
+                if (string.IsNullOrWhiteSpace(proxyRequest.ResultIndex) || proxyRequest.ResultIndex.Trim().Length < 3 || proxyRequest.ResultIndex.Trim().Length > 500)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "ResultIndex is required and must be between 3 and 500 characters." });
+                }
+
                 var request = new AirFareRuleRequestDto
                 {
-                    EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                    SrdvType = proxyRequest.SrdvType,
-                    SrdvIndex = proxyRequest.SrdvIndex,
                     TraceId = proxyRequest.TraceId,
-                    ResultIndex = proxyRequest.ResultIndex,
-                    CouponCode = proxyRequest.CouponCode,
-                    JourneyType = proxyRequest.JourneyType,
-                    AdultCount = proxyRequest.AdultCount,
-                    ChildCount = proxyRequest.ChildCount,
-                    InfantCount = proxyRequest.InfantCount
+                    ResultIndex = proxyRequest.ResultIndex.Trim()
                 };
+
                 var responseRaw = await _srdvFlightService.GetFareRuleRawAsync(request);
-                using var doc = JsonDocument.Parse(responseRaw);
-                return Ok(doc.RootElement.Clone());
+                var jsonNode = JsonNode.Parse(responseRaw);
+                var responseObj = jsonNode?["Response"] ?? jsonNode;
+                var errorCode = responseObj?["Error"]?["ErrorCode"]?.ToString();
+
+                if (errorCode != null && errorCode != "0")
+                {
+                    if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
+                    {
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                    }
+                }
+
+                return Ok(jsonNode);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting fare rule.");
+                _logger.LogError(ex, "Error getting fare rule for TraceId {TraceId}, ResultIndex {ResultIndex}", proxyRequest?.TraceId, proxyRequest?.ResultIndex);
                 return StatusCode(500, new { message = "Failed to get fare rule.", error = ex.Message });
             }
         }
 
         [HttpPost("FareQuote")]
-        public async Task<IActionResult> FareQuote([FromBody] FlightFareRuleProxyRequestDto proxyRequest)
+        public async Task<IActionResult> FareQuote([FromBody] FlightFareQuoteProxyRequestDto proxyRequest)
         {
             try
             {
-                var request = new AirFareRuleRequestDto
+                if (proxyRequest == null)
                 {
-                    EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                    SrdvType = proxyRequest.SrdvType,
-                    SrdvIndex = proxyRequest.SrdvIndex,
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." });
+                }
+
+                if (proxyRequest.TraceId <= 0)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive TraceId is required." });
+                }
+
+                if (string.IsNullOrWhiteSpace(proxyRequest.ResultIndex) || proxyRequest.ResultIndex.Trim().Length < 3 || proxyRequest.ResultIndex.Trim().Length > 500)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "ResultIndex is required and must be between 3 and 500 characters." });
+                }
+
+                var request = new AirFareQuoteRequestDto
+                {
                     TraceId = proxyRequest.TraceId,
-                    ResultIndex = proxyRequest.ResultIndex,
-                    CouponCode = proxyRequest.CouponCode,
-                    JourneyType = proxyRequest.JourneyType,
-                    AdultCount = proxyRequest.AdultCount,
-                    ChildCount = proxyRequest.ChildCount,
-                    InfantCount = proxyRequest.InfantCount
+                    ResultIndex = proxyRequest.ResultIndex.Trim()
                 };
                 var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "";
+
+                var traceIdStr = proxyRequest.TraceId.ToString();
+                var searchLog = await _dbContext.FlightSearchLogs.AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.TraceId == traceIdStr);
+
+                TripType fqTripType = TripType.OneWay;
+                if (!string.IsNullOrWhiteSpace(proxyRequest.JourneyType))
+                {
+                    var jType = proxyRequest.JourneyType.Trim();
+                    fqTripType = jType == "2" ? TripType.RoundTrip : (jType == "3" ? TripType.MultiCity : TripType.OneWay);
+                }
+                else if (searchLog != null)
+                {
+                    var jType = (searchLog.TripType ?? "1").Trim();
+                    fqTripType = jType == "2" ? TripType.RoundTrip : (jType == "3" ? TripType.MultiCity : TripType.OneWay);
+                }
+                else if (!string.IsNullOrEmpty(proxyRequest.ResultIndex) && proxyRequest.ResultIndex.Contains(","))
+                {
+                    fqTripType = TripType.RoundTrip;
+                }
+
+                int fqPaxCount = (proxyRequest.AdultCount ?? 0) + (proxyRequest.ChildCount ?? 0) + (proxyRequest.InfantCount ?? 0);
+                if (fqPaxCount <= 0 && searchLog != null)
+                {
+                    fqPaxCount = searchLog.Adults + searchLog.Children + searchLog.Infants;
+                }
+                if (fqPaxCount <= 0)
+                {
+                    fqPaxCount = 1;
+                }
+
+                if (string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(searchLog?.UserId))
+                {
+                    userId = searchLog.UserId;
+                }
                 
                 var responseRaw = await _srdvFlightService.GetFareQuoteRawAsync(request);
                 var jsonNode = JsonNode.Parse(responseRaw);
@@ -372,31 +600,20 @@ namespace PickNBook.Api.Controllers.Public
                                 _ => "Economy"
                             };
 
-                                TripType fqTripType = TripType.OneWay;
-                                if (request.JourneyType.HasValue)
-                                {
-                                    fqTripType = request.JourneyType == 2 ? TripType.RoundTrip : (request.JourneyType == 3 ? TripType.MultiCity : TripType.OneWay);
-                                }
-                                else if (!string.IsNullOrEmpty(request.ResultIndex) && request.ResultIndex.Contains(","))
-                                {
-                                    fqTripType = TripType.RoundTrip;
-                                }
-                                var fqPaxCount = (request.AdultCount ?? 1) + (request.ChildCount ?? 0) + (request.InfantCount ?? 0);
-
-                                var pricingBreakdown = await _pricingService.CalculatePricingAsync(
-                                    supplierBaseFare: baseFare,
-                                    supplierTaxAmount: tax,
-                                    airlineCode: airlineCode,
-                                    airlineName: airlineName,
-                                    origin: origin,
-                                    destination: destination,
-                                    departureDate: depTime,
-                                    travelClass: travelClassStr,
-                                    tripType: fqTripType,
-                                    passengerCount: fqPaxCount,
-                                    couponCode: request.CouponCode,
-                                    userId: userId
-                                );
+                            var pricingBreakdown = await _pricingService.CalculatePricingAsync(
+                                supplierBaseFare: baseFare,
+                                supplierTaxAmount: tax,
+                                airlineCode: airlineCode,
+                                airlineName: airlineName,
+                                origin: origin,
+                                destination: destination,
+                                departureDate: depTime,
+                                travelClass: travelClassStr,
+                                tripType: fqTripType,
+                                passengerCount: fqPaxCount,
+                                couponCode: proxyRequest.CouponCode,
+                                userId: userId
+                            );
                             
                             result["B2CFinalFare"] = pricingBreakdown.FinalAmount;
                             result["B2CPublishedFare"] = pricingBreakdown.SupplierTotalFare + pricingBreakdown.MarkupAmount;
@@ -418,6 +635,13 @@ namespace PickNBook.Api.Controllers.Public
                         }
                     }
                 }
+                else
+                {
+                    if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
+                    {
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                    }
+                }
                 return Ok(jsonNode);
             }
             catch (Exception ex)
@@ -428,22 +652,24 @@ namespace PickNBook.Api.Controllers.Public
         }
 
         [HttpPost("SSR")]
-        public async Task<IActionResult> SSR([FromBody] FlightFareRuleProxyRequestDto proxyRequest)
+        [HttpPost("/v8/SSR")]
+        [HttpPost("/api/flight/v8/SSR")]
+        public async Task<IActionResult> SSR([FromBody] FlightSSRProxyRequestDto proxyRequest)
         {
+            if (proxyRequest == null || proxyRequest.TraceId <= 0 || string.IsNullOrWhiteSpace(proxyRequest.ResultIndex))
+            {
+                return BadRequest(new { message = "TraceId and ResultIndex are required." });
+            }
+
             try
             {
                 var request = new AirFareRuleRequestDto
                 {
                     EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                    SrdvType = proxyRequest.SrdvType,
-                    SrdvIndex = proxyRequest.SrdvIndex,
+                    SrdvType = proxyRequest.SrdvType ?? string.Empty,
+                    SrdvIndex = proxyRequest.SrdvIndex ?? string.Empty,
                     TraceId = proxyRequest.TraceId,
-                    ResultIndex = proxyRequest.ResultIndex,
-                    CouponCode = proxyRequest.CouponCode,
-                    JourneyType = proxyRequest.JourneyType,
-                    AdultCount = proxyRequest.AdultCount,
-                    ChildCount = proxyRequest.ChildCount,
-                    InfantCount = proxyRequest.InfantCount
+                    ResultIndex = proxyRequest.ResultIndex
                 };
                 var responseRaw = await _srdvFlightService.GetSSRRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
@@ -457,22 +683,24 @@ namespace PickNBook.Api.Controllers.Public
         }
 
         [HttpPost("SeatMap")]
-        public async Task<IActionResult> SeatMap([FromBody] FlightFareRuleProxyRequestDto proxyRequest)
+        [HttpPost("/v8/SeatMap")]
+        [HttpPost("/api/flight/v8/SeatMap")]
+        public async Task<IActionResult> SeatMap([FromBody] FlightSeatMapProxyRequestDto proxyRequest)
         {
+            if (proxyRequest == null || proxyRequest.TraceId <= 0 || string.IsNullOrWhiteSpace(proxyRequest.ResultIndex))
+            {
+                return BadRequest(new { message = "TraceId and ResultIndex are required." });
+            }
+
             try
             {
                 var request = new AirFareRuleRequestDto
                 {
                     EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                    SrdvType = proxyRequest.SrdvType,
-                    SrdvIndex = proxyRequest.SrdvIndex,
+                    SrdvType = proxyRequest.SrdvType ?? string.Empty,
+                    SrdvIndex = proxyRequest.SrdvIndex ?? string.Empty,
                     TraceId = proxyRequest.TraceId,
-                    ResultIndex = proxyRequest.ResultIndex,
-                    CouponCode = proxyRequest.CouponCode,
-                    JourneyType = proxyRequest.JourneyType,
-                    AdultCount = proxyRequest.AdultCount,
-                    ChildCount = proxyRequest.ChildCount,
-                    InfantCount = proxyRequest.InfantCount
+                    ResultIndex = proxyRequest.ResultIndex
                 };
                 var responseRaw = await _srdvFlightService.GetSeatMapRawAsync(request);
                 var outNode = JsonNode.Parse(responseRaw);
@@ -514,6 +742,8 @@ namespace PickNBook.Api.Controllers.Public
 
         [Authorize]
         [HttpPost("TicketLCC")]
+        [HttpPost("/v8/TicketLCC")]
+        [HttpPost("/api/flight/v8/TicketLCC")]
         public async Task<IActionResult> TicketLCC([FromBody] FlightTicketLCCProxyRequestDto proxyRequest)
         {
             var request = new TicketLCCRequestDto
@@ -521,8 +751,14 @@ namespace PickNBook.Api.Controllers.Public
                 EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                 SrdvType = proxyRequest.SrdvType,
                 SrdvIndex = proxyRequest.SrdvIndex,
-                TraceId = proxyRequest.TraceId,
+                TraceId = proxyRequest.TraceId.ToString(),
                 ResultIndex = proxyRequest.ResultIndex,
+                RefID = proxyRequest.RefID,
+                Module = proxyRequest.Module,
+                BookedById = proxyRequest.BookedById,
+                BookedByName = proxyRequest.BookedByName,
+                CustomerFare = proxyRequest.CustomerFare,
+                ReturnCustomerFare = proxyRequest.ReturnCustomerFare,
                 CouponCode = proxyRequest.CouponCode,
                 PromoCode = proxyRequest.PromoCode,
                 PromotionId = proxyRequest.PromotionId,
@@ -583,7 +819,7 @@ namespace PickNBook.Api.Controllers.Public
                 if ((isSuccess || isPending) && (!string.IsNullOrEmpty(pnr) || !string.IsNullOrEmpty(bookingId)))
                 {
                     decimal totalFare = 0, baseFare = 0, tax = 0, netFare = 0, customerFare = 0, ssrFromResponse = 0m;
-                    string airline = "", flightNumber = "", fromCity = "", toCity = "";
+                    string airline = "", airlineCode = "", flightNumber = "", fromCity = "", toCity = "";
                     DateTime depTime = DateTime.MinValue, arrTime = DateTime.MinValue;
                     bool nonRefundable = false;
                     string segmentsJson = "", fareRulesJson = "", travelClassStr = "Economy";
@@ -642,7 +878,9 @@ namespace PickNBook.Api.Controllers.Public
                             var firstSeg = segs[0];
                             if (firstSeg.TryGetProperty("Airline", out var alNode))
                             {
-                                airline = alNode.TryGetProperty("AirlineName", out var alNameNode) ? (alNameNode.ToString() ?? "") : "";
+                                airlineCode = alNode.TryGetProperty("AirlineCode", out var alCodeNode) ? (alCodeNode.GetString() ?? "") : "";
+                                var rawName = alNode.TryGetProperty("AirlineName", out var alNameNode) ? (alNameNode.GetString() ?? "") : "";
+                                airline = _airlineLookup.GetAirlineName(airlineCode, rawName);
                                 flightNumber = alNode.TryGetProperty("FlightNumber", out var fnNode) ? (fnNode.ToString() ?? "") : "";
                             }
                             
@@ -701,7 +939,7 @@ namespace PickNBook.Api.Controllers.Public
                     var pricingBreakdown = await _pricingService.CalculatePricingAsync(
                         supplierBaseFare: baseFare,
                         supplierTaxAmount: tax,
-                        airlineCode: airline,
+                        airlineCode: !string.IsNullOrEmpty(airlineCode) ? airlineCode : airline,
                         airlineName: airline,
                         origin: fromCity,
                         destination: toCity,
@@ -1002,6 +1240,40 @@ namespace PickNBook.Api.Controllers.Public
             }
         }
 
+        [HttpPost("BookingDetails")]
+        [HttpPost("/v8/BookingDetails")]
+        [HttpPost("/api/flight/v8/BookingDetails")]
+        [HttpPost("/api/flight/srdv/BookingDetails")]
+        public async Task<IActionResult> BookingDetails([FromBody] FlightBookingDetailsProxyRequestDto proxyRequest)
+        {
+            if (proxyRequest == null || proxyRequest.TraceId <= 0)
+            {
+                return BadRequest(new { message = "A valid positive TraceId is required." });
+            }
+
+            try
+            {
+                var request = new AirBookingDetailsRequestDto
+                {
+                    TraceId = proxyRequest.TraceId
+                };
+
+                var responseRaw = await _srdvFlightService.GetBookingDetailsRawAsync(request);
+                using var doc = JsonDocument.Parse(responseRaw);
+                return Ok(doc.RootElement.Clone());
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "HTTP exception during Flight BookingDetails for TraceId {TraceId}", proxyRequest?.TraceId);
+                return StatusCode(502, new { message = "Supplier communication error.", error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting Flight BookingDetails for TraceId {TraceId}", proxyRequest?.TraceId);
+                return StatusCode(500, new { message = "Failed to get booking details.", error = ex.Message });
+            }
+        }
+
         [Authorize]
         [HttpPost("HoldGDS")]
         public async Task<IActionResult> HoldGDS([FromBody] FlightHoldGDSProxyRequestDto proxyRequest)
@@ -1080,7 +1352,7 @@ namespace PickNBook.Api.Controllers.Public
                 if ((isSuccess || isPending) && (!string.IsNullOrEmpty(pnr) || !string.IsNullOrEmpty(bookingId)))
                 {
                     decimal totalFare = 0, baseFare = 0, tax = 0, netFare = 0, customerFare = 0, ssrFromResponse = 0m;
-                    string airline = "", flightNumber = "", fromCity = "", toCity = "";
+                    string airline = "", airlineCode = "", flightNumber = "", fromCity = "", toCity = "";
                     DateTime depTime = DateTime.MinValue, arrTime = DateTime.MinValue;
                     bool nonRefundable = false;
                     string segmentsJson = "", fareRulesJson = "", travelClassStr = "Economy";
@@ -1130,8 +1402,12 @@ namespace PickNBook.Api.Controllers.Public
                         {
                             segmentsJson = segs.ToString();
                             var firstSeg = segs[0];
-                            if (firstSeg.TryGetProperty("Airline", out var alNode) && alNode.TryGetProperty("AirlineName", out var alNameNode))
-                                airline = alNameNode.ToString() ?? "";
+                            if (firstSeg.TryGetProperty("Airline", out var alNode))
+                            {
+                                airlineCode = alNode.TryGetProperty("AirlineCode", out var alCodeNode) ? (alCodeNode.GetString() ?? "") : "";
+                                var rawName = alNode.TryGetProperty("AirlineName", out var alNameNode) ? (alNameNode.GetString() ?? "") : "";
+                                airline = _airlineLookup.GetAirlineName(airlineCode, rawName);
+                            }
                             if (firstSeg.TryGetProperty("Airline", out var alNode2) && alNode2.TryGetProperty("FlightNumber", out var fnNode))
                                 flightNumber = fnNode.ToString() ?? "";
                             
@@ -1204,7 +1480,7 @@ namespace PickNBook.Api.Controllers.Public
                     var pricingBreakdown = await _pricingService.CalculatePricingAsync(
                         supplierBaseFare: baseFare,
                         supplierTaxAmount: tax,
-                        airlineCode: airline,
+                        airlineCode: !string.IsNullOrEmpty(airlineCode) ? airlineCode : airline,
                         airlineName: airline,
                         origin: fromCity,
                         destination: toCity,
@@ -1622,7 +1898,7 @@ namespace PickNBook.Api.Controllers.Public
                     else
                     {
                     decimal totalFare = 0, baseFare = 0, tax = 0, netFare = 0, customerFare = 0, ssrFromResponse = 0m;
-                    string airline = "", flightNumber = "", fromCity = "", toCity = "";
+                    string airline = "", airlineCode = "", flightNumber = "", fromCity = "", toCity = "";
                     DateTime depTime = DateTime.MinValue, arrTime = DateTime.MinValue;
                     bool nonRefundable = false;
                     string segmentsJson = "", fareRulesJson = "", travelClassStr = "Economy";
@@ -1657,8 +1933,12 @@ namespace PickNBook.Api.Controllers.Public
                         {
                             segmentsJson = segs.ToString();
                             var firstSeg = segs[0];
-                            if (firstSeg.TryGetProperty("Airline", out var alNode) && alNode.TryGetProperty("AirlineName", out var alNameNode))
-                                airline = alNameNode.ToString() ?? "";
+                            if (firstSeg.TryGetProperty("Airline", out var alNode))
+                            {
+                                airlineCode = alNode.TryGetProperty("AirlineCode", out var alCodeNode) ? (alCodeNode.GetString() ?? "") : "";
+                                var rawName = alNode.TryGetProperty("AirlineName", out var alNameNode) ? (alNameNode.GetString() ?? "") : "";
+                                airline = _airlineLookup.GetAirlineName(airlineCode, rawName);
+                            }
                             if (firstSeg.TryGetProperty("Airline", out var alNode2) && alNode2.TryGetProperty("FlightNumber", out var fnNode))
                                 flightNumber = fnNode.ToString() ?? "";
                             
@@ -1700,7 +1980,7 @@ namespace PickNBook.Api.Controllers.Public
                     var pricingBreakdown = await _pricingService.CalculatePricingAsync(
                         supplierBaseFare: baseFare,
                         supplierTaxAmount: tax,
-                        airlineCode: airline,
+                        airlineCode: !string.IsNullOrEmpty(airlineCode) ? airlineCode : airline,
                         airlineName: airline,
                         origin: fromCity,
                         destination: toCity,
@@ -1875,28 +2155,89 @@ namespace PickNBook.Api.Controllers.Public
 
         [Authorize]
         [HttpPost("SendChangeRequest")]
+        [HttpPost("/v8/SendChangeRequest")]
+        [HttpPost("/api/flight/v8/SendChangeRequest")]
+        [HttpPost("/api/flight/srdv/SendChangeRequest")]
         public async Task<IActionResult> SendChangeRequest([FromBody] FlightSendChangeProxyRequestDto proxyRequest)
         {
+            if (proxyRequest == null)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." });
+            }
+
+            if (proxyRequest.BookingId <= 0)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive BookingId is required." });
+            }
+
+            if (proxyRequest.RequestType < 0 || proxyRequest.RequestType > 3)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "RequestType must be 0, 1, 2, or 3." });
+            }
+
+            if (proxyRequest.CancellationType < 0 || proxyRequest.CancellationType > 3)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "CancellationType must be 0, 1, 2, or 3." });
+            }
+
+            if (string.IsNullOrWhiteSpace(proxyRequest.PNR) || proxyRequest.PNR.Trim().Length > 50)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "PNR is required and must be between 1 and 50 characters." });
+            }
+
+            if (string.IsNullOrWhiteSpace(proxyRequest.Remarks) || proxyRequest.Remarks.Trim().Length > 2000)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Remarks is required and must be between 1 and 2000 characters." });
+            }
+
+            if (proxyRequest.Sectors == null || !proxyRequest.Sectors.Any())
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "At least one sector is required." });
+            }
+
+            foreach (var s in proxyRequest.Sectors)
+            {
+                if (string.IsNullOrWhiteSpace(s.Origin) || s.Origin.Trim().Length != 3 ||
+                    string.IsNullOrWhiteSpace(s.Destination) || s.Destination.Trim().Length != 3)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Sector Origin and Destination must be 3-character IATA airport codes." });
+                }
+            }
+
+            if (proxyRequest.TicketData == null || !proxyRequest.TicketData.Any())
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "At least one passenger ticket is required in TicketData." });
+            }
+
+            foreach (var t in proxyRequest.TicketData)
+            {
+                if (string.IsNullOrWhiteSpace(t.FirstName) || t.FirstName.Trim().Length > 100 ||
+                    string.IsNullOrWhiteSpace(t.LastName) || t.LastName.Trim().Length > 100)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Passenger FirstName and LastName are required (1-100 characters)." });
+                }
+            }
+
             try
             {
                 var request = new SendChangeRequestDto
                 {
-                    EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                     BookingId = proxyRequest.BookingId,
                     RequestType = proxyRequest.RequestType,
                     CancellationType = proxyRequest.CancellationType,
-                    Remarks = proxyRequest.Remarks,
+                    Remarks = proxyRequest.Remarks.Trim(),
+                    ClientRefId = string.IsNullOrWhiteSpace(proxyRequest.ClientRefId) ? string.Empty : proxyRequest.ClientRefId.Trim(),
                     Sectors = proxyRequest.Sectors,
-                    SrdvType = proxyRequest.SrdvType,
-                    SrdvIndex = proxyRequest.SrdvIndex,
                     TicketData = proxyRequest.TicketData,
-                    PNR = proxyRequest.PNR
+                    PNR = proxyRequest.PNR.Trim()
                 };
+
                 var responseRaw = await _srdvFlightService.SendChangeRequestRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
                 var root = doc.RootElement;
                 
-                var reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.SrdvBookingId == request.BookingId);
+                var bookingIdStr = proxyRequest.BookingId.ToString();
+                var reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.SrdvBookingId == bookingIdStr);
                 if (reservation == null && !string.IsNullOrEmpty(request.PNR))
                 {
                     reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.Pnr == request.PNR);
@@ -1956,9 +2297,7 @@ namespace PickNBook.Api.Controllers.Public
                             CustomerRefundStatus = "Pending",
                             AdminRefundStatus = "Pending",
                             SrdvChangeRequestId = changeRequestId,
-                            SrdvBookingId = request.BookingId,
-                            SrdvType = request.SrdvType,
-                            SrdvIndex = request.SrdvIndex,
+                            SrdvBookingId = bookingIdStr,
                             CustomerRemark = request.Remarks,
                             IsPartialCancellation = isPartial,
                             CancelledSectorsJson = reqSectors,
@@ -1995,65 +2334,49 @@ namespace PickNBook.Api.Controllers.Public
 
                 return Ok(doc.RootElement.Clone());
             }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "HTTP exception during SendChangeRequest for BookingId {BookingId}, PNR {PNR}", proxyRequest?.BookingId, proxyRequest?.PNR);
+                return StatusCode(502, new { ErrorCode = 502, ErrorMessage = "Supplier communication error.", Details = ex.Message });
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error sending change request.");
-                return StatusCode(500, new { message = "Failed to send change request.", error = ex.Message });
+                _logger.LogError(ex, "Error sending change request for BookingId {BookingId}, PNR {PNR}", proxyRequest?.BookingId, proxyRequest?.PNR);
+                return StatusCode(500, new { ErrorCode = 500, ErrorMessage = "Failed to send change request.", Details = ex.Message });
             }
         }
 
         [Authorize]
         [HttpPost("GetCancelStatus")]
+        [HttpPost("/v8/GetCancelStatus")]
+        [HttpPost("/api/flight/v8/GetCancelStatus")]
+        [HttpPost("/api/flight/srdv/GetCancelStatus")]
         public async Task<IActionResult> GetCancelStatus([FromBody] FlightGetCancelStatusProxyRequestDto proxyRequest)
         {
+            if (proxyRequest == null || proxyRequest.ChangeRequestId <= 0)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive ChangeRequestId is required." });
+            }
+
             try
             {
                 var request = new GetCancelStatusRequestDto
                 {
-                    EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                     ChangeRequestId = proxyRequest.ChangeRequestId
                 };
                 var responseRaw = await _srdvFlightService.GetCancelStatusRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
-                var root = doc.RootElement;
-                
-                var isSuccess = false;
-                JsonElement resp = root;
-                if (root.TryGetProperty("Response", out var responseNode))
-                {
-                    resp = responseNode;
-                }
-                else if (root.TryGetProperty("Results", out var resultsNode))
-                {
-                    resp = resultsNode;
-                }
-                
-                if (resp.TryGetProperty("ResponseStatus", out var status))
-                {
-                    if (status.ValueKind == JsonValueKind.Number && status.GetInt32() == 1) isSuccess = true;
-                    if (status.ValueKind == JsonValueKind.String && status.ToString() == "1") isSuccess = true;
-                }
-                
-                var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
-                if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCode))
-                {
-                    if (errCode.ValueKind == JsonValueKind.Number && errCode.GetInt32() == 0) isSuccess = true;
-                    if (errCode.ValueKind == JsonValueKind.String && (errCode.ToString() == "0" || errCode.ToString() == "")) isSuccess = true;
-                    if (errCode.ValueKind == JsonValueKind.Null) isSuccess = true;
-                }
-                if (isSuccess)
-                {
-                    // Note: Actual refund calculation, persistence, and Cashfree refund initiation
-                    // are now strictly handled by the FulfillmentRecoveryWorker to ensure idempotency
-                    // and a single source of truth for financial ledgers.
-                }
-
                 return Ok(doc.RootElement.Clone());
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "HTTP exception during GetCancelStatus for ChangeRequestId {ChangeRequestId}", proxyRequest?.ChangeRequestId);
+                return StatusCode(502, new { ErrorCode = 502, ErrorMessage = "Supplier communication error.", Details = ex.Message });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting cancel status.");
-                return StatusCode(500, new { message = "Failed to get cancel status.", error = ex.Message });
+                _logger.LogError(ex, "Error getting cancel status for ChangeRequestId {ChangeRequestId}", proxyRequest?.ChangeRequestId);
+                return StatusCode(500, new { ErrorCode = 500, ErrorMessage = "Failed to get cancel status.", Details = ex.Message });
             }
         }
 
