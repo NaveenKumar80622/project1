@@ -128,6 +128,22 @@ public class DepositRequestsController : AdminApiController
                 };
                 _context.AgentLedgerEntries.Add(ledger);
             }
+            else if (deposit.User.Role == AuthRoles.User)
+            {
+                var tx = new PickNBook.Api.Models.Entities.WalletTransaction
+                {
+                    UserId = deposit.User.Id,
+                    TransactionType = "Credit",
+                    Amount = deposit.Amount,
+                    RunningBalance = deposit.User.WalletBalance,
+                    ReferenceType = "DepositApproved",
+                    RefCode = deposit.Id.ToString(),
+                    Description = $"Bank deposit approved by Admin. Method: {deposit.Type}",
+                    Status = "Completed",
+                    CreatedAt = DateTime.UtcNow
+                };
+                _context.WalletTransactions.Add(tx);
+            }
         }
         // If transitioning away from Approved, deduct if it was previously approved
         else if (!string.Equals(newStatus, "Approved", StringComparison.OrdinalIgnoreCase) && 
@@ -151,6 +167,22 @@ public class DepositRequestsController : AdminApiController
                     CreatedAtUtc = DateTime.UtcNow
                 };
                 _context.AgentLedgerEntries.Add(ledger);
+            }
+            else if (deposit.User.Role == AuthRoles.User)
+            {
+                var tx = new PickNBook.Api.Models.Entities.WalletTransaction
+                {
+                    UserId = deposit.User.Id,
+                    TransactionType = "Debit",
+                    Amount = deposit.Amount,
+                    RunningBalance = deposit.User.WalletBalance,
+                    ReferenceType = "DepositReversal",
+                    RefCode = deposit.Id.ToString(),
+                    Description = $"Deposit reversal by Admin. Status changed from Approved to {newStatus}",
+                    Status = "Completed",
+                    CreatedAt = DateTime.UtcNow
+                };
+                _context.WalletTransactions.Add(tx);
             }
         }
 

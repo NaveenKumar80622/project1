@@ -27,6 +27,8 @@ namespace PickNBook.Api.Controllers
         private readonly IMemoryCache _cache;
         private readonly PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator _refundCalculator;
         private readonly PickNBook.Api.Services.Interfaces.ICashfreeService _cashfreeService;
+        private readonly PickNBook.Api.Services.Interfaces.IWalletService _userWalletService;
+        private readonly PickNBook.Api.Services.Interfaces.IRefundRouterService _refundRouter;
 
         public HotelsController(
             IHotelService hotelService,
@@ -36,7 +38,9 @@ namespace PickNBook.Api.Controllers
             ITicketEmailService ticketEmailService,
             IMemoryCache cache,
             PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator refundCalculator,
-            PickNBook.Api.Services.Interfaces.ICashfreeService cashfreeService)
+            PickNBook.Api.Services.Interfaces.ICashfreeService cashfreeService,
+            PickNBook.Api.Services.Interfaces.IWalletService userWalletService,
+            PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter)
         {
             _hotelService = hotelService;
             _dbContext = dbContext;
@@ -46,6 +50,8 @@ namespace PickNBook.Api.Controllers
             _cache = cache;
             _refundCalculator = refundCalculator;
             _cashfreeService = cashfreeService;
+            _userWalletService = userWalletService;
+            _refundRouter = refundRouter;
         }
 
         // =====================================
@@ -744,6 +750,59 @@ namespace PickNBook.Api.Controllers
                         _logger.LogError(dbEx, "Failed to persist HotelReservation record to database during BookRoom: {Msg}", dbEx.Message);
                     }
                 }
+                else
+                {
+                    try
+                    {
+                        var failBookingRef = $"HT-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}";
+                        var firstRoom = request.HotelRoomsDetails?.FirstOrDefault();
+                        string hotelCode = !string.IsNullOrWhiteSpace(request.HotelCode) ? request.HotelCode : (blockedPrice?.HotelCode ?? "HOTEL");
+                        string hotelName = !string.IsNullOrWhiteSpace(request.HotelName) ? request.HotelName : hotelCode;
+
+                        var failedReservation = new HotelReservation
+                        {
+                            BookingReference = failBookingRef,
+                            UserId = userId,
+                            HotelId = hotelCode.Length > 80 ? hotelCode.Substring(0, 80) : hotelCode,
+                            HotelName = hotelName,
+                            OfferId = resultIndex,
+                            CityCode = string.Empty,
+                            TraceId = traceIdStr,
+                            GuestName = string.IsNullOrWhiteSpace(guestName) ? "Guest User" : guestName,
+                            GuestEmail = string.IsNullOrWhiteSpace(guestEmail) ? "guest@example.com" : guestEmail,
+                            GuestPhone = string.IsNullOrWhiteSpace(guestPhone) ? "9876543210" : guestPhone,
+                            GuestNationality = "IN",
+                            RoomTypeName = request.RoomTypeName ?? firstRoom?.RoomTypeName,
+                            RatePlanCode = request.RatePlanCode ?? firstRoom?.RatePlanCode,
+                            RoomTypeCode = request.RoomTypeCode ?? firstRoom?.RoomTypeCode ?? "1",
+                            CheckInDate = DateTime.TryParse(request.CheckInDate, out var checkIn) ? checkIn : DateTime.UtcNow.AddDays(1),
+                            CheckOutDate = DateTime.TryParse(request.CheckOutDate, out var checkOut) ? checkOut : DateTime.UtcNow.AddDays(5),
+                            Adults = request.HotelRoomsDetails?.Sum(r => r.HotelPassenger?.Count(p => p.PaxType == "1") ?? 1) ?? 1,
+                            Children = request.HotelRoomsDetails?.Sum(r => r.ChildCount) ?? 0,
+                            Rooms = request.HotelRoomsDetails?.Count ?? 1,
+                            Price = markedUpPrice,
+                            SrdvOfferedPrice = quotedPrice,
+                            MarkupAmount = agentMarkupAmount,
+                            TotalPrice = Math.Max(0m, b2cFinalFare),
+                            B2CFinalFare = Math.Max(0m, b2cFinalFare),
+                            CouponCode = request.CouponCode,
+                            CouponDiscount = couponDiscount,
+                            BasePrice = Math.Max(0m, quotedPrice - (blockedPrice?.Tax ?? 0m)),
+                            SrdvGstAmount = blockedPrice?.Tax ?? 0m,
+                            Status = "Failed",
+                            CancellationReason = bRes?.Error?.ErrorMessage ?? "Hotel supplier rejected booking",
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        };
+
+                        _dbContext.HotelReservations.Add(failedReservation);
+                        await _dbContext.SaveChangesAsync();
+                    }
+                    catch (Exception dbFailEx)
+                    {
+                        _logger.LogError(dbFailEx, "Failed to persist Failed HotelReservation for TraceId {TraceId}", request.TraceId);
+                    }
+                }
 
                 return Ok(bookRes);
             }
@@ -1315,6 +1374,24 @@ namespace PickNBook.Api.Controllers
                             return BadRequest(new { message = ex.Message });
                         }
                     }
+                    else if (string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) && int.TryParse(userId, out int parsedCustId))
+                    {
+                        try
+                        {
+                            await _userWalletService.DebitAsync(
+                                parsedCustId,
+                                totalPrice,
+                                "HotelBooking",
+                                bookingRef,
+                                $"Hotel Booking - {offerDetails.HotelName} ({offerDetails.CityCode}) - Ref: {bookingRef}"
+                            );
+                        }
+                        catch (Exception ex)
+                        {
+                            await transaction.RollbackAsync();
+                            return BadRequest(new { message = ex.Message });
+                        }
+                    }
 
                     await transaction.CommitAsync();
 
@@ -1421,9 +1498,15 @@ namespace PickNBook.Api.Controllers
         [HttpPost("bookings/{bookingId}/cancel")]
         [Authorize]
         [InjectClientIp]
-        public async Task<IActionResult> Cancel(string bookingId, [FromQuery] string? reason)
+        public async Task<IActionResult> Cancel(
+            string bookingId,
+            [FromQuery] string? reason = null,
+            [FromQuery] string? refundPreference = null,
+            [FromBody] PublicHotelCancelRequestDto? cancelBody = null)
         {
-            _logger.LogInformation("Cancel hotel booking request received: BookingId: {BookingId}, Reason: {Reason}", bookingId, reason);
+            var effectiveReason = !string.IsNullOrWhiteSpace(cancelBody?.Reason) ? cancelBody.Reason : reason;
+            var effectiveRefundPreference = !string.IsNullOrWhiteSpace(cancelBody?.RefundPreference) ? cancelBody.RefundPreference : (refundPreference ?? "ORIGINAL_PAYMENT_METHOD");
+            _logger.LogInformation("Cancel hotel booking request received: BookingId: {BookingId}, Reason: {Reason}, Preference: {Pref}", bookingId, effectiveReason, effectiveRefundPreference);
 
             if (!_currentUserService.IsAuthenticated())
             {
@@ -1549,18 +1632,29 @@ namespace PickNBook.Api.Controllers
                     _dbContext.BookingCancellations.Add(cancellationAudit);
                     await _dbContext.SaveChangesAsync();
 
-                    if (calculatedRefund.FinalCustomerRefundAmount > 0)
+                    if (calculatedRefund.FinalCustomerRefundAmount > 0 && int.TryParse(booking.UserId, out int uId))
                     {
                         var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == booking.UserId && p.BookingReferenceId == booking.Id && p.BookingType == "Hotel");
-                        if (payment != null && payment.CashfreeOrderId != null)
+                        var routeRes = await _refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
                         {
-                            string refundId = $"REF-CANCEL-{booking.Id}-{cancellationAudit.Id}";
-                            await _cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, refundId, "Hotel Cancellation");
-                            cancellationAudit.CashfreeRefundId = refundId;
-                            cancellationAudit.Status = "Initiated";
-                            cancellationAudit.PaymentId = payment.Id;
-                            await _dbContext.SaveChangesAsync();
-                        }
+                            UserId = uId,
+                            BookingType = "Hotel",
+                            BookingReference = booking.BookingReference,
+                            RefundAmount = calculatedRefund.FinalCustomerRefundAmount,
+                            PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                            CashfreeOrderId = payment?.CashfreeOrderId,
+                            RefundPreference = effectiveRefundPreference,
+                            Reason = booking.CancellationReason
+                        });
+
+                        cancellationAudit.RefundPreference = effectiveRefundPreference ?? "OriginalMethod";
+                        cancellationAudit.WalletRefundAmount = routeRes.WalletRefunded;
+                        cancellationAudit.GatewayRefundAmount = routeRes.GatewayRefunded;
+                        cancellationAudit.CashfreeRefundId = routeRes.CashfreeRefundId;
+                        cancellationAudit.Status = routeRes.RefundStatus == "COMPLETED" ? "Completed" : "Initiated";
+                        cancellationAudit.RefundStatus = routeRes.RefundStatus;
+                        if (payment != null) cancellationAudit.PaymentId = payment.Id;
+                        await _dbContext.SaveChangesAsync();
                     }
 
                     await transaction.CommitAsync();

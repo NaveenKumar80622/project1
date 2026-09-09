@@ -28,5 +28,9 @@ namespace PickNBook.Api.Models
         public bool IsPartialCancellation { get; set; }
         public string? CancelledSectorsJson { get; set; }
         public string? CancelledPassengersJson { get; set; }
+
+        public string RefundPreference { get; set; } = "OriginalMethod";
+        public decimal WalletRefundAmount { get; set; } = 0.00m;
+        public decimal GatewayRefundAmount { get; set; } = 0.00m;
     }
 }

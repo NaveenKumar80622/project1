@@ -172,4 +172,52 @@ namespace PickNBook.Api.Models.DTOs
     {
         public long Id { get; set; }
     }
+
+    // User Security Rules DTOs (No HTTP Method)
+    public class AddUserBlockRequestDto
+    {
+        public string UserId { get; set; } = string.Empty;
+        public string BlockType { get; set; } = "TEMPORARY"; // TEMPORARY or PERMANENT
+        public int DurationMinutes { get; set; } = 120;
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class AddUserUrlBlockRequestDto
+    {
+        public string UserId { get; set; } = string.Empty;
+        public string BlockType { get; set; } = "TEMPORARY"; // TEMPORARY or PERMANENT
+        public int DurationMinutes { get; set; } = 120;
+        public string Reason { get; set; } = string.Empty;
+        public System.Collections.Generic.List<string> Urls { get; set; } = new System.Collections.Generic.List<string>();
+    }
+
+    public class UnblockUserRuleDto
+    {
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class ExtendUserRuleDto
+    {
+        public int NewDurationMinutes { get; set; } = 120;
+        public string Reason { get; set; } = string.Empty;
+    }
+
+    public class UserRuleResponseDto
+    {
+        public long Id { get; set; }
+        public string UserId { get; set; } = string.Empty;
+        public string RuleType { get; set; } = string.Empty;
+        public string? Route { get; set; }
+        public string Action { get; set; } = string.Empty;
+        public string Scope { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string Source { get; set; } = string.Empty;
+        public string? Reason { get; set; }
+        public string BlockType { get; set; } = string.Empty;
+        public int? DurationMinutes { get; set; }
+        public System.DateTime StartTime { get; set; }
+        public System.DateTime? ExpiryTime { get; set; }
+        public string? CreatedBy { get; set; }
+        public System.DateTime CreatedAt { get; set; }
+    }
 }

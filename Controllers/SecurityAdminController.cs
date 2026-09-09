@@ -561,5 +561,98 @@ namespace PickNBook.Api.Controllers
             
             return Ok(new { success = true, data = new { locks, counters, logs } });
         }
+
+        // ---- USER SECURITY RULES (User & User-URL Blocking without HTTP Method) ----
+        [HttpGet("user-rules")]
+        public async Task<IActionResult> GetUserRules([FromQuery] string? userId, [FromQuery] string? status, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
+        {
+            try
+            {
+                var rules = await _securityService.GetUserRulesAsync(userId, status, page, pageSize);
+                return Ok(new { success = true, data = rules });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        [HttpPost("user-rules/block")]
+        public async Task<IActionResult> AddUserBlock([FromBody] AddUserBlockRequestDto dto)
+        {
+            try
+            {
+                var adminUser = User?.Identity?.Name ?? "Admin";
+                var result = await _securityService.AddUserBlockAsync(dto, adminUser);
+                return Ok(new { success = true, message = "User block rule created successfully." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        [HttpPost("user-rules/url-block")]
+        public async Task<IActionResult> AddUserUrlBlock([FromBody] AddUserUrlBlockRequestDto dto)
+        {
+            try
+            {
+                var adminUser = User?.Identity?.Name ?? "Admin";
+                var ruleIds = await _securityService.AddUserUrlBlockAsync(dto, adminUser);
+                return Ok(new { success = true, message = $"{ruleIds.Count} URL block rules created successfully.", ruleIds });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        [HttpPost("user-rules/{id}/unblock")]
+        public async Task<IActionResult> UnblockUserRule(long id, [FromBody] UnblockUserRuleDto dto)
+        {
+            try
+            {
+                var adminUser = User?.Identity?.Name ?? "Admin";
+                var success = await _securityService.UnblockUserRuleAsync(id, dto.Reason, adminUser);
+                if (!success) return NotFound(new { success = false, message = "User rule not found." });
+                return Ok(new { success = true, message = "User rule unblocked successfully." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        [HttpPut("user-rules/{id}/extend")]
+        public async Task<IActionResult> ExtendUserRule(long id, [FromBody] ExtendUserRuleDto dto)
+        {
+            try
+            {
+                var adminUser = User?.Identity?.Name ?? "Admin";
+                var success = await _securityService.ExtendUserRuleAsync(id, dto.NewDurationMinutes, dto.Reason, adminUser);
+                if (!success) return NotFound(new { success = false, message = "User rule not found." });
+                return Ok(new { success = true, message = "User rule extended successfully." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        [HttpDelete("user-rules/{id}")]
+        public async Task<IActionResult> DeleteUserRule(long id)
+        {
+            try
+            {
+                var adminUser = User?.Identity?.Name ?? "Admin";
+                var success = await _securityService.DeleteUserRuleAsync(id, adminUser);
+                if (!success) return NotFound(new { success = false, message = "User rule not found." });
+                return Ok(new { success = true, message = "User rule deleted successfully." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
     }
 }

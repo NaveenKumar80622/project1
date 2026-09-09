@@ -28,6 +28,7 @@ namespace PickNBook.Api.Controllers.Public
         private readonly AppDbContext _dbContext;
         private readonly ITicketEmailService _ticketEmailService;
         private readonly IAgentWalletService _walletService;
+        private readonly PickNBook.Api.Services.Interfaces.IWalletService _userWalletService;
         private readonly SrdvSettings _srdvSettings;
         private readonly ILogger<SrdvFlightApiController> _logger;
         private readonly ICancellationRefundCalculator _refundCalculator;
@@ -39,6 +40,7 @@ namespace PickNBook.Api.Controllers.Public
             AppDbContext dbContext,
             ITicketEmailService ticketEmailService,
             IAgentWalletService walletService,
+            PickNBook.Api.Services.Interfaces.IWalletService userWalletService,
             IOptions<SrdvSettings> srdvSettings,
             ICancellationRefundCalculator refundCalculator,
             IAirlineLookupService airlineLookup,
@@ -49,6 +51,7 @@ namespace PickNBook.Api.Controllers.Public
             _dbContext = dbContext;
             _ticketEmailService = ticketEmailService;
             _walletService = walletService;
+            _userWalletService = userWalletService;
             _srdvSettings = srdvSettings.Value;
             _refundCalculator = refundCalculator;
             _airlineLookup = airlineLookup;
@@ -1162,15 +1165,22 @@ namespace PickNBook.Api.Controllers.Public
                         await _dbContext.SaveChangesAsync();
                     }
 
-                    // If agent, deduct wallet
-                    if (int.TryParse(userIdStr, out var agentId) && agentId > 0)
+                    // If agent or user, deduct wallet
+                    if (int.TryParse(userIdStr, out var callerId) && callerId > 0)
                     {
-                        var user = await _dbContext.Users.FindAsync(agentId);
+                        var user = await _dbContext.Users.FindAsync(callerId);
                         if (user != null && user.Role == AuthRoles.Agent)
                         {
                             if (isSuccess && !isPending && !isPriceChanged && ticketStatusCode == 1)
                             {
-                                await _walletService.DebitWalletForBookingAsync(agentId, totalFare, reservation.BookingReference, "Flight", $"Flight Booking LCC PNR {pnr}");
+                                await _walletService.DebitWalletForBookingAsync(callerId, totalFare, reservation.BookingReference, "Flight", $"Flight Booking LCC PNR {pnr}");
+                            }
+                        }
+                        else if (user != null && user.Role == AuthRoles.User)
+                        {
+                            if (isSuccess && !isPending && !isPriceChanged && ticketStatusCode == 1)
+                            {
+                                await _userWalletService.DebitAsync(callerId, reservation.TotalPriceInr, "FlightBooking", reservation.BookingReference, $"Flight Booking LCC PNR {pnr}");
                             }
                         }
                     }
@@ -1827,14 +1837,21 @@ namespace PickNBook.Api.Controllers.Public
                         await _dbContext.SaveChangesAsync();
 
                         // If agent, deduct wallet
-                        if (int.TryParse(reservation.UserId, out var agentId) && agentId > 0)
+                        if (int.TryParse(reservation.UserId, out var callerId) && callerId > 0)
                         {
-                            var user = await _dbContext.Users.FindAsync(agentId);
+                            var user = await _dbContext.Users.FindAsync(callerId);
                             if (user != null && user.Role == AuthRoles.Agent)
                             {
                                 if (isSuccess && !isPending && !isPriceChanged && ticketStatusCode == 1)
                                 {
-                                    await _walletService.DebitWalletForBookingAsync(agentId, reservation.SupplierTotalFare, reservation.BookingReference, "Flight", $"Flight Booking GDS PNR {pnr}");
+                                    await _walletService.DebitWalletForBookingAsync(callerId, reservation.SupplierTotalFare, reservation.BookingReference, "Flight", $"Flight Booking GDS PNR {pnr}");
+                                }
+                            }
+                            else if (user != null && user.Role == AuthRoles.User)
+                            {
+                                if (isSuccess && !isPending && !isPriceChanged && ticketStatusCode == 1)
+                                {
+                                    await _userWalletService.DebitAsync(callerId, reservation.TotalPriceInr, "FlightBooking", reservation.BookingReference, $"Flight Booking GDS PNR {pnr}");
                                 }
                             }
                         }

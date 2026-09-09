@@ -1,180 +1,187 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models.DTOs;
 
 namespace PickNBook.Api.Services
 {
-    public class BookingHistoryService :   IBookingHistoryService
+    public class BookingHistoryService : IBookingHistoryService
     {
         private readonly AppDbContext _context;
-
-        private static readonly TimeSpan IndiaOffset =
-    TimeSpan.FromHours(5.5);
+        private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
 
         private static DateTime ToIst(DateTime utcDateTime)
         {
-            return DateTime.SpecifyKind(
-                utcDateTime,
-                DateTimeKind.Utc).Add(IndiaOffset);
+            return DateTime.SpecifyKind(utcDateTime, DateTimeKind.Utc).Add(IndiaOffset);
         }
+
         public BookingHistoryService(AppDbContext context)
         {
             _context = context;
+        }
+
+        public static string? ResolveUserHistoryStatus(string? rawStatus)
+        {
+            if (string.IsNullOrWhiteSpace(rawStatus))
+                return null;
+
+            var s = rawStatus.Trim();
+
+            // 1. Confirmed / Completed states
+            if (s.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Booked", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Success", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Confirmed";
+            }
+
+            // 2. Cancelled states
+            if (s.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Cancelled";
+            }
+
+            // 3. Failed states
+            if (s.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Failure", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("PaymentFailed", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("BookingFailed", StringComparison.OrdinalIgnoreCase) ||
+                s.Equals("Aborted", StringComparison.OrdinalIgnoreCase) ||
+                s.StartsWith("Failed_", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Failed";
+            }
+
+            // 4. Non-final intermediate statuses are excluded from user history
+            // (e.g. Pending, Processing, InProgress, Hold, AwaitingConfirmation)
+            return null;
         }
 
         public async Task<List<BookingHistoryDto>> GetBookingHistoryAsync(string userId, string? type = null)
         {
             var result = new List<BookingHistoryDto>();
 
+            // ------------------ BUS BOOKINGS ------------------
             if (string.IsNullOrEmpty(type) || type.Equals("bus", StringComparison.OrdinalIgnoreCase))
             {
                 var busBookings = await _context.BusReservations
                     .Include(x => x.BusBooking)
-                .Where(x => x.UserId == userId)
-                .ToListAsync();
+                    .Where(x => x.UserId == userId)
+                    .ToListAsync();
 
-            foreach (var booking in busBookings)
-            {
-                if (booking.BusBooking == null)
+                foreach (var booking in busBookings)
                 {
-                    continue;
-                }
+                    string? normalizedStatus = ResolveUserHistoryStatus(booking.Status);
+                    if (normalizedStatus == null) continue; // Exclude non-final states
 
-                var journeyDateTime =
-     ToIst(booking.BusBooking.DepartureTime);
-                string status;
-;
-                if (booking.Status == "Cancelled")
-                {
-                    status = "Cancelled";
-                }
-                else if (journeyDateTime >
-          ToIst(DateTime.UtcNow))
-                {
-                    status = "Upcoming";
-                }
-                else
-                {
-                    status = "Past";
-                }
+                    DateTime journeyDateTime = booking.BusBooking != null
+                        ? ToIst(booking.BusBooking.DepartureTime)
+                        : ToIst(booking.BookedAtUtc);
 
-                string note;
-                string ctaLabel;
+                    string fromCity = booking.BusBooking?.FromCity ?? "Bus Journey";
+                    string toCity = booking.BusBooking?.ToCity ?? "Destination";
 
-                switch (status)
-                {
-                    case "Upcoming":
-                        note = "Your journey is coming up soon.";
-                        ctaLabel = "View Ticket";
-                        break;
+                    string note;
+                    string ctaLabel;
 
-                    case "Past":
-                        note = "Extra savings on next booking!";
-                        ctaLabel = "Book Return";
-                        break;
-
-                    case "Cancelled":
-                        note = "Seats on this route are filling fast.";
+                    if (normalizedStatus == "Failed")
+                    {
+                        note = !string.IsNullOrWhiteSpace(booking.CancellationReason)
+                            ? booking.CancellationReason
+                            : "Booking was unsuccessful. Amount has been refunded.";
                         ctaLabel = "Book Again";
-                        break;
+                    }
+                    else if (normalizedStatus == "Cancelled")
+                    {
+                        note = !string.IsNullOrWhiteSpace(booking.CancellationReason)
+                            ? booking.CancellationReason
+                            : "Seats on this route are filling fast.";
+                        ctaLabel = "Book Again";
+                    }
+                    else
+                    {
+                        bool isUpcoming = journeyDateTime > ToIst(DateTime.UtcNow);
+                        note = isUpcoming ? "Your journey is coming up soon." : "Hope you had a great trip!";
+                        ctaLabel = "View Ticket";
+                    }
 
-                    default:
-                        note = "";
-                        ctaLabel = "";
-                        break;
+                    result.Add(new BookingHistoryDto
+                    {
+                        BookingId = booking.Id,
+                        BookingReference = booking.BookingReference,
+                        TripType = "Bus",
+                        From = fromCity,
+                        To = toCity,
+                        Date = journeyDateTime.ToString("ddd, dd MMM yyyy"),
+                        Time = journeyDateTime.ToString("HH:mm"),
+                        Status = normalizedStatus,
+                        Note = note,
+                        CtaLabel = ctaLabel,
+                        OriginalDate = journeyDateTime
+                    });
                 }
-
-                result.Add(new BookingHistoryDto
-                {
-                    BookingId = booking.Id,
-                    BookingReference = booking.BookingReference,
-
-                    TripType = "Bus",
-
-                    From = booking.BusBooking.FromCity,
-                    To = booking.BusBooking.ToCity,
-
-                    Date = journeyDateTime.ToString("ddd, dd MMM yyyy"),
-
-                    Time = journeyDateTime.ToString("HH:mm"),
-
-                    Status = status,
-
-                    Note = note,
-
-                    CtaLabel = ctaLabel,
-
-                    OriginalDate = journeyDateTime
-                });
-            }
             }
 
+            // ------------------ HOTEL BOOKINGS ------------------
             if (string.IsNullOrEmpty(type) || type.Equals("hotel", StringComparison.OrdinalIgnoreCase))
             {
                 var hotelBookings = await _context.HotelReservations
                     .Where(x => x.UserId == userId)
                     .ToListAsync();
 
-            foreach (var booking in hotelBookings)
-            {
-                var checkInDateTimeIst = ToIst(booking.CheckInDate);
-                string status;
-                if (booking.Status == "Cancelled")
+                foreach (var booking in hotelBookings)
                 {
-                    status = "Cancelled";
-                }
-                else if (checkInDateTimeIst > ToIst(DateTime.UtcNow))
-                {
-                    status = "Upcoming";
-                }
-                else
-                {
-                    status = "Past";
-                }
+                    string? normalizedStatus = ResolveUserHistoryStatus(booking.Status);
+                    if (normalizedStatus == null) continue;
 
-                string note;
-                string ctaLabel;
+                    var checkInDateTimeIst = ToIst(booking.CheckInDate);
 
-                switch (status)
-                {
-                    case "Upcoming":
-                        note = "Your hotel stay is coming up soon.";
+                    string note;
+                    string ctaLabel;
+
+                    if (normalizedStatus == "Failed")
+                    {
+                        note = !string.IsNullOrWhiteSpace(booking.CancellationReason)
+                            ? booking.CancellationReason
+                            : "Hotel reservation failed. Amount has been refunded.";
+                        ctaLabel = "Book Again";
+                    }
+                    else if (normalizedStatus == "Cancelled")
+                    {
+                        note = !string.IsNullOrWhiteSpace(booking.CancellationReason)
+                            ? booking.CancellationReason
+                            : "Need a room? Book another hotel.";
+                        ctaLabel = "Book Again";
+                    }
+                    else
+                    {
+                        bool isUpcoming = checkInDateTimeIst > ToIst(DateTime.UtcNow);
+                        note = isUpcoming ? "Your hotel stay is coming up soon." : "Hope you enjoyed your stay!";
                         ctaLabel = "View Booking";
-                        break;
+                    }
 
-                    case "Past":
-                        note = "Hope you enjoyed your stay!";
-                        ctaLabel = "Book Again";
-                        break;
-
-                    case "Cancelled":
-                        note = "Need a room? Book another hotel.";
-                        ctaLabel = "Book Again";
-                        break;
-
-                    default:
-                        note = "";
-                        ctaLabel = "";
-                        break;
+                    result.Add(new BookingHistoryDto
+                    {
+                        BookingId = booking.Id,
+                        BookingReference = booking.BookingReference,
+                        TripType = "Hotel",
+                        From = booking.HotelName,
+                        To = !string.IsNullOrWhiteSpace(booking.CityCode) ? booking.CityCode : "Hotel Stay",
+                        Date = checkInDateTimeIst.ToString("ddd, dd MMM yyyy"),
+                        Time = checkInDateTimeIst.ToString("HH:mm"),
+                        Status = normalizedStatus,
+                        Note = note,
+                        CtaLabel = ctaLabel,
+                        OriginalDate = checkInDateTimeIst
+                    });
                 }
-
-                result.Add(new BookingHistoryDto
-                {
-                    BookingId = booking.Id,
-                    BookingReference = booking.BookingReference,
-                    TripType = "Hotel",
-                    From = booking.HotelName,
-                    To = booking.CityCode,
-                    Date = checkInDateTimeIst.ToString("ddd, dd MMM yyyy"),
-                    Time = checkInDateTimeIst.ToString("HH:mm"),
-                    Status = status,
-                    Note = note,
-                    CtaLabel = ctaLabel,
-                    OriginalDate = checkInDateTimeIst
-                });
-            }
             }
 
+            // ------------------ FLIGHT BOOKINGS ------------------
             if (string.IsNullOrEmpty(type) || type.Equals("flight", StringComparison.OrdinalIgnoreCase))
             {
                 var flightBookings = await _context.FlightReservations
@@ -183,54 +190,33 @@ namespace PickNBook.Api.Services
 
                 foreach (var booking in flightBookings)
                 {
+                    string? normalizedStatus = ResolveUserHistoryStatus(booking.Status);
+                    if (normalizedStatus == null) continue;
+
                     var departureDateTimeIst = ToIst(booking.DepartureTime);
-                    string status;
-                    if (booking.Status.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
-                    {
-                        status = "Cancelled";
-                    }
-                    else if (booking.Status.Contains("Pending", StringComparison.OrdinalIgnoreCase))
-                    {
-                        status = "Pending";
-                    }
-                    else if (departureDateTimeIst > ToIst(DateTime.UtcNow))
-                    {
-                        status = "Upcoming";
-                    }
-                    else
-                    {
-                        status = "Past";
-                    }
 
                     string note;
                     string ctaLabel;
 
-                    switch (status)
+                    if (normalizedStatus == "Failed")
                     {
-                        case "Pending":
-                            note = "Your flight is currently pending confirmation.";
-                            ctaLabel = "View Details";
-                            break;
-
-                        case "Upcoming":
-                            note = "Your flight is coming up soon.";
-                            ctaLabel = "View Ticket";
-                            break;
-
-                        case "Past":
-                            note = "Hope you enjoyed your flight!";
-                            ctaLabel = "Book Return";
-                            break;
-
-                        case "Cancelled":
-                            note = "Need to fly? Book another flight.";
-                            ctaLabel = "Book Again";
-                            break;
-
-                        default:
-                            note = "";
-                            ctaLabel = "";
-                            break;
+                        note = !string.IsNullOrWhiteSpace(booking.CancellationReason)
+                            ? booking.CancellationReason
+                            : "Flight booking failed. Amount has been refunded.";
+                        ctaLabel = "Book Again";
+                    }
+                    else if (normalizedStatus == "Cancelled")
+                    {
+                        note = !string.IsNullOrWhiteSpace(booking.CancellationReason)
+                            ? booking.CancellationReason
+                            : "Need to fly? Book another flight.";
+                        ctaLabel = "Book Again";
+                    }
+                    else
+                    {
+                        bool isUpcoming = departureDateTimeIst > ToIst(DateTime.UtcNow);
+                        note = isUpcoming ? "Your flight is coming up soon." : "Hope you enjoyed your flight!";
+                        ctaLabel = "View Ticket";
                     }
 
                     result.Add(new BookingHistoryDto
@@ -242,7 +228,7 @@ namespace PickNBook.Api.Services
                         To = booking.ToCity,
                         Date = departureDateTimeIst.ToString("ddd, dd MMM yyyy"),
                         Time = departureDateTimeIst.ToString("HH:mm"),
-                        Status = status,
+                        Status = normalizedStatus,
                         Note = note,
                         CtaLabel = ctaLabel,
                         OriginalDate = departureDateTimeIst

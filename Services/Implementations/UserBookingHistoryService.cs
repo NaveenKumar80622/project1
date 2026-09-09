@@ -21,14 +21,14 @@ namespace PickNBook.Api.Services
             {
                 var flightExists = await flightQuery.AnyAsync(r => 
                     (r.UserId == userId || r.PassengerPhone == cleanPhone) && 
-                    r.Status != "Cancelled");
+                    r.Status != "Cancelled" && r.Status != "Failed" && !r.Status.StartsWith("Failed_"));
                 if (flightExists) return true;
             }
             else
             {
                 var flightExists = await flightQuery.AnyAsync(r => 
                     r.UserId == userId && 
-                    r.Status != "Cancelled");
+                    r.Status != "Cancelled" && r.Status != "Failed" && !r.Status.StartsWith("Failed_"));
                 if (flightExists) return true;
             }
 
@@ -38,14 +38,14 @@ namespace PickNBook.Api.Services
             {
                 var busExists = await busQuery.AnyAsync(r => 
                     (r.UserId == userId || r.PassengerPhone == cleanPhone) && 
-                    r.Status != "Cancelled");
+                    r.Status != "Cancelled" && r.Status != "Failed" && !r.Status.StartsWith("Failed_"));
                 return busExists;
             }
             else
             {
                 var busExists = await busQuery.AnyAsync(r => 
                     r.UserId == userId && 
-                    r.Status != "Cancelled");
+                    r.Status != "Cancelled" && r.Status != "Failed" && !r.Status.StartsWith("Failed_"));
                 return busExists;
             }
         }

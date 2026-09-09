@@ -472,6 +472,26 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     payment.FulfillmentStatus = "Failed_SupplierError";
                     payment.FailureReason = srdvErrorMessage ?? "Supplier responded with false success flag.";
+
+                    // Persist BusBooking & BusReservation as Failed before refunding
+                    try
+                    {
+                        _dbContext.BusBookings.Add(bus);
+                        await _dbContext.SaveChangesAsync();
+
+                        reservation.BusBookingId = bus.Id;
+                        reservation.Status = "Failed";
+                        reservation.CancellationReason = payment.FailureReason;
+                        reservation.BookedAtUtc = DateTime.UtcNow;
+                        _dbContext.BusReservations.Add(reservation);
+                        await _dbContext.SaveChangesAsync();
+
+                        payment.BookingReferenceId = reservation.Id;
+                    }
+                    catch (Exception pEx)
+                    {
+                        _logger.LogError(pEx, "Failed to persist Failed BusReservation for Payment {PaymentId}", payment.Id);
+                    }
                     
                     await _notificationService.EnqueueAsync(
                         eventType: "BusBookingFailed",
@@ -787,6 +807,22 @@ namespace PickNBook.Api.Services.Implementations
                     payment.FulfillmentStatus = "Failed_SupplierError";
                     payment.FailureReason = srdvErrorMessage ?? "Supplier rejected booking.";
 
+                    // Persist HotelReservation as Failed before refunding
+                    try
+                    {
+                        reservation.Status = "Failed";
+                        reservation.CancellationReason = payment.FailureReason;
+                        reservation.UpdatedAt = DateTime.UtcNow;
+                        _dbContext.HotelReservations.Add(reservation);
+                        await _dbContext.SaveChangesAsync();
+
+                        payment.BookingReferenceId = reservation.Id;
+                    }
+                    catch (Exception pEx)
+                    {
+                        _logger.LogError(pEx, "Failed to persist Failed HotelReservation for Payment {PaymentId}", payment.Id);
+                    }
+
                     await _notificationService.EnqueueAsync(
                         eventType: "HotelBookingFailed",
                         channel: "Email",
@@ -1068,7 +1104,50 @@ namespace PickNBook.Api.Services.Implementations
                 if (!isLcc) 
                 {
                     var failedRes = await _dbContext.FlightReservations.FirstOrDefaultAsync(r => r.Pnr == pnr || r.SrdvBookingId == bookingId);
-                    if (failedRes != null) failedRes.Status = "Failed";
+                    if (failedRes != null)
+                    {
+                        failedRes.Status = "Failed";
+                        failedRes.CancellationReason = payment.FailureReason;
+                        payment.BookingReferenceId = failedRes.Id;
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        var failedLccRes = new FlightReservation
+                        {
+                            BookingReference = $"FL-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}",
+                            Pnr = pnr ?? "",
+                            UserId = payment.UserId,
+                            Status = "Failed",
+                            CancellationReason = payment.FailureReason,
+                            BookedAtUtc = DateTime.UtcNow,
+                            TraceId = traceId,
+                            ResultIndex = resultIndex,
+                            TotalPriceInr = payment.FinalPayableAmount,
+                            CustomerFareInr = payment.FinalPayableAmount,
+                            NetFareInr = payment.OriginalAmount,
+                            MarkupAmount = payment.MarkupAmount,
+                            CouponDiscount = payment.DiscountAmount,
+                            PassengerName = requestPassengers?.FirstOrDefault()?.FirstName ?? "",
+                            PassengerEmail = requestPassengers?.FirstOrDefault()?.Email ?? "",
+                            PassengerPhone = requestPassengers?.FirstOrDefault()?.ContactNo ?? "",
+                            Adults = requestPassengers?.Count(p => p.PaxType == 1) ?? 1,
+                            Children = requestPassengers?.Count(p => p.PaxType == 2) ?? 0,
+                            Infants = requestPassengers?.Count(p => p.PaxType == 3) ?? 0,
+                            SeatsBooked = requestPassengers?.Count(p => p.PaxType == 1 || p.PaxType == 2) ?? 1,
+                            SrdvBookingId = bookingId,
+                            IsLcc = true
+                        };
+                        _dbContext.FlightReservations.Add(failedLccRes);
+                        await _dbContext.SaveChangesAsync();
+                        payment.BookingReferenceId = failedLccRes.Id;
+                    }
+                    catch (Exception pEx)
+                    {
+                        _logger.LogError(pEx, "Failed to persist Failed FlightReservation for Payment {PaymentId}", payment.Id);
+                    }
                 }
 
                 await _notificationService.EnqueueAsync(

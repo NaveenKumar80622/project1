@@ -13,7 +13,11 @@ namespace PickNBook.Api.Controllers
 {
     [ApiController]
     [Route("api/admin/flight")]
-    public class AdminFlightController(AppDbContext dbContext, ISrdvFlightService srdvFlightService, ILogger<AdminFlightController> logger) : AdminApiController
+    public class AdminFlightController(
+        AppDbContext dbContext,
+        ISrdvFlightService srdvFlightService,
+        ILogger<AdminFlightController> logger,
+        PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter) : AdminApiController
     {
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static readonly string[] AllowedDiscountTypes = ["Percentage", "Fixed"];
@@ -62,6 +66,19 @@ namespace PickNBook.Api.Controllers
                 .Take(limit)
                 .ToListAsync();
 
+            var bookingIds = bookings.Select(b => b.Id).ToList();
+
+            var payments = await dbContext.Payments
+                .AsNoTracking()
+                .Where(p => p.BookingType == "Flight" && p.BookingReferenceId != null && bookingIds.Contains(p.BookingReferenceId.Value))
+                .ToListAsync();
+
+            var paymentsByBooking = payments
+                .GroupBy(p => p.BookingReferenceId!.Value)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(p => p.CreatedAt).FirstOrDefault());
+
             var response = bookings
                 .Where(x => true)
                 .Select(x =>
@@ -72,6 +89,8 @@ namespace PickNBook.Api.Controllers
                     var customerFare = x.CustomerFareInr > 0 ? x.CustomerFareInr : x.TotalPriceInr;
                     var netFare = x.NetFareInr > 0 ? x.NetFareInr : x.TotalPriceInr;
                     var profit = customerFare - netFare;
+                    
+                    paymentsByBooking.TryGetValue(x.Id, out var payment);
 
                     return new
                     {
@@ -88,6 +107,9 @@ namespace PickNBook.Api.Controllers
                         CustomerFareInr = customerFare,
                         NetFareInr = netFare,
                         ProfitInr = profit,
+                        PaymentStatus = payment?.Status,
+                        RefundStatus = payment?.RefundStatus,
+                        FulfillmentStatus = payment?.FulfillmentStatus,
                         BookedBy = x.UserId,
                         TravelClass = x.TravelClass
                     };
@@ -688,6 +710,33 @@ namespace PickNBook.Api.Controllers
             row.SupplierRemark = request.SupplierRemark;
             row.CustomerRemark = request.CustomerRemark;
             row.AdminRemark = request.AdminRemark;
+
+            // When admin approves and marks cancellation status "Completed", route refund
+            if (string.Equals(row.CancellationStatus, "Completed", StringComparison.OrdinalIgnoreCase) &&
+                row.CustomerRefundAmountInr > 0 &&
+                !string.Equals(row.CustomerRefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase))
+            {
+                var reservation = await dbContext.FlightReservations.FirstOrDefaultAsync(r => r.Id == row.FlightReservationId);
+                if (reservation != null && int.TryParse(reservation.UserId, out int uId))
+                {
+                    var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                    var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
+                    {
+                        UserId = uId,
+                        BookingType = "Flight",
+                        BookingReference = reservation.BookingReference,
+                        RefundAmount = row.CustomerRefundAmountInr,
+                        PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                        CashfreeOrderId = payment?.CashfreeOrderId,
+                        RefundPreference = row.RefundPreference,
+                        Reason = row.CustomerRemark ?? row.AdminRemark
+                    });
+
+                    row.WalletRefundAmount = routeRes.WalletRefunded;
+                    row.GatewayRefundAmount = routeRes.GatewayRefunded;
+                    row.CustomerRefundStatus = routeRes.RefundStatus == "COMPLETED" ? "Refunded" : "Processing";
+                }
+            }
 
             await dbContext.SaveChangesAsync();
             return Ok(row);

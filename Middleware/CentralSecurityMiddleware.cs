@@ -40,6 +40,46 @@ namespace PickNBook.Api.Middleware
             // 3. Identify Account from User context (Assumes JWT auth has populated User.Identity)
             string accountId = context.User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
 
+            // 3b. Check User Security Rules (Full User Block & User URL Block - NO HTTP Method)
+            if (!string.IsNullOrEmpty(accountId))
+            {
+                try
+                {
+                    var now = DateTime.UtcNow;
+
+                    // 3b.1 Check Full User Block
+                    var isUserBlocked = await dbContext.SecurityUserRules
+                        .AnyAsync(r => r.UserId == accountId &&
+                                       r.RuleType == "USER" &&
+                                       r.Status == "ACTIVE" &&
+                                       (r.BlockType == "PERMANENT" || (r.ExpiryTime.HasValue && r.ExpiryTime.Value > now)));
+
+                    if (isUserBlocked)
+                    {
+                        await ReturnBlockedResponse(context, "USER_BLOCKED", "Your account has been blocked by administrator.");
+                        return;
+                    }
+
+                    // 3b.2 Check User URL Block (Strictly UserId + Route, NO HTTP Method)
+                    var isUrlBlocked = await dbContext.SecurityUserRules
+                        .AnyAsync(r => r.UserId == accountId &&
+                                       r.RuleType == "URL" &&
+                                       r.Route == path &&
+                                       r.Status == "ACTIVE" &&
+                                       (r.BlockType == "PERMANENT" || (r.ExpiryTime.HasValue && r.ExpiryTime.Value > now)));
+
+                    if (isUrlBlocked)
+                    {
+                        await ReturnBlockedResponse(context, "URL_BLOCKED", "Access to this specific resource is restricted.");
+                        return;
+                    }
+                }
+                catch
+                {
+                    // Ignore DB schema errors if table is being created
+                }
+            }
+
             // 4, 5, 6. Check IP Restrictions using Cache
             var ipCacheKey = $"SecurityIpRules_{ipAddress}_{scope}";
             if (!memoryCache.TryGetValue(ipCacheKey, out IpSecurityStatus ipStatus))

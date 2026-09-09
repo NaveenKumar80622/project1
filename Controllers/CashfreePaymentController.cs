@@ -274,7 +274,7 @@ namespace PickNBook.Api.Controllers
                                 if (isCouponValid && coupon.IsFirstTimeUserOnly)
                                 {
                                     var hasPriorBookings = await _dbContext.HotelReservations
-                                        .AnyAsync(r => r.UserId == userIdStr && r.Status != "Cancelled");
+                                        .AnyAsync(r => r.UserId == userIdStr && r.Status != "Cancelled" && r.Status != "Failed" && !r.Status.StartsWith("Failed_"));
                                     if (hasPriorBookings)
                                         isCouponValid = false;
                                 }

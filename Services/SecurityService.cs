@@ -304,5 +304,177 @@ namespace PickNBook.Api.Services
             await _context.SaveChangesAsync();
             return true;
         }
+
+        public async Task<bool> AddUserBlockAsync(PickNBook.Api.Models.DTOs.AddUserBlockRequestDto dto, string createdBy)
+        {
+            DateTime startTime = DateTime.UtcNow;
+            DateTime? expiryTime = dto.BlockType == "PERMANENT" ? null : startTime.AddMinutes(dto.DurationMinutes);
+
+            var rule = new SecurityUserRule
+            {
+                UserId = dto.UserId,
+                RuleType = "USER",
+                Route = null,
+                Action = "BLOCK",
+                Scope = "USER",
+                Status = "ACTIVE",
+                Source = "MANUAL",
+                Reason = dto.Reason,
+                BlockType = dto.BlockType,
+                DurationMinutes = dto.DurationMinutes,
+                StartTime = startTime,
+                ExpiryTime = expiryTime,
+                CreatedBy = createdBy,
+                CreatedAt = startTime
+            };
+
+            _context.SecurityUserRules.Add(rule);
+            await _context.SaveChangesAsync();
+
+            await LogAuditAsync("USER_BLOCKED", "USER_BLOCK", "SUCCESS", "127.0.0.1", dto.UserId, null, null, dto.Reason);
+            return true;
+        }
+
+        public async Task<System.Collections.Generic.List<long>> AddUserUrlBlockAsync(PickNBook.Api.Models.DTOs.AddUserUrlBlockRequestDto dto, string createdBy)
+        {
+            var createdIds = new System.Collections.Generic.List<long>();
+            DateTime startTime = DateTime.UtcNow;
+            DateTime? expiryTime = dto.BlockType == "PERMANENT" ? null : startTime.AddMinutes(dto.DurationMinutes);
+
+            foreach (var rawUrl in dto.Urls)
+            {
+                if (string.IsNullOrWhiteSpace(rawUrl)) continue;
+                string route = rawUrl.Trim().ToLower();
+
+                var rule = new SecurityUserRule
+                {
+                    UserId = dto.UserId,
+                    RuleType = "URL",
+                    Route = route,
+                    Action = "BLOCK",
+                    Scope = "USER",
+                    Status = "ACTIVE",
+                    Source = "MANUAL",
+                    Reason = dto.Reason,
+                    BlockType = dto.BlockType,
+                    DurationMinutes = dto.DurationMinutes,
+                    StartTime = startTime,
+                    ExpiryTime = expiryTime,
+                    CreatedBy = createdBy,
+                    CreatedAt = startTime
+                };
+
+                _context.SecurityUserRules.Add(rule);
+                await _context.SaveChangesAsync();
+                createdIds.Add(rule.Id);
+            }
+
+            await LogAuditAsync("USER_URL_BLOCKED", "URL_BLOCK", "SUCCESS", "127.0.0.1", dto.UserId, null, null, $"Blocked {createdIds.Count} URLs: {dto.Reason}");
+            return createdIds;
+        }
+
+        public async Task<bool> UnblockUserRuleAsync(long ruleId, string reason, string unblockedBy)
+        {
+            var rule = await _context.SecurityUserRules.FindAsync(ruleId);
+            if (rule == null) return false;
+
+            rule.Status = "UNBLOCKED";
+            await _context.SaveChangesAsync();
+
+            await LogAuditAsync("USER_RULE_UNBLOCKED", "UNBLOCK", "SUCCESS", "127.0.0.1", rule.UserId, null, null, $"Rule #{ruleId} unblocked: {reason}");
+            return true;
+        }
+
+        public async Task<bool> ExtendUserRuleAsync(long ruleId, int newDurationMinutes, string reason, string updatedBy)
+        {
+            var rule = await _context.SecurityUserRules.FindAsync(ruleId);
+            if (rule == null) return false;
+
+            rule.DurationMinutes = (rule.DurationMinutes ?? 0) + newDurationMinutes;
+            rule.ExpiryTime = (rule.ExpiryTime ?? DateTime.UtcNow).AddMinutes(newDurationMinutes);
+            rule.Status = "ACTIVE";
+            await _context.SaveChangesAsync();
+
+            await LogAuditAsync("USER_RULE_EXTENDED", "EXTEND", "SUCCESS", "127.0.0.1", rule.UserId, null, null, $"Rule #{ruleId} extended by {newDurationMinutes} mins: {reason}");
+            return true;
+        }
+
+        public async Task<bool> DeleteUserRuleAsync(long ruleId, string deletedBy)
+        {
+            var rule = await _context.SecurityUserRules.FindAsync(ruleId);
+            if (rule == null) return false;
+
+            _context.SecurityUserRules.Remove(rule);
+            await _context.SaveChangesAsync();
+
+            await LogAuditAsync("USER_RULE_DELETED", "DELETE", "SUCCESS", "127.0.0.1", rule.UserId, null, null, $"Rule #{ruleId} deleted by {deletedBy}");
+            return true;
+        }
+
+        public async Task<System.Collections.Generic.List<PickNBook.Api.Models.DTOs.UserRuleResponseDto>> GetUserRulesAsync(string? userId, string? status, int page = 1, int pageSize = 20)
+        {
+            var query = _context.SecurityUserRules.AsQueryable();
+
+            if (!string.IsNullOrEmpty(userId))
+            {
+                query = query.Where(r => r.UserId == userId);
+            }
+
+            if (!string.IsNullOrEmpty(status))
+            {
+                query = query.Where(r => r.Status == status);
+            }
+
+            return await query
+                .OrderByDescending(r => r.CreatedAt)
+                .Skip((page - 1) * pageSize)
+                .Take(pageSize)
+                .Select(r => new PickNBook.Api.Models.DTOs.UserRuleResponseDto
+                {
+                    Id = r.Id,
+                    UserId = r.UserId,
+                    RuleType = r.RuleType,
+                    Route = r.Route,
+                    Action = r.Action,
+                    Scope = r.Scope,
+                    Status = r.Status,
+                    Source = r.Source,
+                    Reason = r.Reason,
+                    BlockType = r.BlockType,
+                    DurationMinutes = r.DurationMinutes,
+                    StartTime = r.StartTime,
+                    ExpiryTime = r.ExpiryTime,
+                    CreatedBy = r.CreatedBy,
+                    CreatedAt = r.CreatedAt
+                })
+                .ToListAsync();
+        }
+
+        public async Task<bool> IsUserBlockedAsync(string userId)
+        {
+            if (string.IsNullOrEmpty(userId)) return false;
+
+            var now = DateTime.UtcNow;
+            return await _context.SecurityUserRules
+                .AnyAsync(r => r.UserId == userId &&
+                               r.RuleType == "USER" &&
+                               r.Status == "ACTIVE" &&
+                               (r.BlockType == "PERMANENT" || (r.ExpiryTime.HasValue && r.ExpiryTime.Value > now)));
+        }
+
+        public async Task<bool> IsUserUrlBlockedAsync(string userId, string route)
+        {
+            if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(route)) return false;
+
+            var normalizedRoute = route.Trim().ToLower();
+            var now = DateTime.UtcNow;
+
+            return await _context.SecurityUserRules
+                .AnyAsync(r => r.UserId == userId &&
+                               r.RuleType == "URL" &&
+                               r.Route == normalizedRoute &&
+                               r.Status == "ACTIVE" &&
+                               (r.BlockType == "PERMANENT" || (r.ExpiryTime.HasValue && r.ExpiryTime.Value > now)));
+        }
     }
 }

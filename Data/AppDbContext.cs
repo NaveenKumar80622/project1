@@ -88,6 +88,7 @@ namespace PickNBook.Api.Data
         public DbSet<HotelPricingSetting> HotelPricingSettings => Set<HotelPricingSetting>();
         public DbSet<Testimonial> Testimonials => Set<Testimonial>();
         public DbSet<TestimonialCategory> TestimonialCategories => Set<TestimonialCategory>();
+        public DbSet<TestimonialSetting> TestimonialSettings => Set<TestimonialSetting>();
         public DbSet<HotelCoupon> HotelCoupons => Set<HotelCoupon>();
         public DbSet<HotelCouponUsage> HotelCouponUsages => Set<HotelCouponUsage>();
         public DbSet<HotelSearchLog> HotelSearchLogs => Set<HotelSearchLog>();
@@ -117,6 +118,7 @@ namespace PickNBook.Api.Data
         public DbSet<SecurityAccountLock> SecurityAccountLocks => Set<SecurityAccountLock>();
         public DbSet<SecurityApiRule> SecurityApiRules => Set<SecurityApiRule>();
         public DbSet<SecurityB2bWalletConfig> SecurityB2bWalletConfigs => Set<SecurityB2bWalletConfig>();
+        public DbSet<SecurityUserRule> SecurityUserRules => Set<SecurityUserRule>();
 
         // Email Management System DbSets
         public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
@@ -135,6 +137,10 @@ namespace PickNBook.Api.Data
         public DbSet<NotificationTemplate> NotificationTemplates => Set<NotificationTemplate>();
         public DbSet<NotificationOutbox> NotificationOutbox => Set<NotificationOutbox>();
         public DbSet<NotificationLog> NotificationLogs => Set<NotificationLog>();
+
+        // Customer Wallet and Passkeys
+        public DbSet<WalletTransaction> WalletTransactions => Set<WalletTransaction>();
+        public DbSet<UserPasskey> UserPasskeys => Set<UserPasskey>();
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -1392,6 +1398,34 @@ namespace PickNBook.Api.Data
                 entity.Property(x => x.AirlineCode).HasMaxLength(2).IsRequired();
                 entity.Property(x => x.AirlineName).HasMaxLength(200).IsRequired();
                 entity.HasIndex(x => x.AirlineName);
+            });
+
+            // =============================
+            // WALLET & PASSKEY CONFIG
+            // =============================
+            modelBuilder.Entity<WalletTransaction>(entity =>
+            {
+                entity.ToTable("wallet_transactions");
+                entity.HasKey(x => x.Id);
+                entity.HasIndex(x => x.UserId);
+                entity.HasIndex(x => new { x.RefCode, x.ReferenceType });
+                entity.HasIndex(x => x.TransactionType);
+                entity.HasOne(x => x.User)
+                    .WithMany()
+                    .HasForeignKey(x => x.UserId)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
+
+            modelBuilder.Entity<UserPasskey>(entity =>
+            {
+                entity.ToTable("UserPasskeys");
+                entity.HasKey(x => x.Id);
+                entity.HasIndex(x => x.CredentialId).IsUnique();
+                entity.HasIndex(x => x.UserId);
+                entity.HasOne(x => x.User)
+                    .WithMany()
+                    .HasForeignKey(x => x.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
         }
     }

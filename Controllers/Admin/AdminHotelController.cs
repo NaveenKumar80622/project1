@@ -75,34 +75,55 @@ public class AdminHotelController : AdminApiController
                 })
                 .ToListAsync();
 
-            var list = queryResult.Select(b => new
+            var bookingIds = queryResult.Select(b => b.Id).ToList();
+
+            var payments = await _context.Payments
+                .AsNoTracking()
+                .Where(p => p.BookingType == "Hotel" && p.BookingReferenceId != null && bookingIds.Contains(p.BookingReferenceId.Value))
+                .ToListAsync();
+
+            var paymentsByBooking = payments
+                .GroupBy(p => p.BookingReferenceId!.Value)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(p => p.CreatedAt).FirstOrDefault());
+
+            var list = queryResult.Select(b => 
             {
-                BookingId = b.Id,
-                BookingReference = b.BookingReference ?? "",
-                ProviderBookingId = b.ProviderBookingId ?? "",
-                ConfirmationNo = b.ConfirmationNo ?? "",
-                InvoiceNumber = b.InvoiceNumber ?? "",
-                LastCancellationDate = b.LastCancellationDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
-                SrdvOfferedPrice = b.SrdvOfferedPrice,
-                SrdvGstAmount = b.SrdvGstAmount,
-                HotelId = b.HotelId ?? "",
-                HotelName = b.HotelName ?? "",
-                GuestName = b.GuestName ?? "",
-                GuestEmail = b.GuestEmail ?? "",
-                GuestPhone = b.GuestPhone ?? "",
-                CheckInDate = b.CheckInDate != DateTime.MinValue ? b.CheckInDate.ToString("yyyy-MM-dd") : "",
-                CheckOutDate = b.CheckOutDate != DateTime.MinValue ? b.CheckOutDate.ToString("yyyy-MM-dd") : "",
-                Adults = b.Adults,
-                Children = b.Children,
-                TotalGuests = b.Adults + b.Children,
-                ChildAges = new int[0],
-                Rooms = b.Rooms,
-                TotalPrice = b.TotalPrice,
-                TotalPaid = b.TotalPrice,
-                Currency = b.Currency ?? "INR",
-                Status = b.Status ?? "Confirmed",
-                CreatedAt = DateTime.SpecifyKind(b.CreatedAt, DateTimeKind.Utc),
-                BookedAt = b.CreatedAt != DateTime.MinValue ? b.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ss") : ""
+                paymentsByBooking.TryGetValue(b.Id, out var payment);
+
+                return new
+                {
+                    BookingId = b.Id,
+                    BookingReference = b.BookingReference ?? "",
+                    ProviderBookingId = b.ProviderBookingId ?? "",
+                    ConfirmationNo = b.ConfirmationNo ?? "",
+                    InvoiceNumber = b.InvoiceNumber ?? "",
+                    LastCancellationDate = b.LastCancellationDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                    SrdvOfferedPrice = b.SrdvOfferedPrice,
+                    SrdvGstAmount = b.SrdvGstAmount,
+                    HotelId = b.HotelId ?? "",
+                    HotelName = b.HotelName ?? "",
+                    GuestName = b.GuestName ?? "",
+                    GuestEmail = b.GuestEmail ?? "",
+                    GuestPhone = b.GuestPhone ?? "",
+                    CheckInDate = b.CheckInDate != DateTime.MinValue ? b.CheckInDate.ToString("yyyy-MM-dd") : "",
+                    CheckOutDate = b.CheckOutDate != DateTime.MinValue ? b.CheckOutDate.ToString("yyyy-MM-dd") : "",
+                    Adults = b.Adults,
+                    Children = b.Children,
+                    TotalGuests = b.Adults + b.Children,
+                    ChildAges = new int[0],
+                    Rooms = b.Rooms,
+                    TotalPrice = b.TotalPrice,
+                    TotalPaid = b.TotalPrice,
+                    Currency = b.Currency ?? "INR",
+                    Status = b.Status ?? "Confirmed",
+                    PaymentStatus = payment?.Status,
+                    RefundStatus = payment?.RefundStatus,
+                    FulfillmentStatus = payment?.FulfillmentStatus,
+                    CreatedAt = DateTime.SpecifyKind(b.CreatedAt, DateTimeKind.Utc),
+                    BookedAt = b.CreatedAt != DateTime.MinValue ? b.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ss") : ""
+                };
             }).ToList();
 
             return Ok(list);

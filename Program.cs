@@ -184,6 +184,10 @@ builder.Services.AddScoped<IFlightPromotionEngine, FlightPromotionEngine>();
 builder.Services.AddScoped<IFlightPricingService, FlightPricingService>();
 builder.Services.AddScoped<IUserBookingHistoryService, UserBookingHistoryService>();
 builder.Services.AddScoped<IAgentWalletService, AgentWalletService>();
+builder.Services.AddScoped<IWalletService, WalletService>();
+builder.Services.AddScoped<IRefundRouterService, RefundRouterService>();
+builder.Services.AddScoped<IPasskeyService, PasskeyService>();
+builder.Services.AddFido2(builder.Configuration.GetSection("Fido2"));
 // JWT Service
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IAboutUsService, AboutUsService>();

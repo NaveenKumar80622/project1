@@ -42,6 +42,7 @@ public class User
     public string Status { get; set; } = "Active"; // Active, Inactive
     public string WalletStatus { get; set; } = "Active"; // Active, Inactive
     public decimal WalletBalance { get; set; } = 0.00m;
+    public int PicknbookCoins { get; set; } = 0;
     public string? AltMobile { get; set; }
     public string Gender { get; set; } = "Male";
     public string Currency { get; set; } = "INR";

@@ -1204,6 +1204,17 @@ namespace PickNBook.Api.Controllers
                     x => x.Key,
                     x => (IReadOnlyList<BusReservationPassenger>)x.ToList());
 
+            var payments = await dbContext.Payments
+                .AsNoTracking()
+                .Where(p => p.BookingType == "Bus" && p.BookingReferenceId != null && bookingIds.Contains(p.BookingReferenceId.Value))
+                .ToListAsync();
+
+            var paymentsByBooking = payments
+                .GroupBy(p => p.BookingReferenceId!.Value)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(p => p.CreatedAt).FirstOrDefault());
+
             var response = bookings
                 .Where(x => x.BusBooking is not null)
                 .Select(x =>
@@ -1216,11 +1227,17 @@ namespace PickNBook.Api.Controllers
                             Array.Empty<BusReservationPassenger>();
                     }
 
+                    paymentsByBooking.TryGetValue(x.Id, out var payment);
+
                     return new
                     {
                         x.Id,
                         x.BookingReference,
                         x.Status,
+
+                        PaymentStatus = payment?.Status,
+                        RefundStatus = payment?.RefundStatus,
+                        FulfillmentStatus = payment?.FulfillmentStatus,
 
                         PassengerName = x.PassengerName,
                         PassengerPhone = x.PassengerPhone,

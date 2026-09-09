@@ -28,6 +28,8 @@ namespace PickNBook.Api.Controllers
     IMemoryCache cache,
     PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator refundCalculator,
     PickNBook.Api.Services.Interfaces.ICashfreeService cashfreeService,
+    PickNBook.Api.Services.Interfaces.IWalletService walletService,
+    PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter,
     BusCityCacheService busCityCacheService,
     ILogger<BusBookingsController> logger) : BaseApiController
     {
@@ -1992,6 +1994,18 @@ namespace PickNBook.Api.Controllers
                                 throw new BusBookingException(7030, "Insufficient agent wallet balance.");
                             }
                         }
+                        else if (string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) && int.TryParse(userId, out int parsedUserId))
+                        {
+                            var customerUser = await dbContext.Users.FirstOrDefaultAsync(x => x.Id == parsedUserId);
+                            if (customerUser == null || customerUser.WalletBalance < reservation.TotalPriceInr)
+                            {
+                                throw new BusBookingException(7030, "Insufficient wallet balance.");
+                            }
+                            if (!string.Equals(customerUser.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
+                            {
+                                throw new BusBookingException(7031, "User wallet is not active.");
+                            }
+                        }
 
                         reservation.FinancialStatus = "DEDUCT_PENDING";
                         await dbContext.SaveChangesAsync();
@@ -2253,6 +2267,26 @@ namespace PickNBook.Api.Controllers
                     {
                         logger.LogError(wEx, "Wallet debit failed after confirmed supplier booking {BookingRef}", reservation.BookingReference);
                         // DO NOT mark supplier booking FAILED - it is already confirmed on provider!
+                        reservation.FinancialStatus = "DEBIT_FAILED_MANUAL_RECOVERY";
+                    }
+                    await dbContext.SaveChangesAsync();
+                }
+                else if (string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) && int.TryParse(userId, out int parsedCustId))
+                {
+                    try
+                    {
+                        await walletService.DebitAsync(
+                            parsedCustId,
+                            reservation.TotalPriceInr,
+                            "BusBooking",
+                            reservation.BookingReference,
+                            $"Bus Booking - {bus.FromCity} to {bus.ToCity} ({bus.OperatorName}) - Ref: {reservation.BookingReference}"
+                        );
+                        reservation.FinancialStatus = "DEDUCTED";
+                    }
+                    catch (Exception wEx)
+                    {
+                        logger.LogError(wEx, "Customer wallet debit failed after confirmed supplier booking {BookingRef}", reservation.BookingReference);
                         reservation.FinancialStatus = "DEBIT_FAILED_MANUAL_RECOVERY";
                     }
                     await dbContext.SaveChangesAsync();
@@ -2524,8 +2558,14 @@ namespace PickNBook.Api.Controllers
 
 
         [HttpPost("bookings/{bookingId}/cancel")]
-        public async Task<IActionResult> CancelBusBooking(int bookingId, [FromQuery] string? reason)
+        public async Task<IActionResult> CancelBusBooking(
+            int bookingId,
+            [FromQuery] string? reason = null,
+            [FromQuery] string? refundPreference = null,
+            [FromBody] BusCancelRequestDto? cancelBody = null)
         {
+            var effectiveReason = !string.IsNullOrWhiteSpace(cancelBody?.Reason) ? cancelBody.Reason : reason;
+            var effectiveRefundPreference = !string.IsNullOrWhiteSpace(cancelBody?.RefundPreference) ? cancelBody.RefundPreference : (refundPreference ?? "ORIGINAL_PAYMENT_METHOD");
             if (!currentUserService.IsAuthenticated())
             {
                 return Unauthorized("Please login to continue booking.");
@@ -2789,8 +2829,31 @@ namespace PickNBook.Api.Controllers
                         TraceId = cancelTraceId,
                         ProviderCancelId = v9Result?.CancelId,
                         SupplierCancelId = v9Result?.SupplierCancelId,
-                        SeatNamesJson = JsonSerializer.Serialize(seatNumbers)
+                        SeatNamesJson = JsonSerializer.Serialize(seatNumbers),
+                        RefundPreference = effectiveRefundPreference
                     };
+
+                    if (cancellationConfirmed && calculatedRefund.FinalCustomerRefundAmount > 0 && int.TryParse(curBooking.UserId, out int uId))
+                    {
+                        var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == curBooking.UserId && p.BookingReferenceId == curBooking.Id && p.BookingType == "Bus");
+                        var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
+                        {
+                            UserId = uId,
+                            BookingType = "Bus",
+                            BookingReference = curBooking.BookingReference,
+                            RefundAmount = calculatedRefund.FinalCustomerRefundAmount,
+                            PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                            CashfreeOrderId = payment?.CashfreeOrderId,
+                            RefundPreference = effectiveRefundPreference,
+                            Reason = curBooking.CancellationReason
+                        });
+
+                        cancellationAudit.WalletRefundAmount = routeRes.WalletRefunded;
+                        cancellationAudit.GatewayRefundAmount = routeRes.GatewayRefunded;
+                        cancellationAudit.CashfreeRefundId = routeRes.CashfreeRefundId;
+                        cancellationAudit.RefundStatus = routeRes.RefundStatus;
+                    }
+
                     dbContext.BookingCancellations.Add(cancellationAudit);
                     await dbContext.SaveChangesAsync();
                     await transaction.CommitAsync();

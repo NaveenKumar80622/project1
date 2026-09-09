@@ -75,6 +75,17 @@ namespace PickNBook.Api.Services
                 await securityService.LogAuditAsync("ACCOUNT_LOCK_EXPIRED", "Auto-expire Account Lock", "Success", "", userId: lck.AccountId.ToString(), reason: "Lock duration elapsed");
             }
 
+            // Job 2b: Auto-Expire Security User Rules (User & URL Blocks)
+            var expiredUserRules = await dbContext.SecurityUserRules
+                .Where(r => r.BlockType == "TEMPORARY" && r.Status == "ACTIVE" && r.ExpiryTime <= now)
+                .ToListAsync();
+
+            foreach (var rule in expiredUserRules)
+            {
+                rule.Status = "EXPIRED";
+                await securityService.LogAuditAsync("USER_RULE_EXPIRED", "Auto-expire User Rule", "SUCCESS", "127.0.0.1", userId: rule.UserId, reason: $"User rule #{rule.Id} expired after duration elapsed");
+            }
+
             // Job 4: Daily Counter Reset (Assuming we reset at midnight UTC)
             // Or we just rely on `ResetAt` or time-based sliding windows.
             // Since limits have `TimePeriodValue`, a true sliding window is complex. 

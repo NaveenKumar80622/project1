@@ -10,31 +10,25 @@ using System.Threading.Tasks;
 namespace PickNBook.Api.Controllers.Admin
 {
     [ApiController]
-    [Route("api/admin/bus-search-logs")]
+    [Route("api/admin/flight-search-logs")]
     [Authorize(Roles = AuthRoles.Admin)]
-    public class AdminBusSearchLogsController : ControllerBase
+    public class AdminFlightSearchLogsController : ControllerBase
     {
-        private readonly AppDbContext dbContext;
+        private readonly AppDbContext _dbContext;
 
-        public AdminBusSearchLogsController(AppDbContext dbContext)
+        public AdminFlightSearchLogsController(AppDbContext dbContext)
         {
-            this.dbContext = dbContext;
+            _dbContext = dbContext;
         }
 
         [HttpGet]
-        [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-        public async Task<IActionResult> GetBusSearchLogs([FromQuery] int limit = 100)
+        public async Task<IActionResult> GetFlightSearchLogs([FromQuery] int limit = 100)
         {
-            if (limit <= 0 || limit > 500) limit = 100; // Hard cap
+            if (limit <= 0 || limit > 500) limit = 100;
 
-            Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
-            Response.Headers["Pragma"] = "no-cache";
-            Response.Headers["Expires"] = "0";
-
-            var logs = await dbContext.BusSearchLogs
+            var logs = await _dbContext.FlightSearchLogs
                 .AsNoTracking()
                 .OrderByDescending(x => x.SearchedAtUtc)
-                .ThenByDescending(x => x.Id)
                 .Take(limit)
                 .Select(x => new
                 {
@@ -44,7 +38,14 @@ namespace PickNBook.Api.Controllers.Admin
                     x.IsGuest,
                     x.FromCity,
                     x.ToCity,
-                    x.JourneyDate,
+                    x.DepartDate,
+                    x.ReturnDate,
+                    x.Adults,
+                    x.Children,
+                    x.Infants,
+                    x.TripType,
+                    x.TraceId,
+                    x.EndUserIp,
                     SearchedAtUtc = DateTime.SpecifyKind(x.SearchedAtUtc, DateTimeKind.Utc),
                     SearchedAtIst = DateTime.SpecifyKind(x.SearchedAtUtc, DateTimeKind.Utc).AddHours(5.5)
                 })
