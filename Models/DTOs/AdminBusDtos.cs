@@ -4,6 +4,7 @@ namespace PickNBook.Api.Models.DTOs;
 
 public class BusCouponRequestDto
 {
+    public string Type { get; set; } = "bus"; // "bus", "hotel", "flight"
     public string PromotionCategory { get; set; } = "Coupon"; // "Coupon" or "Offer"
     public string? Title { get; set; }
     public string? Description { get; set; }
@@ -26,7 +27,7 @@ public class BusCouponRequestDto
 
 public class CreateBusCouponConditionDto
 {
-    public string ConditionType { get; set; } = string.Empty;
+    public string ConditionType { get; set; } = "DayOfWeek";
     public string ConditionOperator { get; set; } = "Equals";
     public string Value1 { get; set; } = string.Empty;
     public string? Value2 { get; set; }
@@ -34,11 +35,12 @@ public class CreateBusCouponConditionDto
 
 public class UpdateBusCouponConditionDto
 {
-    public string ConditionType { get; set; } = string.Empty;
+    public string ConditionType { get; set; } = "DayOfWeek";
     public string ConditionOperator { get; set; } = "Equals";
     public string Value1 { get; set; } = string.Empty;
     public string? Value2 { get; set; }
 }
+
 
 public class BusConvenienceFeeRequestDto
 {

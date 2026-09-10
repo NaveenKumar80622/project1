@@ -70,6 +70,8 @@ public class ValidateHotelCouponRequestDto
     [Required]
     [Range(0.01, 10000000.00)]
     public decimal TotalAmount { get; set; }
+
+    public string? CheckInDate { get; set; }
 }
 
 public class ValidateHotelCouponResponseDto

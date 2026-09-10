@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace PickNBook.Api.Models;
 
@@ -19,4 +20,7 @@ public class HotelCoupon
     public bool IsFirstTimeUserOnly { get; set; } = false;
     public DateTime EntryDateUtc { get; set; } = DateTime.UtcNow;
     public string? Remark { get; set; }
+
+    public ICollection<HotelCouponCondition> Conditions { get; set; } = new List<HotelCouponCondition>();
 }
+

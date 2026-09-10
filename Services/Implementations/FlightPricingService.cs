@@ -101,78 +101,21 @@ namespace PickNBook.Api.Services
             decimal totalMarkup = markupAmount + agentMarkupAmount;
             decimal fareAfterMarkup = supplierTotalFare + totalMarkup;
 
-            // 4. Find and apply the best auto promotion
-            FlightPromotion? bestAutoPromo = null;
+            // 4. Promotions are deactivated - pricing mirrors Bus model (coupon only)
             decimal autoPromotionDiscount = 0m;
-            
-            FlightPromotion? manualPromo = null;
             decimal manualPromotionDiscount = 0m;
+            decimal fareAfterAutoPromo = fareAfterMarkup;
 
-            if (!isAgent)
-            {
-                var autoPromotionContext = new FlightPromotionEvaluationContext
-                {
-                    AirlineCode = airlineCode,
-                    AirlineName = airlineName,
-                    Origin = origin,
-                    Destination = destination,
-                    DepartureDate = departureDate,
-                    TravelClass = travelClass,
-                    TripType = tripType,
-                    BaseFare = fareAfterMarkup,
-                    PassengerCount = passengerCount,
-                    UserId = userId,
-                    SelectedPromotionId = null // Force Auto Flow
-                };
-
-                bestAutoPromo = await _promotionEngine.GetBestPromotionAsync(autoPromotionContext);
-                if (bestAutoPromo != null)
-                {
-                    autoPromotionDiscount = await _promotionEngine.CalculatePromotionDiscountAsync(bestAutoPromo, fareAfterMarkup);
-                }
-            }
-
-            decimal fareAfterAutoPromo = fareAfterMarkup - autoPromotionDiscount;
-
-            // 5. Apply manual coupon discount
+            // 5. Apply coupon discount with DayOfWeek condition
             var (couponDiscount, couponId, appliedCouponCode) = await CalculateCouponDiscountAsync(
                 couponCode,
                 fareAfterAutoPromo,
                 userId,
-                isAgent);
+                isAgent,
+                departureDate);
 
-            decimal fareAfterCoupon = fareAfterAutoPromo - couponDiscount;
-
-            // 6. Apply manual promotion discount ONLY if coupon was not applied
-            if (!isAgent && couponDiscount == 0 && selectedPromotionId.HasValue)
-            {
-                var manualPromotionContext = new FlightPromotionEvaluationContext
-                {
-                    AirlineCode = airlineCode,
-                    AirlineName = airlineName,
-                    Origin = origin,
-                    Destination = destination,
-                    DepartureDate = departureDate,
-                    TravelClass = travelClass,
-                    TripType = tripType,
-                    BaseFare = fareAfterCoupon,
-                    PassengerCount = passengerCount,
-                    UserId = userId,
-                    SelectedPromotionId = selectedPromotionId
-                };
-
-                manualPromo = await _promotionEngine.GetBestPromotionAsync(manualPromotionContext);
-                if (manualPromo != null)
-                {
-                    manualPromotionDiscount = await _promotionEngine.CalculatePromotionDiscountAsync(manualPromo, fareAfterCoupon);
-                }
-            }
-
-            decimal fareAfterManualPromo = fareAfterCoupon - manualPromotionDiscount;
-
-            // 7. Calculate Final Amount
-            decimal finalAmount = fareAfterManualPromo;
-
+            // 6. Calculate Final Amount
+            decimal finalAmount = fareAfterAutoPromo - couponDiscount;
             if (finalAmount < 0)
             {
                 finalAmount = 0;
@@ -184,12 +127,12 @@ namespace PickNBook.Api.Services
                 SupplierTaxAmount = supplierTaxAmount,
                 SupplierTotalFare = supplierTotalFare,
                 MarkupAmount = totalMarkup,
-                PromotionDiscount = autoPromotionDiscount + manualPromotionDiscount,
+                PromotionDiscount = 0m,
                 CouponDiscount = couponDiscount,
                 ConvenienceFee = 0m,
                 FinalAmount = decimal.Round(finalAmount, 2, MidpointRounding.AwayFromZero),
-                PromotionId = manualPromo != null ? manualPromo.Id : bestAutoPromo?.Id,
-                PromotionName = manualPromo != null ? manualPromo.Name : bestAutoPromo?.Name,
+                PromotionId = null,
+                PromotionName = null,
                 CouponId = couponId,
                 CouponCode = appliedCouponCode
             };
@@ -199,7 +142,8 @@ namespace PickNBook.Api.Services
             string? couponCode,
             decimal fareAfterMarkupAndPromo,
             string userId,
-            bool isAgent)
+            bool isAgent,
+            DateTime departureDate)
         {
             if (isAgent || string.IsNullOrWhiteSpace(couponCode))
             {
@@ -211,6 +155,7 @@ namespace PickNBook.Api.Services
             if (!_cachedCoupons.TryGetValue(cleanCode, out var coupon))
             {
                 coupon = await _dbContext.FlightCoupons
+                    .Include(c => c.Conditions)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(c => c.CouponCode == cleanCode && c.Status == "Active");
                 _cachedCoupons[cleanCode] = coupon;
@@ -251,6 +196,16 @@ namespace PickNBook.Api.Services
                 }
                 
                 if (_cachedHasPriorBooking.Value)
+                {
+                    return (0m, null, null);
+                }
+            }
+
+            // DayOfWeek condition check
+            if (coupon.Conditions != null && coupon.Conditions.Any())
+            {
+                var dayCond = coupon.Conditions.FirstOrDefault(c => string.Equals(c.ConditionType, "DayOfWeek", StringComparison.OrdinalIgnoreCase));
+                if (dayCond != null && !BusPromotionEngineService.IsDayOfWeekMatching(departureDate.DayOfWeek, dayCond.ConditionOperator, dayCond.Value1))
                 {
                     return (0m, null, null);
                 }

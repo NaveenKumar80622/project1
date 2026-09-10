@@ -34,7 +34,7 @@ namespace PickNBook.Api.Services
         {
             var offers = await _context.FeaturedOffers
                 .Include(x => x.Conditions)
-                .Where(x => x.IsActive)
+                .Where(x => x.IsActive && x.BookingType.ToLower() != "flight")
                 .OrderBy(x => x.DisplayOrder)
                 .ToListAsync();
 

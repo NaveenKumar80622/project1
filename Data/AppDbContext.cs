@@ -59,6 +59,7 @@ namespace PickNBook.Api.Data
         public DbSet<FlightDiscount> FlightDiscounts => Set<FlightDiscount>();
         public DbSet<FlightRemark> FlightRemarks => Set<FlightRemark>();
         public DbSet<FlightCoupon> FlightCoupons => Set<FlightCoupon>();
+        public DbSet<FlightCouponCondition> FlightCouponConditions => Set<FlightCouponCondition>();
         public DbSet<FlightCouponUsage> FlightCouponUsages => Set<FlightCouponUsage>();
         public DbSet<FlightConvenienceFee> FlightConvenienceFees => Set<FlightConvenienceFee>();
         public DbSet<FlightSearchLog> FlightSearchLogs => Set<FlightSearchLog>();
@@ -90,6 +91,7 @@ namespace PickNBook.Api.Data
         public DbSet<TestimonialCategory> TestimonialCategories => Set<TestimonialCategory>();
         public DbSet<TestimonialSetting> TestimonialSettings => Set<TestimonialSetting>();
         public DbSet<HotelCoupon> HotelCoupons => Set<HotelCoupon>();
+        public DbSet<HotelCouponCondition> HotelCouponConditions => Set<HotelCouponCondition>();
         public DbSet<HotelCouponUsage> HotelCouponUsages => Set<HotelCouponUsage>();
         public DbSet<HotelSearchLog> HotelSearchLogs => Set<HotelSearchLog>();
         public DbSet<HotelInfoCache> HotelInfoCaches => Set<HotelInfoCache>();
@@ -909,6 +911,38 @@ namespace PickNBook.Api.Data
                 entity.HasOne(x => x.Coupon)
                     .WithMany(x => x.Conditions)
                     .HasForeignKey(x => x.BusCouponId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<HotelCouponCondition>(entity =>
+            {
+                entity.ToTable("hotel_coupon_conditions");
+                entity.HasKey(x => x.Id);
+                entity.Property(x => x.ConditionType).HasMaxLength(50).IsRequired();
+                entity.Property(x => x.ConditionOperator).HasMaxLength(20).IsRequired();
+                entity.Property(x => x.Value1).HasMaxLength(255).IsRequired();
+                entity.Property(x => x.Value2).HasMaxLength(255);
+                entity.HasIndex(x => x.HotelCouponId);
+                entity.HasIndex(x => x.ConditionType);
+                entity.HasOne(x => x.Coupon)
+                    .WithMany(x => x.Conditions)
+                    .HasForeignKey(x => x.HotelCouponId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<FlightCouponCondition>(entity =>
+            {
+                entity.ToTable("flight_coupon_conditions");
+                entity.HasKey(x => x.Id);
+                entity.Property(x => x.ConditionType).HasMaxLength(50).IsRequired();
+                entity.Property(x => x.ConditionOperator).HasMaxLength(20).IsRequired();
+                entity.Property(x => x.Value1).HasMaxLength(255).IsRequired();
+                entity.Property(x => x.Value2).HasMaxLength(255);
+                entity.HasIndex(x => x.FlightCouponId);
+                entity.HasIndex(x => x.ConditionType);
+                entity.HasOne(x => x.Coupon)
+                    .WithMany(x => x.Conditions)
+                    .HasForeignKey(x => x.FlightCouponId)
                     .OnDelete(DeleteBehavior.Cascade);
             });
 

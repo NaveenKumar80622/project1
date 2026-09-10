@@ -505,9 +505,100 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("coupons")]
-        public async Task<IActionResult> GetCoupons([FromQuery] string? category = null)
+        public async Task<IActionResult> GetCoupons([FromQuery] string? type = "bus", [FromQuery] string? category = null)
         {
-            var query = dbContext.BusCoupons.AsNoTracking();
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCoupons = await dbContext.HotelCoupons.AsNoTracking()
+                    .Include(x => x.Conditions)
+                    .OrderByDescending(x => x.EntryDateUtc)
+                    .ToListAsync();
+
+                var response = hotelCoupons.Select(x => new
+                {
+                    x.Id,
+                    Type = "hotel",
+                    PromotionCategory = "Coupon",
+                    Title = x.CouponCode,
+                    Description = x.Remark,
+                    x.Value,
+                    x.CouponType,
+                    x.CouponCode,
+                    x.MaxDiscountAmount,
+                    x.StartDate,
+                    x.ExpiryDate,
+                    x.UseLimit,
+                    x.UsedCount,
+                    x.Status,
+                    x.EntryDateUtc,
+                    x.MaxUsagePerUser,
+                    x.MinBookingAmount,
+                    x.IsFirstTimeUserOnly,
+                    x.Remark,
+                    Priority = 0,
+                    IsAutoApply = false,
+                    IsExclusive = true,
+                    Conditions = x.Conditions.Select(c => new
+                    {
+                        c.Id,
+                        c.ConditionType,
+                        c.ConditionOperator,
+                        c.Value1,
+                        c.Value2
+                    })
+                });
+
+                return Ok(response);
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCoupons = await dbContext.FlightCoupons.AsNoTracking()
+                    .Include(x => x.Conditions)
+                    .OrderByDescending(x => x.EntryDateUtc)
+                    .ToListAsync();
+
+                var response = flightCoupons.Select(x => new
+                {
+                    x.Id,
+                    Type = "flight",
+                    PromotionCategory = "Coupon",
+                    Title = x.CouponCode,
+                    Description = x.Remark,
+                    x.Value,
+                    x.CouponType,
+                    x.CouponCode,
+                    MaxDiscountAmount = (decimal?)null,
+                    x.StartDate,
+                    x.ExpiryDate,
+                    x.UseLimit,
+                    x.UsedCount,
+                    x.Status,
+                    x.EntryDateUtc,
+                    MaxUsagePerUser = 1,
+                    MinBookingAmount = 0m,
+                    x.IsFirstTimeUserOnly,
+                    x.Remark,
+                    Priority = 0,
+                    IsAutoApply = false,
+                    IsExclusive = true,
+                    Conditions = x.Conditions.Select(c => new
+                    {
+                        c.Id,
+                        c.ConditionType,
+                        c.ConditionOperator,
+                        c.Value1,
+                        c.Value2
+                    })
+                });
+
+                return Ok(response);
+            }
+
+            // Default: Bus coupons
+            var query = dbContext.BusCoupons.AsNoTracking().Include(x => x.Conditions).AsQueryable();
             if (!string.IsNullOrWhiteSpace(category))
             {
                 query = query.Where(x => x.PromotionCategory == category);
@@ -517,9 +608,10 @@ namespace PickNBook.Api.Controllers
                 .OrderByDescending(x => x.EntryDateUtc)
                 .ToListAsync();
 
-            var response = coupons.Select(x => new
+            var busResponse = coupons.Select(x => new
             {
                 x.Id,
+                Type = "bus",
                 x.PromotionCategory,
                 x.Title,
                 x.Description,
@@ -539,15 +631,47 @@ namespace PickNBook.Api.Controllers
                 x.Remark,
                 x.Priority,
                 x.IsAutoApply,
-                x.IsExclusive
+                x.IsExclusive,
+                Conditions = x.Conditions.Select(c => new
+                {
+                    c.Id,
+                    c.ConditionType,
+                    c.ConditionOperator,
+                    c.Value1,
+                    c.Value2
+                })
             });
 
-            return Ok(response);
+            return Ok(busResponse);
         }
 
         [HttpGet("coupons/{id:int}")]
-        public async Task<IActionResult> GetCouponById(int id)
+        public async Task<IActionResult> GetCouponById(int id, [FromQuery] string? type = "bus")
         {
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCoupon = await dbContext.HotelCoupons
+                    .Include(x => x.Conditions)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == id);
+
+                if (hotelCoupon is null) return NotFound("Hotel coupon not found.");
+                return Ok(hotelCoupon);
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCoupon = await dbContext.FlightCoupons
+                    .Include(x => x.Conditions)
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.Id == id);
+
+                if (flightCoupon is null) return NotFound("Flight coupon not found.");
+                return Ok(flightCoupon);
+            }
+
             var coupon = await dbContext.BusCoupons
                 .Include(x => x.Conditions)
                 .AsNoTracking()
@@ -571,26 +695,82 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(error);
             }
 
-            // Step 2: Normalize coupon code (VERY IMPORTANT)
+            // Step 2: Normalize coupon code
             var normalizedCode = request.CouponCode?.Trim().ToUpperInvariant();
-
             if (string.IsNullOrWhiteSpace(normalizedCode))
             {
                 return BadRequest("Coupon code is required.");
             }
 
-            // Step 3: Check duplicate (API-level protection)
-            var exists = await dbContext.BusCoupons
-                .AnyAsync(x => x.CouponCode == normalizedCode);
+            var serviceType = string.IsNullOrWhiteSpace(request.Type) ? "bus" : request.Type.Trim().ToLowerInvariant();
 
+            if (serviceType == "hotel")
+            {
+                var existsHotel = await dbContext.HotelCoupons.AnyAsync(x => x.CouponCode == normalizedCode);
+                if (existsHotel)
+                {
+                    return BadRequest($"Hotel coupon code '{normalizedCode}' already exists.");
+                }
+
+                var hotelCoupon = new HotelCoupon
+                {
+                    CouponCode = normalizedCode,
+                    CouponType = NormalizeDiscountType(request.CouponType),
+                    Value = request.Value,
+                    MinBookingAmount = request.MinBookingAmount,
+                    MaxDiscountAmount = request.MaxDiscountAmount ?? 0m,
+                    StartDate = request.StartDate,
+                    ExpiryDate = request.ExpiryDate,
+                    UseLimit = request.UseLimit,
+                    UsedCount = 0,
+                    MaxUsagePerUser = request.MaxUsagePerUser,
+                    Status = NormalizeStatus(request.Status),
+                    IsFirstTimeUserOnly = request.IsFirstTimeUserOnly,
+                    EntryDateUtc = DateTime.UtcNow,
+                    Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim()
+                };
+
+                dbContext.HotelCoupons.Add(hotelCoupon);
+                await dbContext.SaveChangesAsync();
+                return CreatedAtAction(nameof(GetCouponById), new { id = hotelCoupon.Id, type = "hotel" }, hotelCoupon);
+            }
+
+            if (serviceType == "flight")
+            {
+                var existsFlight = await dbContext.FlightCoupons.AnyAsync(x => x.CouponCode == normalizedCode);
+                if (existsFlight)
+                {
+                    return BadRequest($"Flight coupon code '{normalizedCode}' already exists.");
+                }
+
+                var flightCoupon = new FlightCoupon
+                {
+                    CouponCode = normalizedCode,
+                    CouponType = NormalizeDiscountType(request.CouponType),
+                    Value = request.Value,
+                    StartDate = request.StartDate,
+                    ExpiryDate = request.ExpiryDate,
+                    UseLimit = request.UseLimit,
+                    UsedCount = 0,
+                    Status = NormalizeStatus(request.Status),
+                    IsFirstTimeUserOnly = request.IsFirstTimeUserOnly,
+                    EntryDateUtc = DateTime.UtcNow,
+                    Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim()
+                };
+
+                dbContext.FlightCoupons.Add(flightCoupon);
+                await dbContext.SaveChangesAsync();
+                return CreatedAtAction(nameof(GetCouponById), new { id = flightCoupon.Id, type = "flight" }, flightCoupon);
+            }
+
+            // Default: Bus coupon
+            var exists = await dbContext.BusCoupons.AnyAsync(x => x.CouponCode == normalizedCode);
             if (exists)
             {
                 return BadRequest($"Coupon code '{normalizedCode}' already exists.");
             }
 
-            // Step 4: Create coupon
             var now = DateTime.UtcNow;
-
             var coupon = new BusCoupon
             {
                 PromotionCategory = string.IsNullOrWhiteSpace(request.PromotionCategory) ? "Coupon" : request.PromotionCategory.Trim(),
@@ -615,7 +795,6 @@ namespace PickNBook.Api.Controllers
                 Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim()
             };
 
-            // Step 5: Save safely
             dbContext.BusCoupons.Add(coupon);
 
             try
@@ -627,44 +806,87 @@ namespace PickNBook.Api.Controllers
                 return BadRequest("Coupon code already exists (duplicate detected at database level).");
             }
 
-            return CreatedAtAction(nameof(GetCouponById), new { id = coupon.Id }, coupon);
+            return CreatedAtAction(nameof(GetCouponById), new { id = coupon.Id, type = "bus" }, coupon);
         }
 
         [HttpPut("coupons/{id:int}")]
-        public async Task<IActionResult> UpdateCoupon(int id, [FromBody] BusCouponRequestDto request)
+        public async Task<IActionResult> UpdateCoupon(int id, [FromBody] BusCouponRequestDto request, [FromQuery] string? type = null)
         {
-            // Step 1: Fetch existing coupon
-            var coupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.Id == id);
-            if (coupon is null)
-            {
-                return NotFound("Coupon not found.");
-            }
-
-            // Step 2: Validate input
             var error = ValidateCouponRequest(request);
             if (error is not null)
             {
                 return BadRequest(error);
             }
 
-            // Step 3: Normalize coupon code
             var normalizedCode = request.CouponCode?.Trim().ToUpperInvariant();
-
             if (string.IsNullOrWhiteSpace(normalizedCode))
             {
                 return BadRequest("Coupon code is required.");
             }
 
-            // Step 4: Check duplicate (exclude current record)
-            var exists = await dbContext.BusCoupons
-                .AnyAsync(x => x.CouponCode == normalizedCode && x.Id != id);
+            var serviceType = string.IsNullOrWhiteSpace(type) ? (string.IsNullOrWhiteSpace(request.Type) ? "bus" : request.Type) : type;
+            serviceType = serviceType.Trim().ToLowerInvariant();
 
+            if (serviceType == "hotel")
+            {
+                var hotelCoupon = await dbContext.HotelCoupons.FirstOrDefaultAsync(x => x.Id == id);
+                if (hotelCoupon is null) return NotFound("Hotel coupon not found.");
+
+                var existsHotel = await dbContext.HotelCoupons.AnyAsync(x => x.CouponCode == normalizedCode && x.Id != id);
+                if (existsHotel) return BadRequest($"Hotel coupon code '{normalizedCode}' already exists.");
+
+                hotelCoupon.CouponCode = normalizedCode;
+                hotelCoupon.CouponType = NormalizeDiscountType(request.CouponType);
+                hotelCoupon.Value = request.Value;
+                hotelCoupon.MinBookingAmount = request.MinBookingAmount;
+                hotelCoupon.MaxDiscountAmount = request.MaxDiscountAmount ?? 0m;
+                hotelCoupon.StartDate = request.StartDate;
+                hotelCoupon.ExpiryDate = request.ExpiryDate;
+                hotelCoupon.UseLimit = request.UseLimit;
+                hotelCoupon.MaxUsagePerUser = request.MaxUsagePerUser;
+                hotelCoupon.Status = NormalizeStatus(request.Status);
+                hotelCoupon.IsFirstTimeUserOnly = request.IsFirstTimeUserOnly;
+                hotelCoupon.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
+
+                await dbContext.SaveChangesAsync();
+                return Ok(hotelCoupon);
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCoupon = await dbContext.FlightCoupons.FirstOrDefaultAsync(x => x.Id == id);
+                if (flightCoupon is null) return NotFound("Flight coupon not found.");
+
+                var existsFlight = await dbContext.FlightCoupons.AnyAsync(x => x.CouponCode == normalizedCode && x.Id != id);
+                if (existsFlight) return BadRequest($"Flight coupon code '{normalizedCode}' already exists.");
+
+                flightCoupon.CouponCode = normalizedCode;
+                flightCoupon.CouponType = NormalizeDiscountType(request.CouponType);
+                flightCoupon.Value = request.Value;
+                flightCoupon.StartDate = request.StartDate;
+                flightCoupon.ExpiryDate = request.ExpiryDate;
+                flightCoupon.UseLimit = request.UseLimit;
+                flightCoupon.Status = NormalizeStatus(request.Status);
+                flightCoupon.IsFirstTimeUserOnly = request.IsFirstTimeUserOnly;
+                flightCoupon.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
+
+                await dbContext.SaveChangesAsync();
+                return Ok(flightCoupon);
+            }
+
+            // Default: Bus coupon
+            var coupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.Id == id);
+            if (coupon is null)
+            {
+                return NotFound("Coupon not found.");
+            }
+
+            var exists = await dbContext.BusCoupons.AnyAsync(x => x.CouponCode == normalizedCode && x.Id != id);
             if (exists)
             {
                 return BadRequest($"Coupon code '{normalizedCode}' already exists.");
             }
 
-            // Step 5: Update fields
             coupon.PromotionCategory = string.IsNullOrWhiteSpace(request.PromotionCategory) ? "Coupon" : request.PromotionCategory.Trim();
             coupon.Title = string.IsNullOrWhiteSpace(request.Title) ? null : request.Title.Trim();
             coupon.Description = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
@@ -684,7 +906,6 @@ namespace PickNBook.Api.Controllers
             coupon.Status = NormalizeStatus(request.Status);
             coupon.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
 
-            // Step 6: Save safely
             try
             {
                 await dbContext.SaveChangesAsync();
@@ -698,45 +919,158 @@ namespace PickNBook.Api.Controllers
         }
 
         // =========================================================================
-        // BUS COUPON CONDITION ENDPOINTS (Authoritative Condition Settings)
+        // COUPON CONDITION ENDPOINTS (Authoritative Condition Settings: DayOfWeek Only)
         // =========================================================================
         [HttpGet("coupons/{couponId:int}/conditions")]
-        public async Task<IActionResult> GetCouponConditions(int couponId)
+        public async Task<IActionResult> GetCouponConditions(int couponId, [FromQuery] string? type = "bus")
         {
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCoupon = await dbContext.HotelCoupons.AsNoTracking().FirstOrDefaultAsync(x => x.Id == couponId);
+                if (hotelCoupon == null) return NotFound("Hotel coupon not found.");
+
+                var conditions = await dbContext.HotelCouponConditions
+                    .AsNoTracking()
+                    .Where(x => x.HotelCouponId == couponId)
+                    .ToListAsync();
+                return Ok(conditions);
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCoupon = await dbContext.FlightCoupons.AsNoTracking().FirstOrDefaultAsync(x => x.Id == couponId);
+                if (flightCoupon == null) return NotFound("Flight coupon not found.");
+
+                var conditions = await dbContext.FlightCouponConditions
+                    .AsNoTracking()
+                    .Where(x => x.FlightCouponId == couponId)
+                    .ToListAsync();
+                return Ok(conditions);
+            }
+
             var coupon = await dbContext.BusCoupons.AsNoTracking().FirstOrDefaultAsync(x => x.Id == couponId);
             if (coupon == null)
             {
                 return NotFound("Coupon not found.");
             }
 
-            var conditions = await dbContext.BusCouponConditions
+            var busConditions = await dbContext.BusCouponConditions
                 .AsNoTracking()
                 .Where(x => x.BusCouponId == couponId)
                 .ToListAsync();
 
-            return Ok(conditions);
+            return Ok(busConditions);
         }
 
         [HttpPost("coupons/{couponId:int}/conditions")]
-        public async Task<IActionResult> CreateCouponCondition(int couponId, [FromBody] CreateBusCouponConditionDto request)
+        public async Task<IActionResult> CreateCouponCondition(int couponId, [FromBody] CreateBusCouponConditionDto request, [FromQuery] string? type = "bus")
         {
-            var coupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.Id == couponId);
-            if (coupon == null)
-            {
-                return NotFound("Coupon not found.");
-            }
-
             if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
             {
                 return BadRequest("ConditionType and Value1 are required.");
             }
 
             var trimmedType = request.ConditionType.Trim();
-            var trimmedVal1 = request.Value1.Trim();
-            var existing = await dbContext.BusCouponConditions
-                .FirstOrDefaultAsync(x => x.BusCouponId == couponId && x.ConditionType == trimmedType);
+            if (!trimmedType.Equals("DayOfWeek", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest("Only 'DayOfWeek' condition type is supported.");
+            }
 
-            // ALL semantics: Unrestricted condition. Remove existing row if present.
+            var trimmedVal1 = request.Value1.Trim();
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCoupon = await dbContext.HotelCoupons.FirstOrDefaultAsync(x => x.Id == couponId);
+                if (hotelCoupon == null) return NotFound("Hotel coupon not found.");
+
+                var existingHotelCond = await dbContext.HotelCouponConditions
+                    .FirstOrDefaultAsync(x => x.HotelCouponId == couponId && x.ConditionType == "DayOfWeek");
+
+                if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (existingHotelCond != null)
+                    {
+                        dbContext.HotelCouponConditions.Remove(existingHotelCond);
+                        await dbContext.SaveChangesAsync();
+                    }
+                    return Ok(new { message = "Condition 'DayOfWeek' set to ALL (unrestricted)." });
+                }
+
+                if (existingHotelCond != null)
+                {
+                    existingHotelCond.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
+                    existingHotelCond.Value1 = trimmedVal1;
+                    existingHotelCond.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
+                    await dbContext.SaveChangesAsync();
+                    return Ok(existingHotelCond);
+                }
+
+                var hotelCond = new HotelCouponCondition
+                {
+                    HotelCouponId = couponId,
+                    ConditionType = "DayOfWeek",
+                    ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim(),
+                    Value1 = trimmedVal1,
+                    Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim()
+                };
+                dbContext.HotelCouponConditions.Add(hotelCond);
+                await dbContext.SaveChangesAsync();
+                return Ok(hotelCond);
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCoupon = await dbContext.FlightCoupons.FirstOrDefaultAsync(x => x.Id == couponId);
+                if (flightCoupon == null) return NotFound("Flight coupon not found.");
+
+                var existingFlightCond = await dbContext.FlightCouponConditions
+                    .FirstOrDefaultAsync(x => x.FlightCouponId == couponId && x.ConditionType == "DayOfWeek");
+
+                if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (existingFlightCond != null)
+                    {
+                        dbContext.FlightCouponConditions.Remove(existingFlightCond);
+                        await dbContext.SaveChangesAsync();
+                    }
+                    return Ok(new { message = "Condition 'DayOfWeek' set to ALL (unrestricted)." });
+                }
+
+                if (existingFlightCond != null)
+                {
+                    existingFlightCond.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
+                    existingFlightCond.Value1 = trimmedVal1;
+                    existingFlightCond.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
+                    await dbContext.SaveChangesAsync();
+                    return Ok(existingFlightCond);
+                }
+
+                var flightCond = new FlightCouponCondition
+                {
+                    FlightCouponId = couponId,
+                    ConditionType = "DayOfWeek",
+                    ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim(),
+                    Value1 = trimmedVal1,
+                    Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim()
+                };
+                dbContext.FlightCouponConditions.Add(flightCond);
+                await dbContext.SaveChangesAsync();
+                return Ok(flightCond);
+            }
+
+            // Default: Bus
+            var coupon = await dbContext.BusCoupons.FirstOrDefaultAsync(x => x.Id == couponId);
+            if (coupon == null)
+            {
+                return NotFound("Coupon not found.");
+            }
+
+            var existing = await dbContext.BusCouponConditions
+                .FirstOrDefaultAsync(x => x.BusCouponId == couponId && x.ConditionType == "DayOfWeek");
+
             if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
             {
                 if (existing != null)
@@ -744,7 +1078,7 @@ namespace PickNBook.Api.Controllers
                     dbContext.BusCouponConditions.Remove(existing);
                     await dbContext.SaveChangesAsync();
                 }
-                return Ok(new { message = $"Condition '{trimmedType}' set to ALL (unrestricted)." });
+                return Ok(new { message = "Condition 'DayOfWeek' set to ALL (unrestricted)." });
             }
 
             if (existing != null)
@@ -759,7 +1093,7 @@ namespace PickNBook.Api.Controllers
             var condition = new BusCouponCondition
             {
                 BusCouponId = couponId,
-                ConditionType = trimmedType,
+                ConditionType = "DayOfWeek",
                 ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim(),
                 Value1 = trimmedVal1,
                 Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim()
@@ -772,29 +1106,73 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPut("coupons/conditions/{conditionId:int}")]
-        public async Task<IActionResult> UpdateCouponCondition(int conditionId, [FromBody] UpdateBusCouponConditionDto request)
+        public async Task<IActionResult> UpdateCouponCondition(int conditionId, [FromBody] UpdateBusCouponConditionDto request, [FromQuery] string? type = "bus")
         {
+            if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
+            {
+                return BadRequest("ConditionType and Value1 are required.");
+            }
+
+            var trimmedType = request.ConditionType.Trim();
+            if (!trimmedType.Equals("DayOfWeek", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest("Only 'DayOfWeek' condition type is supported.");
+            }
+
+            var trimmedVal1 = request.Value1.Trim();
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCond = await dbContext.HotelCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
+                if (hotelCond == null) return NotFound("Coupon condition not found.");
+
+                if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    dbContext.HotelCouponConditions.Remove(hotelCond);
+                    await dbContext.SaveChangesAsync();
+                    return Ok(new { message = "Condition 'DayOfWeek' removed and set to ALL (unrestricted)." });
+                }
+
+                hotelCond.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
+                hotelCond.Value1 = trimmedVal1;
+                hotelCond.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
+                await dbContext.SaveChangesAsync();
+                return Ok(hotelCond);
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCond = await dbContext.FlightCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
+                if (flightCond == null) return NotFound("Coupon condition not found.");
+
+                if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
+                {
+                    dbContext.FlightCouponConditions.Remove(flightCond);
+                    await dbContext.SaveChangesAsync();
+                    return Ok(new { message = "Condition 'DayOfWeek' removed and set to ALL (unrestricted)." });
+                }
+
+                flightCond.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
+                flightCond.Value1 = trimmedVal1;
+                flightCond.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
+                await dbContext.SaveChangesAsync();
+                return Ok(flightCond);
+            }
+
             var condition = await dbContext.BusCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
             if (condition == null)
             {
                 return NotFound("Coupon condition not found.");
             }
 
-            if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
-            {
-                return BadRequest("ConditionType and Value1 are required.");
-            }
-
-            var trimmedVal1 = request.Value1.Trim();
-            // Changing to ALL removes the restriction completely
             if (string.Equals(trimmedVal1, "ALL", StringComparison.OrdinalIgnoreCase))
             {
                 dbContext.BusCouponConditions.Remove(condition);
                 await dbContext.SaveChangesAsync();
-                return Ok(new { message = $"Condition '{condition.ConditionType}' removed and set to ALL (unrestricted)." });
+                return Ok(new { message = "Condition 'DayOfWeek' removed and set to ALL (unrestricted)." });
             }
 
-            condition.ConditionType = request.ConditionType.Trim();
             condition.ConditionOperator = string.IsNullOrWhiteSpace(request.ConditionOperator) ? "Equals" : request.ConditionOperator.Trim();
             condition.Value1 = trimmedVal1;
             condition.Value2 = string.IsNullOrWhiteSpace(request.Value2) ? null : request.Value2.Trim();
@@ -804,8 +1182,28 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpDelete("coupons/conditions/{conditionId:int}")]
-        public async Task<IActionResult> DeleteCouponCondition(int conditionId)
+        public async Task<IActionResult> DeleteCouponCondition(int conditionId, [FromQuery] string? type = "bus")
         {
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCond = await dbContext.HotelCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
+                if (hotelCond == null) return NotFound("Coupon condition not found.");
+                dbContext.HotelCouponConditions.Remove(hotelCond);
+                await dbContext.SaveChangesAsync();
+                return Ok(new { message = "Condition deleted successfully." });
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCond = await dbContext.FlightCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
+                if (flightCond == null) return NotFound("Coupon condition not found.");
+                dbContext.FlightCouponConditions.Remove(flightCond);
+                await dbContext.SaveChangesAsync();
+                return Ok(new { message = "Condition deleted successfully." });
+            }
+
             var condition = await dbContext.BusCouponConditions.FirstOrDefaultAsync(x => x.Id == conditionId);
             if (condition == null)
             {
@@ -818,8 +1216,28 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpDelete("coupons/{id:int}")]
-        public async Task<IActionResult> DeleteCoupon(int id)
+        public async Task<IActionResult> DeleteCoupon(int id, [FromQuery] string? type = "bus")
         {
+            var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
+
+            if (serviceType == "hotel")
+            {
+                var hotelCoupon = await dbContext.HotelCoupons.FirstOrDefaultAsync(x => x.Id == id);
+                if (hotelCoupon is null) return NotFound("Hotel coupon not found.");
+                dbContext.HotelCoupons.Remove(hotelCoupon);
+                await dbContext.SaveChangesAsync();
+                return Ok(new { message = "Hotel coupon deleted." });
+            }
+
+            if (serviceType == "flight")
+            {
+                var flightCoupon = await dbContext.FlightCoupons.FirstOrDefaultAsync(x => x.Id == id);
+                if (flightCoupon is null) return NotFound("Flight coupon not found.");
+                dbContext.FlightCoupons.Remove(flightCoupon);
+                await dbContext.SaveChangesAsync();
+                return Ok(new { message = "Flight coupon deleted." });
+            }
+
             var coupon = await dbContext.BusCoupons
                 .FirstOrDefaultAsync(x => x.Id == id);
 
@@ -1124,7 +1542,14 @@ namespace PickNBook.Api.Controllers
                 return "MinBookingAmount must be >= 0.";
             }
 
-            
+            if (!string.IsNullOrWhiteSpace(request.Type) &&
+                !string.Equals(request.Type, "bus", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(request.Type, "hotel", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(request.Type, "flight", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Type must be one of: bus, hotel, flight.";
+            }
+
 
             return null;
         }

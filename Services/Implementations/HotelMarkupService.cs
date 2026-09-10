@@ -15,7 +15,8 @@ namespace PickNBook.Api.Services
             string? couponCode,
             decimal totalBaseFare,
             string userId,
-            bool isAgent);
+            bool isAgent,
+            DateTime? checkInDate = null);
     }
 
     public class HotelMarkupService : IHotelMarkupService
@@ -87,7 +88,8 @@ namespace PickNBook.Api.Services
             string? couponCode,
             decimal totalBaseFare,
             string userId,
-            bool isAgent)
+            bool isAgent,
+            DateTime? checkInDate = null)
         {
             if (isAgent || string.IsNullOrWhiteSpace(couponCode))
             {
@@ -100,6 +102,7 @@ namespace PickNBook.Api.Services
             {
                 entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10);
                 return await _dbContext.HotelCoupons
+                    .Include(c => c.Conditions)
                     .AsNoTracking()
                     .FirstOrDefaultAsync(c => c.CouponCode == cleanCode && c.Status == "Active");
             });
@@ -123,6 +126,15 @@ namespace PickNBook.Api.Services
             if (totalBaseFare < coupon.MinBookingAmount)
             {
                 return (0m, null, null);
+            }
+
+            if (checkInDate.HasValue && coupon.Conditions != null && coupon.Conditions.Any())
+            {
+                var dayCond = coupon.Conditions.FirstOrDefault(c => string.Equals(c.ConditionType, "DayOfWeek", StringComparison.OrdinalIgnoreCase));
+                if (dayCond != null && !BusPromotionEngineService.IsDayOfWeekMatching(checkInDate.Value.DayOfWeek, dayCond.ConditionOperator, dayCond.Value1))
+                {
+                    return (0m, null, null);
+                }
             }
 
             if (coupon.IsFirstTimeUserOnly)

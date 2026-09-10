@@ -630,11 +630,7 @@ namespace PickNBook.Api.Controllers.Public
                             result["PickNBookMarkup"] = pricingBreakdown.MarkupAmount;
                             result["PickNBookDiscount"] = pricingBreakdown.PromotionDiscount + pricingBreakdown.CouponDiscount;
 
-                            var activeOffers = await _dbContext.FeaturedOffers
-                                .Where(f => f.IsActive && f.BookingType.ToLower() == "flight")
-                                .Select(f => new { f.Title, f.Description, f.DiscountType, f.DiscountValue, Code = f.Title })
-                                .ToListAsync();
-                            result["PickNBookAvailableOffers"] = JsonSerializer.SerializeToNode(activeOffers);
+                            result["PickNBookAvailableOffers"] = JsonSerializer.SerializeToNode(Array.Empty<object>());
                         }
                     }
                 }

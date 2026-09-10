@@ -627,7 +627,13 @@ namespace PickNBook.Api.Controllers
 
             if (!string.IsNullOrWhiteSpace(request.CouponCode))
             {
-                var validationResult = await ValidateCouponInternalAsync(request.CouponCode, markedUpPrice, userId);
+                DateTime? cinDate = null;
+                if (!string.IsNullOrWhiteSpace(request.CheckInDate) && DateTime.TryParse(request.CheckInDate, out var parsedCin))
+                {
+                    cinDate = parsedCin;
+                }
+
+                var validationResult = await ValidateCouponInternalAsync(request.CouponCode, markedUpPrice, userId, cinDate);
                 if (!validationResult.IsValid)
                 {
                     return BadRequest(new { message = $"Coupon error: {validationResult.Message}" });
@@ -1201,7 +1207,13 @@ namespace PickNBook.Api.Controllers
                     HotelCoupon? couponApplied = null;
                     if (!string.IsNullOrWhiteSpace(request.CouponCode))
                     {
-                        var validationResult = await ValidateCouponInternalAsync(request.CouponCode, totalPrice, userId!);
+                        DateTime? cinDate = null;
+                        if (!string.IsNullOrWhiteSpace(request.CheckInDate) && DateTime.TryParse(request.CheckInDate, out var parsedCin))
+                        {
+                            cinDate = parsedCin;
+                        }
+
+                        var validationResult = await ValidateCouponInternalAsync(request.CouponCode, totalPrice, userId!, cinDate);
                         if (!validationResult.IsValid)
                         {
                             await transaction.RollbackAsync();
@@ -1765,7 +1777,12 @@ namespace PickNBook.Api.Controllers
             }
 
             var userId = _currentUserService.GetUserOrGuestId() ?? "Guest";
-            var validationResult = await ValidateCouponInternalAsync(request.CouponCode, request.TotalAmount, userId);
+            DateTime? cinDate = null;
+            if (!string.IsNullOrWhiteSpace(request.CheckInDate) && DateTime.TryParse(request.CheckInDate, out var parsedCin))
+            {
+                cinDate = parsedCin;
+            }
+            var validationResult = await ValidateCouponInternalAsync(request.CouponCode, request.TotalAmount, userId, cinDate);
 
             return Ok(new ValidateHotelCouponResponseDto
             {
@@ -1775,7 +1792,7 @@ namespace PickNBook.Api.Controllers
             });
         }
 
-        private async Task<(bool IsValid, decimal DiscountAmount, string Message, HotelCoupon? Coupon)> ValidateCouponInternalAsync(string code, decimal totalAmount, string userId)
+        private async Task<(bool IsValid, decimal DiscountAmount, string Message, HotelCoupon? Coupon)> ValidateCouponInternalAsync(string code, decimal totalAmount, string userId, DateTime? checkInDate = null)
         {
             if (!string.IsNullOrEmpty(userId))
             {
@@ -1787,7 +1804,9 @@ namespace PickNBook.Api.Controllers
             }
 
             var normalized = code.Trim().ToUpperInvariant();
-            var coupon = await _dbContext.HotelCoupons.FirstOrDefaultAsync(c => c.CouponCode == normalized);
+            var coupon = await _dbContext.HotelCoupons
+                .Include(c => c.Conditions)
+                .FirstOrDefaultAsync(c => c.CouponCode == normalized);
             if (coupon == null)
             {
                 return (false, 0, "Coupon code not found.", null);
@@ -1820,6 +1839,15 @@ namespace PickNBook.Api.Controllers
             if (userUsageCount >= coupon.MaxUsagePerUser)
             {
                 return (false, 0, $"You have exceeded the maximum usage limit of {coupon.MaxUsagePerUser} times for this coupon.", null);
+            }
+
+            if (checkInDate.HasValue && coupon.Conditions != null && coupon.Conditions.Any())
+            {
+                var dayCond = coupon.Conditions.FirstOrDefault(c => string.Equals(c.ConditionType, "DayOfWeek", StringComparison.OrdinalIgnoreCase));
+                if (dayCond != null && !BusPromotionEngineService.IsDayOfWeekMatching(checkInDate.Value.DayOfWeek, dayCond.ConditionOperator, dayCond.Value1))
+                {
+                    return (false, 0, $"Coupon is not valid for check-in on {checkInDate.Value.DayOfWeek}.", null);
+                }
             }
 
             if (coupon.IsFirstTimeUserOnly)

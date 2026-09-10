@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace PickNBook.Api.Models
 {
     public class FlightCoupon
@@ -14,5 +17,8 @@ namespace PickNBook.Api.Models
         public bool IsFirstTimeUserOnly { get; set; } = false;
         public DateTime EntryDateUtc { get; set; }
         public string? Remark { get; set; }
+
+        public ICollection<FlightCouponCondition> Conditions { get; set; } = new List<FlightCouponCondition>();
     }
 }
+
