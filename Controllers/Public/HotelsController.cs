@@ -1861,7 +1861,7 @@ namespace PickNBook.Api.Controllers
             }
 
             decimal discount = 0;
-            if (coupon.CouponType == "Percentage")
+            if (string.Equals(coupon.CouponType, "Percentage", StringComparison.OrdinalIgnoreCase))
             {
                 discount = totalAmount * (coupon.Value / 100m);
                 if (coupon.MaxDiscountAmount > 0 && discount > coupon.MaxDiscountAmount)
@@ -1869,7 +1869,8 @@ namespace PickNBook.Api.Controllers
                     discount = coupon.MaxDiscountAmount;
                 }
             }
-            else if (coupon.CouponType == "Flat")
+            else if (string.Equals(coupon.CouponType, "Flat", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(coupon.CouponType, "Fixed", StringComparison.OrdinalIgnoreCase))
             {
                 discount = coupon.Value;
             }

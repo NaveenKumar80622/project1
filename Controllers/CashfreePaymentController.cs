@@ -327,13 +327,14 @@ namespace PickNBook.Api.Controllers
                             decimal couponDiscount = 0m;
                             decimal totalBeforeDiscount = blockedHotel.OfferedPrice + blockedHotel.Tax + blockedHotel.MarkupAmount;
 
-                            if (coupon.CouponType == "Percentage")
+                            if (string.Equals(coupon.CouponType, "Percentage", StringComparison.OrdinalIgnoreCase))
                             {
                                 couponDiscount = totalBeforeDiscount * (coupon.Value / 100m);
                                 if (coupon.MaxDiscountAmount > 0 && couponDiscount > coupon.MaxDiscountAmount)
                                     couponDiscount = coupon.MaxDiscountAmount;
                             }
-                            else if (coupon.CouponType == "Flat")
+                            else if (string.Equals(coupon.CouponType, "Flat", StringComparison.OrdinalIgnoreCase) ||
+                                     string.Equals(coupon.CouponType, "Fixed", StringComparison.OrdinalIgnoreCase))
                             {
                                 couponDiscount = coupon.Value;
                             }
@@ -356,6 +357,24 @@ namespace PickNBook.Api.Controllers
                     {
                         using var doc = JsonDocument.Parse(request.BookingPayloadJson);
                         var root = doc.RootElement;
+
+                        bool TryGetProp(JsonElement elem, string name, out JsonElement val)
+                        {
+                            if (elem.TryGetProperty(name, out val)) return true;
+                            if (elem.ValueKind == JsonValueKind.Object)
+                            {
+                                foreach (var p in elem.EnumerateObject())
+                                {
+                                    if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        val = p.Value;
+                                        return true;
+                                    }
+                                }
+                            }
+                            val = default;
+                            return false;
+                        }
                         
                         string airline = "";
                         string fromCity = "";
@@ -367,42 +386,42 @@ namespace PickNBook.Api.Controllers
                         DateTime depTime = DateTime.UtcNow.AddDays(1);
                         TripType tripType = TripType.OneWay;
 
-                        if (root.TryGetProperty("Passengers", out var paxArray) && paxArray.ValueKind == JsonValueKind.Array)
+                        if (TryGetProp(root, "Passengers", out var paxArray) && paxArray.ValueKind == JsonValueKind.Array)
                         {
-                            adults = paxArray.EnumerateArray().Count(p => p.TryGetProperty("PaxType", out var pt) && pt.GetInt32() == 1);
-                            children = paxArray.EnumerateArray().Count(p => p.TryGetProperty("PaxType", out var pt) && pt.GetInt32() == 2);
-                            infants = paxArray.EnumerateArray().Count(p => p.TryGetProperty("PaxType", out var pt) && pt.GetInt32() == 3);
+                            adults = paxArray.EnumerateArray().Count(p => TryGetProp(p, "PaxType", out var pt) && pt.GetInt32() == 1);
+                            children = paxArray.EnumerateArray().Count(p => TryGetProp(p, "PaxType", out var pt) && pt.GetInt32() == 2);
+                            infants = paxArray.EnumerateArray().Count(p => TryGetProp(p, "PaxType", out var pt) && pt.GetInt32() == 3);
                         }
 
-                        if (root.TryGetProperty("DepartureDate", out var depDateProp) && DateTime.TryParse(depDateProp.GetString(), out var parsedDep))
+                        if (TryGetProp(root, "DepartureDate", out var depDateProp) && DateTime.TryParse(depDateProp.GetString(), out var parsedDep))
                         {
                             depTime = parsedDep;
                         }
-                        else if (root.TryGetProperty("Segments", out var segArray) && segArray.ValueKind == JsonValueKind.Array && segArray.GetArrayLength() > 0)
+                        else if (TryGetProp(root, "Segments", out var segArray) && segArray.ValueKind == JsonValueKind.Array && segArray.GetArrayLength() > 0)
                         {
                             var firstSeg = segArray[0];
-                            if (firstSeg.TryGetProperty("DepartureTime", out var segDep) && DateTime.TryParse(segDep.GetString(), out var parsedSegDep))
+                            if (TryGetProp(firstSeg, "DepartureTime", out var segDep) && DateTime.TryParse(segDep.GetString(), out var parsedSegDep))
                             {
                                 depTime = parsedSegDep;
                             }
-                            else if (firstSeg.TryGetProperty("Origin", out var segOrigNode) && segOrigNode.TryGetProperty("DepTime", out var origDep) && DateTime.TryParse(origDep.GetString(), out var parsedOrigDep))
+                            else if (TryGetProp(firstSeg, "Origin", out var segOrigNode) && TryGetProp(segOrigNode, "DepTime", out var origDep) && DateTime.TryParse(origDep.GetString(), out var parsedOrigDep))
                             {
                                 depTime = parsedOrigDep;
                             }
                         }
 
-                        if (root.TryGetProperty("Fare", out var fareNode))
+                        if (TryGetProp(root, "Fare", out var fareNode))
                         {
-                            providerAmount = fareNode.TryGetProperty("OfferedFare", out var offFare) ? offFare.GetDecimal() : 0m;
-                            decimal baseFare = fareNode.TryGetProperty("BaseFare", out var bFare) ? bFare.GetDecimal() : 0m;
-                            decimal tax = fareNode.TryGetProperty("Tax", out var tFare) ? tFare.GetDecimal() : 0m;
+                            providerAmount = TryGetProp(fareNode, "OfferedFare", out var offFare) ? offFare.GetDecimal() : 0m;
+                            decimal baseFare = TryGetProp(fareNode, "BaseFare", out var bFare) ? bFare.GetDecimal() : 0m;
+                            decimal tax = TryGetProp(fareNode, "Tax", out var tFare) ? tFare.GetDecimal() : 0m;
 
                             if (providerAmount == 0) providerAmount = baseFare + tax;
 
-                            if (fareNode.TryGetProperty("TotalBaggageCharges", out var bagNode) && decimal.TryParse(bagNode.ToString(), out var parsedBag)) ssrAmount += parsedBag;
-                            if (fareNode.TryGetProperty("TotalMealCharges", out var mealNode) && decimal.TryParse(mealNode.ToString(), out var parsedMeal)) ssrAmount += parsedMeal;
-                            if (fareNode.TryGetProperty("TotalSeatCharges", out var seatNode) && decimal.TryParse(seatNode.ToString(), out var parsedSeat)) ssrAmount += parsedSeat;
-                            if (fareNode.TryGetProperty("TotalSpecialServiceCharges", out var specialNode) && decimal.TryParse(specialNode.ToString(), out var parsedSpecial)) ssrAmount += parsedSpecial;
+                            if (TryGetProp(fareNode, "TotalBaggageCharges", out var bagNode) && decimal.TryParse(bagNode.ToString(), out var parsedBag)) ssrAmount += parsedBag;
+                            if (TryGetProp(fareNode, "TotalMealCharges", out var mealNode) && decimal.TryParse(mealNode.ToString(), out var parsedMeal)) ssrAmount += parsedMeal;
+                            if (TryGetProp(fareNode, "TotalSeatCharges", out var seatNode) && decimal.TryParse(seatNode.ToString(), out var parsedSeat)) ssrAmount += parsedSeat;
+                            if (TryGetProp(fareNode, "TotalSpecialServiceCharges", out var specialNode) && decimal.TryParse(specialNode.ToString(), out var parsedSpecial)) ssrAmount += parsedSpecial;
 
                             var pricingBreakdown = await _flightPricingService.CalculatePricingAsync(
                                 supplierBaseFare: baseFare,
