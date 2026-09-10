@@ -942,37 +942,20 @@ namespace PickNBook.Api.Services
 
         public async Task<string> GetCancellationChargesRawAsync(GetCancellationChargesRequestDto request)
         {
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
-                ? "127.0.0.1"
-                : request.EndUserIp.Trim();
-
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
-                ? _settings.ClientId
-                : request.ClientId.Trim();
-
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
-                ? _settings.UserName
-                : request.UserName.Trim();
-
-            var password = string.IsNullOrWhiteSpace(request.Password)
-                ? _settings.Password
-                : request.Password.Trim();
-
             var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
             var requestBody = new
             {
-                EndUserIp = endUserIp,
-                ClientId = clientId,
-                UserName = userName,
-                Password = password,
-                RequestType = request.RequestType.ToString(),
-                TraceId = request.TraceId
+                TraceId = request.TraceId,
+                PNR = request.PNR ?? "",
+                Remarks = request.Remarks ?? ""
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/GetCancellationCharges")
+            var baseUrl = _settings.FlightBaseUrl.TrimEnd('/');
+            var targetUrl = $"{baseUrl}/GetCancellationCharges";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, targetUrl)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };

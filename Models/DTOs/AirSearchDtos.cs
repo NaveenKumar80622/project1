@@ -728,6 +728,16 @@ namespace PickNBook.Api.Models.DTOs
 
     public class GetCancellationChargesRequestDto
     {
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+
+        [JsonPropertyName("PNR")]
+        public string? PNR { get; set; }
+
+        [JsonPropertyName("Remarks")]
+        public string? Remarks { get; set; }
+
         [JsonPropertyName("EndUserIp")]
         public string? EndUserIp { get; set; }
 
@@ -744,10 +754,7 @@ namespace PickNBook.Api.Models.DTOs
         public string? ApiToken { get; set; }
 
         [JsonPropertyName("RequestType")]
-        public int RequestType { get; set; } = 1;
-
-        [JsonPropertyName("TraceId")]
-        public string TraceId { get; set; } = string.Empty;
+        public int? RequestType { get; set; }
     }
 
     public class ApiBalanceRequestDto

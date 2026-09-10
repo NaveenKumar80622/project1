@@ -328,36 +328,21 @@ namespace PickNBook.Api.Models.DTOs
 
     public class FlightGetCancellationChargesProxyRequestDto
     {
-
-        [JsonPropertyName("RequestType")]
-        public int RequestType { get; set; }
-
         [JsonPropertyName("TraceId")]
-        public string TraceId { get; set; }
-    }
-    public class FlightBookingCallbackProxyRequestDto
-    {
-
-        [JsonPropertyName("TraceId")]
-        public string TraceId { get; set; }
-
-        [JsonPropertyName("BookingId")]
-        public string BookingId { get; set; }
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
 
         [JsonPropertyName("PNR")]
-        public string PNR { get; set; }
+        public string? PNR { get; set; }
 
-        [JsonPropertyName("GdsPNR")]
-        public string GdsPNR { get; set; }
+        [JsonPropertyName("Remarks")]
+        public string? Remarks { get; set; }
 
-        [JsonPropertyName("Status")]
-        public string Status { get; set; }
-
-        [JsonPropertyName("Remark")]
-        public string Remark { get; set; }
-
-        [JsonPropertyName("Passengers")]
-        public List<SrdvCallbackPassengerDto> Passengers { get; set; } = new();
+        [JsonPropertyName("RequestType")]
+        public int? RequestType { get; set; }
+    }
+    public class FlightBookingCallbackProxyRequestDto : SrdvBookingCallbackRequestDto
+    {
     }
 }
 

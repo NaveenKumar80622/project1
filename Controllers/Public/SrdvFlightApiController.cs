@@ -2404,19 +2404,35 @@ namespace PickNBook.Api.Controllers.Public
         {
             try
             {
+                if (proxyRequest == null || proxyRequest.TraceId <= 0)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "TraceId is required and must be greater than 0." });
+                }
+
+                if (!string.IsNullOrEmpty(proxyRequest.PNR) && proxyRequest.PNR.Length > 50)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "PNR cannot exceed 50 characters." });
+                }
+
+                if (!string.IsNullOrEmpty(proxyRequest.Remarks) && proxyRequest.Remarks.Length > 500)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Remarks cannot exceed 500 characters." });
+                }
+
                 var request = new GetCancellationChargesRequestDto
                 {
-                    EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                    RequestType = proxyRequest.RequestType,
-                    TraceId = proxyRequest.TraceId
+                    TraceId = proxyRequest.TraceId,
+                    PNR = proxyRequest.PNR?.Trim() ?? string.Empty,
+                    Remarks = proxyRequest.Remarks?.Trim() ?? string.Empty
                 };
+
                 var responseRaw = await _srdvFlightService.GetCancellationChargesRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
                 return Ok(doc.RootElement.Clone());
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting cancellation charges.");
+                _logger.LogError(ex, "Error getting cancellation charges for TraceId: {TraceId}", proxyRequest?.TraceId);
                 return StatusCode(500, new { message = "Failed to get cancellation charges.", error = ex.Message });
             }
         }
@@ -2453,203 +2469,246 @@ namespace PickNBook.Api.Controllers.Public
         }
 
         [HttpPost("flight_callback")]
-        [ProducesResponseType(typeof(SrdvBookingCallbackResponseDto), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(string), StatusCodes.Status200OK)]
         public async Task<IActionResult> BookingCallback([FromBody] FlightBookingCallbackProxyRequestDto proxyRequest)
         {
-            var request = new SrdvBookingCallbackRequestDto
-            {
-                ClientId = _srdvSettings.ClientId,
-                UserName = _srdvSettings.UserName,
-                Password = _srdvSettings.Password,
-                EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
-                TraceId = proxyRequest.TraceId,
-                BookingId = proxyRequest.BookingId,
-                PNR = proxyRequest.PNR,
-                GdsPNR = proxyRequest.GdsPNR,
-                Status = proxyRequest.Status,
-                Remark = proxyRequest.Remark,
-                Passengers = proxyRequest.Passengers
-            };
             try
             {
-                _logger.LogInformation("Received SRDV Booking Update Callback for BookingId: {BookingId}", request.BookingId);
+                _logger.LogInformation("Received SRDV Booking Update Callback for BookingId: {BookingId}, PNR: {PNR}", proxyRequest.BookingId, proxyRequest.PNR);
 
-                // Security Check: Verify credentials against settings
-                var apiTokenHeader = Request.Headers["Api-Token"].FirstOrDefault();
-                if (request.ClientId != _srdvSettings.ClientId || 
-                    request.UserName != _srdvSettings.UserName || 
-                    request.Password != _srdvSettings.Password ||
-                    apiTokenHeader != _srdvSettings.ApiToken)
+                // 1. Security Check: Authenticate on the X-SRDV-Token header carrying Api-Token (with fallback to Api-Token)
+                var tokenHeader = Request.Headers["X-SRDV-Token"].FirstOrDefault()
+                                  ?? Request.Headers["Api-Token"].FirstOrDefault();
+
+                if (string.IsNullOrWhiteSpace(tokenHeader) || !string.Equals(tokenHeader, _srdvSettings.ApiToken, StringComparison.Ordinal))
                 {
-                    _logger.LogWarning("SRDV Booking Callback failed authentication for BookingId: {BookingId}", request.BookingId);
-                    return Ok(new SrdvBookingCallbackResponseDto { Error = new SrdvCallbackErrorDto { ErrorCode = "1", ErrorMessage = "Unauthorized" } });
+                    _logger.LogWarning("SRDV Booking Callback failed authentication for BookingId: {BookingId}. Missing or invalid token.", proxyRequest.BookingId);
+                    return Unauthorized(new { message = "Unauthorized: Invalid or missing X-SRDV-Token header." });
                 }
 
-                if (string.IsNullOrEmpty(request.BookingId) && string.IsNullOrEmpty(request.PNR))
+                // 2. Event verification: branch on "BOOKING_STATUS"
+                if (!string.IsNullOrWhiteSpace(proxyRequest.Event) && !string.Equals(proxyRequest.Event, "BOOKING_STATUS", StringComparison.OrdinalIgnoreCase))
                 {
-                    _logger.LogWarning("Received callback with missing PNR and BookingId.");
-                    return Ok(new SrdvBookingCallbackResponseDto { Error = new SrdvCallbackErrorDto { ErrorCode = "2", ErrorMessage = "Missing PNR and BookingId" } });
+                    _logger.LogInformation("SRDV Booking Callback ignored non-booking event: {Event}", proxyRequest.Event);
+                    return Ok("Successfully Updated.");
+                }
+
+                var bookingIdStr = proxyRequest.BookingId > 0 ? proxyRequest.BookingId.ToString() : string.Empty;
+                var pnr = proxyRequest.PNR?.Trim() ?? string.Empty;
+                var traceIdStr = proxyRequest.TraceId > 0 ? proxyRequest.TraceId.ToString() : string.Empty;
+
+                if (string.IsNullOrEmpty(bookingIdStr) && string.IsNullOrEmpty(pnr) && string.IsNullOrEmpty(traceIdStr))
+                {
+                    _logger.LogWarning("Received callback with missing PNR, TraceId, and BookingId.");
+                    return Ok("Successfully Updated.");
                 }
 
                 var reservationQuery = _dbContext.FlightReservations.AsQueryable();
 
-                if (!string.IsNullOrEmpty(request.BookingId))
+                if (!string.IsNullOrEmpty(bookingIdStr))
                 {
-                    reservationQuery = reservationQuery.Where(r => r.SrdvBookingId == request.BookingId);
+                    reservationQuery = reservationQuery.Where(r => r.SrdvBookingId == bookingIdStr);
                 }
-                else if (!string.IsNullOrEmpty(request.PNR))
+                else if (!string.IsNullOrEmpty(pnr))
                 {
-                    reservationQuery = reservationQuery.Where(r => r.Pnr == request.PNR);
+                    reservationQuery = reservationQuery.Where(r => r.Pnr == pnr);
+                }
+                else if (!string.IsNullOrEmpty(traceIdStr))
+                {
+                    reservationQuery = reservationQuery.Where(r => r.TraceId == traceIdStr);
                 }
 
                 var reservation = await reservationQuery.FirstOrDefaultAsync();
 
                 if (reservation != null)
                 {
-                    reservation.SrdvCallbackResponseJson = JsonSerializer.Serialize(request);
+                    reservation.SrdvCallbackResponseJson = JsonSerializer.Serialize(proxyRequest);
                     reservation.CallbackReceivedAtUtc = DateTime.UtcNow;
 
-                    if (!string.IsNullOrEmpty(request.Status))
+                    if (proxyRequest.SrdvIndex > 0)
                     {
-                        reservation.TicketStatus = request.Status;
+                        reservation.SrdvIndex = proxyRequest.SrdvIndex.ToString();
+                    }
 
-                        // Map SRDV callback status to our reservation status
-                        var srdvStatus = request.Status.ToLower();
-                        if (srdvStatus == "success" || srdvStatus == "ticketed")
-                        {
+                    if (!string.IsNullOrEmpty(pnr) && string.IsNullOrEmpty(reservation.Pnr))
+                    {
+                        reservation.Pnr = pnr;
+                    }
+
+                    if (!string.IsNullOrEmpty(proxyRequest.GdsPNR) && string.IsNullOrEmpty(reservation.GdsPnr))
+                    {
+                        reservation.GdsPnr = proxyRequest.GdsPNR.Trim();
+                    }
+
+                    if (!string.IsNullOrEmpty(proxyRequest.ReturnPNR))
+                    {
+                        reservation.ReturnPnr = proxyRequest.ReturnPNR.Trim();
+                    }
+
+                    var rawStatus = proxyRequest.Status?.Trim().ToUpperInvariant() ?? string.Empty;
+                    reservation.TicketStatus = rawStatus;
+
+                    switch (rawStatus)
+                    {
+                        case "SUCCESS":
+                        case "TICKETED":
+                            var wasAlreadyBooked = string.Equals(reservation.Status, "Booked", StringComparison.OrdinalIgnoreCase);
                             reservation.Status = "Booked";
-                        }
-                        else if (srdvStatus == "failed" || srdvStatus == "aborted")
-                        {
+
+                            // Dispatch final email only once if newly confirmed
+                            if (!wasAlreadyBooked)
+                            {
+                                try
+                                {
+                                    global::User? agentInfo = null;
+                                    if (int.TryParse(reservation.UserId, out var aId) && aId > 0)
+                                    {
+                                        agentInfo = await _dbContext.Users.FindAsync(aId);
+                                    }
+                                    var emailReq = new SendFlightTicketEmailRequest
+                                    {
+                                        ToEmail = string.IsNullOrEmpty(reservation.PassengerEmail) ? (agentInfo?.Email ?? "") : reservation.PassengerEmail,
+                                        PassengerName = reservation.PassengerName,
+                                        BookingReference = reservation.BookingReference,
+                                        Airline = reservation.Airline,
+                                        Origin = reservation.FromCity,
+                                        Destination = reservation.ToCity,
+                                        DepartureTime = reservation.DepartureTime,
+                                        ArrivalTime = reservation.ArrivalTime,
+                                        Pnr = reservation.Pnr,
+                                        Price = reservation.TotalPriceInr,
+                                        Currency = "INR",
+                                        NonRefundable = reservation.NonRefundable,
+                                        CancellationCharges = reservation.CancellationCharges,
+                                        PartialSegmentCancellation = reservation.PartialSegmentCancellation,
+                                        AgentCompanyName = agentInfo?.CompanyName,
+                                        AgentLogoUrl = agentInfo?.AgentLogoUrl,
+                                        Passengers = await _dbContext.FlightReservationPassengers
+                                                        .Where(p => p.FlightReservationId == reservation.Id)
+                                                        .Select(p => new FlightPassengerTicketDto {
+                                                            FullName = p.FullName,
+                                                            PassengerType = p.PassengerType,
+                                                            Gender = p.Gender,
+                                                            SeatNumber = p.SeatNumber,
+                                                            TicketNumber = p.TicketNumber
+                                                        }).ToListAsync(),
+                                        Segments = reservation.Segments.Select(s => new FlightTicketSegmentDto {
+                                            Airline = s.Airline,
+                                            FlightNumber = s.FlightNumber,
+                                            FromCity = s.FromCity,
+                                            ToCity = s.ToCity,
+                                            DepartureTime = s.DepartureTime,
+                                            ArrivalTime = s.ArrivalTime,
+                                            Pnr = s.Pnr
+                                        }).ToList()
+                                    };
+                                    var backgroundJobQueue = HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.IBackgroundJobQueue>();
+                                    backgroundJobQueue.QueueBackgroundWorkItem(async (sp, ct) =>
+                                    {
+                                        var scopedEmailService = sp.GetRequiredService<ITicketEmailService>();
+                                        await scopedEmailService.SendFlightTicketAsync(emailReq);
+                                    });
+                                    _logger.LogInformation("Successfully dispatched final ticket email via callback for BookingReference: {BookingRef}", reservation.BookingReference);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "Failed to send final ticket email via callback for Booking {BookingReference}", reservation.BookingReference);
+                                }
+                            }
+                            break;
+
+                        case "FAILED":
+                        case "ABORTED":
+                            // Idempotency: only credit wallet if it wasn't already marked as Failed
+                            var wasAlreadyFailed = string.Equals(reservation.Status, "Failed", StringComparison.OrdinalIgnoreCase);
                             reservation.Status = "Failed";
-                        }
+
+                            if (!wasAlreadyFailed && reservation.SupplierTotalFare > 0)
+                            {
+                                if (int.TryParse(reservation.UserId, out var agentId) && agentId > 0)
+                                {
+                                    var user = await _dbContext.Users.FindAsync(agentId);
+                                    if (user != null && user.Role == AuthRoles.Agent)
+                                    {
+                                        await _walletService.CreditWalletForRefundAsync(agentId,
+                                            reservation.SupplierTotalFare,
+                                            reservation.BookingReference,
+                                            "Flight",
+                                            $"Refund - Failed Flight Booking PNR {reservation.Pnr}");
+                                    }
+                                }
+                            }
+                            break;
+
+                        case "MANUAL_CHECK_REQUIRED":
+                            // Per SRDV documentation: MANUAL_CHECK_REQUIRED is not a failure.
+                            // The supplier never answered clearly, the money stays reserved, and SRDV settles it by hand.
+                            // Hold the booking rather than releasing or refunding it against that status.
+                            reservation.Status = "ManualCheckRequired";
+                            _logger.LogWarning("Flight reservation {BookingReference} entered MANUAL_CHECK_REQUIRED. Holding booking without refund.", reservation.BookingReference);
+                            break;
+
+                        case "CANCELLED":
+                            reservation.Status = "Cancelled";
+                            reservation.CancelledAtUtc ??= DateTime.UtcNow;
+                            if (!string.IsNullOrEmpty(proxyRequest.Remark))
+                            {
+                                reservation.CancellationReason = proxyRequest.Remark;
+                            }
+                            break;
+
+                        case "PENDING":
+                            if (reservation.Status != "Booked")
+                            {
+                                reservation.Status = "Pending";
+                            }
+                            break;
                     }
 
-                    if (!string.IsNullOrEmpty(request.PNR) && string.IsNullOrEmpty(reservation.Pnr))
-                    {
-                        reservation.Pnr = request.PNR;
-                    }
-
-                    // Sync Passenger Ticket Numbers
-                    if (request.Passengers != null && request.Passengers.Any())
+                    // Sync Passenger Ticket Numbers & Details
+                    if (proxyRequest.Passengers != null && proxyRequest.Passengers.Any())
                     {
                         var reservationPassengers = await _dbContext.FlightReservationPassengers
                             .Where(p => p.FlightReservationId == reservation.Id)
                             .ToListAsync();
 
-                        foreach (var incPax in request.Passengers)
+                        foreach (var incPax in proxyRequest.Passengers)
                         {
-                            if (!string.IsNullOrEmpty(incPax.TicketNumber))
+                            var dbPax = reservationPassengers.FirstOrDefault(p => 
+                                string.Equals(p.FirstName, incPax.FirstName, StringComparison.OrdinalIgnoreCase) && 
+                                string.Equals(p.LastName, incPax.LastName, StringComparison.OrdinalIgnoreCase));
+                            
+                            if (dbPax != null)
                             {
-                                var dbPax = reservationPassengers.FirstOrDefault(p => 
-                                    string.Equals(p.FirstName, incPax.FirstName, StringComparison.OrdinalIgnoreCase) && 
-                                    string.Equals(p.LastName, incPax.LastName, StringComparison.OrdinalIgnoreCase));
-                                
-                                if (dbPax != null)
+                                if (!string.IsNullOrEmpty(incPax.TicketNumber))
                                 {
                                     dbPax.TicketNumber = incPax.TicketNumber;
+                                }
+                                if (string.IsNullOrEmpty(dbPax.Title) && !string.IsNullOrEmpty(incPax.Title))
+                                {
+                                    dbPax.Title = incPax.Title;
                                 }
                             }
                         }
                     }
 
                     await _dbContext.SaveChangesAsync();
-                    _logger.LogInformation("Successfully updated reservation {ReservationId} with callback data.", reservation.Id);
-
-                    // Credit wallet back if booking failed (we debited on Pending)
-                    if (reservation.Status == "Failed" && reservation.SupplierTotalFare > 0)
-                    {
-                        if (int.TryParse(reservation.UserId, out var agentId) && agentId > 0)
-                        {
-                            var user = await _dbContext.Users.FindAsync(agentId);
-                            if (user != null && user.Role == AuthRoles.Agent)
-                            {
-                                await _walletService.CreditWalletForRefundAsync(agentId,
-                                    reservation.SupplierTotalFare,
-                                    reservation.BookingReference,
-                                    "Flight",
-                                    $"Refund - Failed Flight Booking PNR {reservation.Pnr}");
-                            }
-                        }
-                    }
-
-                    // Dispatch final email if tickets are issued
-                    if (reservation.TicketStatus == "Ticketed" || request.Status?.ToLower() == "success")
-                    {
-                        try
-                        {
-                            global::User? agentInfo = null;
-                            if (int.TryParse(reservation.UserId, out var aId) && aId > 0)
-                            {
-                                agentInfo = await _dbContext.Users.FindAsync(aId);
-                            }
-                            var emailReq = new SendFlightTicketEmailRequest
-                            {
-                                ToEmail = string.IsNullOrEmpty(reservation.PassengerEmail) ? (agentInfo?.Email ?? "") : reservation.PassengerEmail,
-                                PassengerName = reservation.PassengerName,
-                                BookingReference = reservation.BookingReference,
-                                Airline = reservation.Airline,
-                                Origin = reservation.FromCity,
-                                Destination = reservation.ToCity,
-                                DepartureTime = reservation.DepartureTime,
-                                ArrivalTime = reservation.ArrivalTime,
-                                Pnr = reservation.Pnr,
-                                Price = reservation.TotalPriceInr,
-                                Currency = "INR",
-                                NonRefundable = reservation.NonRefundable,
-                                CancellationCharges = reservation.CancellationCharges,
-                                PartialSegmentCancellation = reservation.PartialSegmentCancellation,
-                                AgentCompanyName = agentInfo?.CompanyName,
-                                AgentLogoUrl = agentInfo?.AgentLogoUrl,
-                                Passengers = await _dbContext.FlightReservationPassengers
-                                                .Where(p => p.FlightReservationId == reservation.Id)
-                                                .Select(p => new FlightPassengerTicketDto {
-                                                    FullName = p.FullName,
-                                                    PassengerType = p.PassengerType,
-                                                    Gender = p.Gender,
-                                                    SeatNumber = p.SeatNumber,
-                                                    TicketNumber = p.TicketNumber
-                                                }).ToListAsync(),
-                                Segments = reservation.Segments.Select(s => new FlightTicketSegmentDto {
-                                    Airline = s.Airline,
-                                    FlightNumber = s.FlightNumber,
-                                    FromCity = s.FromCity,
-                                    ToCity = s.ToCity,
-                                    DepartureTime = s.DepartureTime,
-                                    ArrivalTime = s.ArrivalTime,
-                                    Pnr = s.Pnr
-                                }).ToList()
-                            };
-                            var backgroundJobQueue = HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.IBackgroundJobQueue>();
-                            backgroundJobQueue.QueueBackgroundWorkItem(async (sp, ct) =>
-                            {
-                                var scopedEmailService = sp.GetRequiredService<ITicketEmailService>();
-                                await scopedEmailService.SendFlightTicketAsync(emailReq);
-                            });
-                            _logger.LogInformation("Successfully dispatched final ticket email via callback for BookingReference: {BookingRef}", reservation.BookingReference);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, "Failed to send final ticket email via callback for Booking {BookingReference}", reservation.BookingReference);
-                        }
-                    }
+                    _logger.LogInformation("Successfully updated reservation {ReservationId} with callback data. Final Status: {Status}", reservation.Id, reservation.Status);
                 }
                 else
                 {
-                    _logger.LogWarning("Received callback for PNR {PNR} / BookingId {BookingId} but no matching reservation was found.", request.PNR, request.BookingId);
-                    // Still return success to SRDV so they don't retry unnecessarily if the record doesn't exist on our end.
+                    _logger.LogWarning("Received callback for PNR {PNR} / BookingId {BookingId} but no matching reservation was found.", pnr, bookingIdStr);
                 }
 
-                // Exactly match the required success response structure
-                return Ok(new SrdvBookingCallbackResponseDto { Error = new SrdvCallbackErrorDto { ErrorCode = "0", ErrorMessage = "" } });
+                // Exactly match the required success response structure: Answer 2xx ("Successfully Updated.")
+                return Ok("Successfully Updated.");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing SRDV Booking Callback.");
-                return Ok(new SrdvBookingCallbackResponseDto { Error = new SrdvCallbackErrorDto { ErrorCode = "500", ErrorMessage = "Internal Server Error" } });
+                return StatusCode(500, new { message = "Internal Server Error" });
             }
         }
-
 
         [Authorize]
         [HttpGet("my-bookings")]
