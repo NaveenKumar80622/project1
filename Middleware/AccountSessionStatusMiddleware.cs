@@ -20,7 +20,7 @@ namespace PickNBook.Api.Middleware
             _next = next;
         }
 
-        public async Task InvokeAsync(HttpContext context, IServiceProvider serviceProvider, IMemoryCache memoryCache)
+        public async Task InvokeAsync(HttpContext context, AppDbContext db, IMemoryCache memoryCache)
         {
             if (context.User.Identity?.IsAuthenticated == true)
             {
@@ -30,8 +30,6 @@ namespace PickNBook.Api.Middleware
 
                 if (!string.IsNullOrEmpty(userId))
                 {
-                    using var scope = serviceProvider.CreateScope();
-                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                     var now = DateTime.UtcNow;
 
                     // 1. Check Account Lock Status

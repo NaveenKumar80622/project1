@@ -214,38 +214,18 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 
 var serverVersion = new MySqlServerVersion(new Version(8, 0, 35));
-bool isTesting = AppDomain.CurrentDomain.GetAssemblies().Any(a => a.FullName != null && a.FullName.Contains("Test", StringComparison.OrdinalIgnoreCase));
-
-if (isTesting)
-{
-    builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseMySql(
-            connectionString,
-            serverVersion,
-            mysqlOptions =>
-            {
-                mysqlOptions.EnableRetryOnFailure(
-                    maxRetryCount: 5,
-                    maxRetryDelay: TimeSpan.FromSeconds(10),
-                    errorNumbersToAdd: null);
-            }
-        ));
-}
-else
-{
-    builder.Services.AddDbContextPool<AppDbContext>(options =>
-        options.UseMySql(
-            connectionString,
-            serverVersion,
-            mysqlOptions =>
-            {
-                mysqlOptions.EnableRetryOnFailure(
-                    maxRetryCount: 5,
-                    maxRetryDelay: TimeSpan.FromSeconds(10),
-                    errorNumbersToAdd: null);
-            }
-        ));
-}
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseMySql(
+        connectionString,
+        serverVersion,
+        mysqlOptions =>
+        {
+            mysqlOptions.EnableRetryOnFailure(
+                maxRetryCount: 5,
+                maxRetryDelay: TimeSpan.FromSeconds(10),
+                errorNumbersToAdd: null);
+        }
+    ));
 
 
 // ---------------- CORS CONFIG ----------------

@@ -69,12 +69,12 @@ namespace PickNBook.Api.Controllers.Admin
 
             var query = _dbContext.Payments.AsNoTracking().AsQueryable();
 
-            if (!string.IsNullOrWhiteSpace(status))
+            if (!string.IsNullOrWhiteSpace(status) && !status.Equals("ALL", StringComparison.OrdinalIgnoreCase))
             {
                 query = query.Where(p => p.Status.ToLower() == status.Trim().ToLower());
             }
 
-            if (!string.IsNullOrWhiteSpace(bookingType))
+            if (!string.IsNullOrWhiteSpace(bookingType) && !bookingType.Equals("ALL", StringComparison.OrdinalIgnoreCase))
             {
                 query = query.Where(p => p.BookingType.ToLower() == bookingType.Trim().ToLower());
             }
