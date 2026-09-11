@@ -17,7 +17,7 @@ namespace PickNBook.Api.Controllers
         AppDbContext dbContext,
         ISrdvFlightService srdvFlightService,
         ILogger<AdminFlightController> logger,
-        PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter) : AdminApiController
+        PickNBook.Api.Services.Interfaces.IRefundRouterService? refundRouter = null) : AdminApiController
     {
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static readonly string[] AllowedDiscountTypes = ["Percentage", "Fixed"];
