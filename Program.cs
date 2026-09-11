@@ -349,6 +349,10 @@ builder.Services.AddSwaggerGen(options =>
 
     // Render CheckInDate/CheckOutDate as date pickers in Swagger UI
     options.SchemaFilter<PickNBook.Api.Models.Config.DateFormatSchemaFilter>();
+
+    // Safety net: if any two actions share the same HTTP method + path, pick the first one
+    // instead of crashing Swagger with a 500 SwaggerGeneratorException.
+    options.ResolveConflictingActions(apiDescriptions => apiDescriptions.First());
 });
 
 var app = builder.Build();

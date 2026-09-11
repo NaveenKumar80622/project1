@@ -95,7 +95,35 @@ public class DashboardController : AdminApiController
         var successfulYesterday = successfulPayments.Count(p => p.CreatedAt >= yesterday && p.CreatedAt < today);
         var successfulGrowthPercent = CalculateGrowthPercent(successfulToday, successfulYesterday);
 
-        var failedToday = await _context.Payments.CountAsync(p => p.Status != "SUCCESS" && p.CreatedAt >= today);
+        // ── DB-side GROUP BY: let the database aggregate — only 6 small integers travel over the wire ──
+        var todayStatusGroups = await _context.Payments
+            .AsNoTracking()
+            .Where(p => p.CreatedAt >= today)
+            .GroupBy(p => p.Status.ToUpper())   // translates to GROUP BY UPPER(Status) in SQL
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync();
+
+        var totalPaymentsToday = todayStatusGroups.Sum(g => g.Count);
+
+        // Safe per-status lookup with default 0
+        int CountStatus(string normalized) =>
+            todayStatusGroups.FirstOrDefault(g => g.Status == normalized)?.Count ?? 0;
+
+        var todaySuccess   = CountStatus("SUCCESS");
+        var todayFailed    = CountStatus("FAILED");
+        var todayPending   = CountStatus("PENDING");
+        var todayCreated   = CountStatus("CREATED");
+        var todayCancelled = CountStatus("CANCELLED");
+        var todayExpired   = CountStatus("EXPIRED");
+
+        // Safety-net bucket for any status not in the 6 known values
+        var todayUnknown = totalPaymentsToday
+            - todaySuccess - todayFailed - todayPending
+            - todayCreated - todayCancelled - todayExpired;
+
+        // Legacy broad "failed" count (anything != SUCCESS) — kept for backward compatibility
+        var failedToday = totalPaymentsToday - todaySuccess;
+
         var failedYesterday = await _context.Payments.CountAsync(p => p.Status != "SUCCESS" && p.CreatedAt >= yesterday && p.CreatedAt < today);
         var failedGrowthPercent = CalculateGrowthPercent(failedToday, failedYesterday);
 
@@ -228,12 +256,26 @@ public class DashboardController : AdminApiController
         {
             todayStatus = new
             {
-                totalBookings = bookingsToday,
-                successfulBookings = successfulToday,
-                pendingWorks = 0,
-                failedBookings = failedToday,
-                revenueInr = Math.Round(revenueToday, 2, MidpointRounding.AwayFromZero),
-                expectedRevenueInr = Math.Round(revenueToday * 1.1m, 2, MidpointRounding.AwayFromZero)
+                // ── Legacy fields kept for backward compatibility ──────────────────────
+                totalBookings      = bookingsToday,
+                successfulBookings = successfulToday,       // SUCCESS payments today
+                failedBookings     = failedToday,           // broad "!= SUCCESS" count (legacy)
+                pendingWorks       = 0,                     // 4-bucket work queue — unchanged
+                revenueInr         = Math.Round(revenueToday, 2, MidpointRounding.AwayFromZero),
+                expectedRevenueInr = Math.Round(revenueToday * 1.1m, 2, MidpointRounding.AwayFromZero),
+
+                // ── New granular breakdown (prefer these over legacy failedBookings) ────────────
+                totalPayments    = totalPaymentsToday,      // total payment ATTEMPTS today
+                paymentBreakdown = new
+                {
+                    success   = todaySuccess,
+                    failed    = todayFailed,
+                    pending   = todayPending,
+                    created   = todayCreated,
+                    cancelled = todayCancelled,
+                    expired   = todayExpired,
+                    unknown   = todayUnknown    // safety net for unexpected/future statuses
+                }
             },
             metrics = new
             {
