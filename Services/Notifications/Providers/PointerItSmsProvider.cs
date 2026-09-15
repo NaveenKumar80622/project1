@@ -28,14 +28,23 @@ namespace PickNBook.Api.Services.Notifications.Providers
             _settings = options.Value;
         }
 
-        public async Task<(bool IsSuccess, string? ProviderMessageId, string? ErrorMessage)> SendAsync(string recipient, string content, string? subject = null)
+        public Task<(bool IsSuccess, string? ProviderMessageId, string? ErrorMessage)> SendAsync(string recipient, string content, string? subject = null)
+        {
+            return SendSmsAsync(recipient, content, dltContentId: subject);
+        }
+
+        public async Task<(bool IsSuccess, string? ProviderMessageId, string? ErrorMessage)> SendSmsAsync(
+            string recipient, 
+            string content, 
+            string? dltContentId = null, 
+            string? senderId = null)
         {
             try
             {
                 var client = _httpClientFactory.CreateClient(nameof(PointerItSmsProvider));
 
-                string baseUrl = _settings.Url.EndsWith("?username=") 
-                    ? _settings.Url.Substring(0, _settings.Url.Length - 10) 
+                string baseUrl = _settings.Url.Contains('?') 
+                    ? _settings.Url.Split('?')[0] 
                     : _settings.Url;
 
                 var builder = new UriBuilder(baseUrl);
@@ -44,7 +53,7 @@ namespace PickNBook.Api.Services.Notifications.Providers
                 query["username"] = _settings.Username;
                 query["password"] = _settings.Password;
                 query["unicode"] = "false";
-                query["from"] = _settings.SenderId;
+                query["from"] = !string.IsNullOrWhiteSpace(senderId) ? senderId : _settings.SenderId;
                 
                 string formattedRecipient = recipient.Trim();
                 if (formattedRecipient.StartsWith("+"))
@@ -53,20 +62,34 @@ namespace PickNBook.Api.Services.Notifications.Providers
                 }
                 
                 query["to"] = formattedRecipient;
-                query["dltPrincipalEntityId"] = _settings.PrincipalEntityId;
-                query["dltContentId"] = _settings.ContentId;
+
+                if (!string.IsNullOrWhiteSpace(_settings.PrincipalEntityId))
+                {
+                    query["dltPrincipalEntityId"] = _settings.PrincipalEntityId;
+                }
+
+                string effectiveContentId = !string.IsNullOrWhiteSpace(dltContentId) 
+                    ? dltContentId 
+                    : _settings.DefaultContentId;
+
+                query["dltContentId"] = effectiveContentId;
                 query["text"] = content;
+
+                var correlationId = PickNBook.Api.Infrastructure.Logging.CorrelationIdContext.CorrelationId;
+                if (!string.IsNullOrWhiteSpace(correlationId))
+                {
+                    query["corelationId"] = correlationId;
+                }
 
                 builder.Query = query.ToString();
                 var requestUrl = builder.ToString();
-
 
                 var response = await client.PostAsync(requestUrl, null);
                 var responseContent = await response.Content.ReadAsStringAsync();
                 
                 if (!response.IsSuccessStatusCode)
                 {
-                    _logger.LogError($"PointerIT HTTP Failure: {response.StatusCode}");
+                    _logger.LogError($"PointerIT HTTP Failure: {response.StatusCode} - {responseContent}");
                     return (false, null, $"HTTP {response.StatusCode}");
                 }
 
@@ -83,7 +106,8 @@ namespace PickNBook.Api.Services.Notifications.Providers
                     return (true, txId, null);
                 }
 
-                return (false, null, description);
+                _logger.LogWarning("PointerIT rejected SMS. StatusCode: {StatusCode}, State: {State}, Description: {Description}", statusCode, state, description);
+                return (false, null, string.IsNullOrWhiteSpace(description) ? $"PointerIT error {statusCode}: {state}" : description);
             }
             catch (Exception ex)
             {

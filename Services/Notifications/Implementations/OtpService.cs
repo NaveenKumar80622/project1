@@ -54,18 +54,31 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             await _dbContext.SaveChangesAsync();
 
             object payload;
-            if (purpose == "Login" && channel == "SMS")
+            if (purpose == "Registration")
+            {
+                payload = new
+                {
+                    OtpCode = otpCode,
+                    ExpiryMinutes = expiryMinutes
+                };
+            }
+            else if (purpose == "Login" && channel == "SMS")
             {
                 payload = new
                 {
                     OtpCode = otpCode, // kept for backward compat / email channel
-                    Var1 = _routingSettings.LoginOtpAppName ?? "ShyamAgro", // DLT ${var1}
+                    ExpiryMinutes = expiryMinutes,
+                    Var1 = _routingSettings.LoginOtpAppName ?? "PickNBook", // DLT ${var1}
                     Var2 = otpCode // DLT ${var2}
                 };
             }
             else
             {
-                payload = new { OtpCode = otpCode };
+                payload = new 
+                { 
+                    OtpCode = otpCode,
+                    ExpiryMinutes = expiryMinutes
+                };
             }
 
             // Determine template based on purpose

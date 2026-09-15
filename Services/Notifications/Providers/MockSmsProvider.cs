@@ -17,12 +17,18 @@ namespace PickNBook.Api.Services.Notifications.Providers
 
         public Task<(bool IsSuccess, string? ProviderMessageId, string? ErrorMessage)> SendAsync(string recipient, string content, string? subject = null)
         {
+            return SendSmsAsync(recipient, content, subject);
+        }
+
+        public Task<(bool IsSuccess, string? ProviderMessageId, string? ErrorMessage)> SendSmsAsync(string recipient, string content, string? dltContentId = null, string? senderId = null)
+        {
             _logger.LogInformation("--- MOCK SMS SENT ---");
             _logger.LogInformation($"To: {recipient}");
             _logger.LogInformation($"Content: {content}");
+            _logger.LogInformation($"DLT Content ID: {dltContentId ?? "N/A"}");
             _logger.LogInformation("---------------------");
 
-            return Task.FromResult((true, $"mock-sms-{System.Guid.NewGuid()}", (string?)null));
+            return Task.FromResult((true, (string?)$"mock-sms-{System.Guid.NewGuid()}", (string?)null));
         }
     }
 }
