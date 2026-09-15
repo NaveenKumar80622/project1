@@ -246,42 +246,102 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(ModelState);
             }
 
-            var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+            var isMobile = string.Equals(request.Channel, "Mobile", StringComparison.OrdinalIgnoreCase);
+            var channel = isMobile ? "SMS" : "Email";
 
-            if (User.Identity?.IsAuthenticated == true)
+            if (isMobile)
             {
-                var loggedInEmail = User.FindFirstValue(ClaimTypes.Email)?.ToLowerInvariant();
-                if (!string.Equals(loggedInEmail, normalizedEmail))
+                if (string.IsNullOrWhiteSpace(request.PhoneNumber))
+                {
+                    return BadRequest(new { success = false, message = "Phone number is required for Mobile OTP." });
+                }
+
+                var normalizedPhone = request.PhoneNumber.Trim();
+
+                if (User.Identity?.IsAuthenticated == true)
+                {
+                    var loggedInPhone = User.FindFirstValue(ClaimTypes.MobilePhone);
+                    if (!string.IsNullOrEmpty(loggedInPhone) && !string.Equals(loggedInPhone, normalizedPhone))
+                    {
+                        return BadRequest(new
+                        {
+                            success = false,
+                            message = "Wrong phone number: Please enter your registered logged-in phone number."
+                        });
+                    }
+                }
+
+                var user = await _context.Users
+                    .FirstOrDefaultAsync(x => x.PhoneNumber == normalizedPhone && x.Role == AuthRoles.User);
+
+                if (user == null)
                 {
                     return BadRequest(new
                     {
                         success = false,
-                        message = "Wrong email: Please enter your registered logged-in email."
+                        message = "Phone number not registered"
                     });
                 }
-            }
 
-            var user = await _context.Users
-                .FirstOrDefaultAsync(x => x.Email.ToLower() == normalizedEmail);
-
-            if (user == null)
-            {
-                return BadRequest(new
+                if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
                 {
-                    success = false,
-                    message = "Email not registered"
-                });
+                    return Unauthorized(new { success = false, message = "Your account is inactive. Please contact support." });
+                }
+
+                var oldOtps = _context.OTPs.Where(x => x.PhoneNumber == normalizedPhone && x.Purpose == OtpPurposes.PasswordReset && !x.IsUsed);
+                _context.OTPs.RemoveRange(oldOtps);
+                await _context.SaveChangesAsync();
+
+                var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedPhone, channel, OtpPurposes.PasswordReset, user.Id);
+
+                if (!isSent) return BadRequest(new { success = false, message = "Unable to send password reset OTP.", error = errorMessage ?? "SMS provider rejected the request." });
+
+                return Ok(new { success = true, message = "OTP sent successfully" });
             }
+            else
+            {
+                if (string.IsNullOrWhiteSpace(request.Email))
+                {
+                    return BadRequest(new { success = false, message = "Email is required for Email OTP." });
+                }
 
-            var oldOtps = _context.OTPs.Where(x => x.Email == normalizedEmail && x.Purpose == OtpPurposes.PasswordReset && !x.IsUsed);
-            _context.OTPs.RemoveRange(oldOtps);
-            await _context.SaveChangesAsync();
+                var normalizedEmail = request.Email.Trim().ToLowerInvariant();
 
-            var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", OtpPurposes.PasswordReset, user.Id);
+                if (User.Identity?.IsAuthenticated == true)
+                {
+                    var loggedInEmail = User.FindFirstValue(ClaimTypes.Email)?.ToLowerInvariant();
+                    if (!string.Equals(loggedInEmail, normalizedEmail))
+                    {
+                        return BadRequest(new
+                        {
+                            success = false,
+                            message = "Wrong email: Please enter your registered logged-in email."
+                        });
+                    }
+                }
 
-            if (!isSent) return BadRequest(new { success = false, message = "Unable to send OTP.", error = errorMessage ?? "Email provider rejected the request." });
+                var user = await _context.Users
+                    .FirstOrDefaultAsync(x => x.Email.ToLower() == normalizedEmail);
 
-            return Ok(new { success = true, message = "OTP sent successfully" });
+                if (user == null)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Email not registered"
+                    });
+                }
+
+                var oldOtps = _context.OTPs.Where(x => x.Email == normalizedEmail && x.Purpose == OtpPurposes.PasswordReset && !x.IsUsed);
+                _context.OTPs.RemoveRange(oldOtps);
+                await _context.SaveChangesAsync();
+
+                var (isSent, _, errorMessage) = await _otpService.GenerateAndSendOtpAsync(normalizedEmail, "Email", OtpPurposes.PasswordReset, user.Id);
+
+                if (!isSent) return BadRequest(new { success = false, message = "Unable to send OTP.", error = errorMessage ?? "Email provider rejected the request." });
+
+                return Ok(new { success = true, message = "OTP sent successfully" });
+            }
         }
 
         [HttpPost("forgot-password/verify-otp")]
@@ -292,9 +352,15 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(ModelState);
             }
 
-            var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+            var isMobile = string.Equals(request.Channel, "Mobile", StringComparison.OrdinalIgnoreCase);
+            var recipient = isMobile ? request.PhoneNumber?.Trim() : request.Email?.Trim()?.ToLowerInvariant();
 
-            var (isValid, message) = await _otpService.VerifyOtpAsync(normalizedEmail, OtpPurposes.PasswordReset, request.Otp);
+            if (string.IsNullOrWhiteSpace(recipient))
+            {
+                return BadRequest(new { success = false, message = isMobile ? "Phone number is required." : "Email is required." });
+            }
+
+            var (isValid, message) = await _otpService.VerifyOtpAsync(recipient, OtpPurposes.PasswordReset, request.Otp);
 
             if (!isValid)
             {
@@ -988,10 +1054,18 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(ModelState);
             }
 
-            var normalizedEmail = request.Email.Trim().ToLowerInvariant();
+            var normalizedEmail = request.Email?.Trim().ToLowerInvariant();
+            var normalizedPhone = request.PhoneNumber?.Trim();
+
+            if (string.IsNullOrWhiteSpace(normalizedEmail) && string.IsNullOrWhiteSpace(normalizedPhone))
+            {
+                return BadRequest(new { success = false, message = "Email or Phone number is required." });
+            }
 
             var user = await _context.Users
-                .FirstOrDefaultAsync(x => x.Email.ToLower() == normalizedEmail);
+                .FirstOrDefaultAsync(x =>
+                    (!string.IsNullOrEmpty(normalizedPhone) && x.PhoneNumber == normalizedPhone && x.Role == AuthRoles.User) ||
+                    (!string.IsNullOrEmpty(normalizedEmail) && x.Email.ToLower() == normalizedEmail));
 
             if (user == null)
             {
@@ -1004,10 +1078,11 @@ namespace PickNBook.Api.Controllers
 
             var verifiedOtp = await _context.OTPs
                 .FirstOrDefaultAsync(x =>
-                    x.Email == normalizedEmail &&
                     x.Purpose == OtpPurposes.PasswordReset &&
                     x.IsVerified &&
-                    x.Expiry > DateTime.UtcNow);
+                    x.Expiry > DateTime.UtcNow &&
+                    ((!string.IsNullOrEmpty(normalizedPhone) && x.PhoneNumber == normalizedPhone) ||
+                     (!string.IsNullOrEmpty(normalizedEmail) && x.Email == normalizedEmail)));
 
             if (verifiedOtp == null)
             {
@@ -1017,6 +1092,7 @@ namespace PickNBook.Api.Controllers
                     message = "OTP verification required"
                 });
             }
+
             var passwordCheck = _passwordHasher.VerifyHashedPassword(
                 user,
                 user.PasswordHash,
@@ -1034,8 +1110,16 @@ namespace PickNBook.Api.Controllers
             user.PasswordHash =
                 _passwordHasher.HashPassword(user, request.NewPassword);
 
-            await _context.SaveChangesAsync();
             verifiedOtp.IsUsed = true;
+
+            // Invalidate any other pending password reset OTPs for this user
+            await _context.OTPs
+                .Where(x =>
+                    ((!string.IsNullOrEmpty(normalizedPhone) && x.PhoneNumber == normalizedPhone) ||
+                     (!string.IsNullOrEmpty(normalizedEmail) && x.Email == normalizedEmail)) &&
+                    x.Purpose == OtpPurposes.PasswordReset &&
+                    !x.IsUsed)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.IsUsed, true));
 
             await _context.SaveChangesAsync();
 

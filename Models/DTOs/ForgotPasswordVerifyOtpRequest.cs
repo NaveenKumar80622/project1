@@ -1,14 +1,19 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 
 namespace PickNBook.Api.Models.DTOs
 {
     public class ForgotPasswordVerifyOtpRequest
     {
-        [Required]
         [EmailAddress]
-        public string Email { get; set; } = string.Empty;
+        public string? Email { get; set; }
+
+        [RegularExpression(@"^[6-9]\d{9}$", ErrorMessage = "Invalid phone number format.")]
+        public string? PhoneNumber { get; set; }
+
+        public string Channel { get; set; } = "Email"; // "Email" or "Mobile"
 
         [Required]
+        [StringLength(6)]
         public string Otp { get; set; } = string.Empty;
     }
 }

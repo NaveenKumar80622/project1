@@ -72,6 +72,16 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                     Var2 = otpCode // DLT ${var2}
                 };
             }
+            else if (purpose == "PasswordReset" || purpose == "B2BPasswordReset")
+            {
+                payload = new
+                {
+                    OtpCode = otpCode,
+                    ExpiryMinutes = expiryMinutes,
+                    Var1 = otpCode,
+                    Var2 = expiryMinutes
+                };
+            }
             else
             {
                 payload = new 
