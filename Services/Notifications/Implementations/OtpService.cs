@@ -28,8 +28,8 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             string challengeId = Guid.NewGuid().ToString("N");
             string hash = HashOtp(otpCode);
 
-            // Dynamically set expiry: 10 minutes for Login, 5 minutes for everything else
-            int expiryMinutes = purpose == "Login" ? 10 : 5;
+            // OTP expiry: 5 minutes matching approved DLT template sample content
+            int expiryMinutes = 5;
 
             var otpRecord = new PickNBook.Api.Models.OTP
             {
