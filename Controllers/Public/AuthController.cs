@@ -272,7 +272,9 @@ namespace PickNBook.Api.Controllers
                 }
 
                 var user = await _context.Users
-                    .FirstOrDefaultAsync(x => x.PhoneNumber == normalizedPhone && x.Role == AuthRoles.User);
+                    .FirstOrDefaultAsync(x => 
+                        (x.PhoneNumber == normalizedPhone || x.PhoneNumber == "+91" + normalizedPhone || x.PhoneNumber == "91" + normalizedPhone) && 
+                        x.Role == AuthRoles.User);
 
                 if (user == null)
                 {
@@ -1064,7 +1066,7 @@ namespace PickNBook.Api.Controllers
 
             var user = await _context.Users
                 .FirstOrDefaultAsync(x =>
-                    (!string.IsNullOrEmpty(normalizedPhone) && x.PhoneNumber == normalizedPhone && x.Role == AuthRoles.User) ||
+                    (!string.IsNullOrEmpty(normalizedPhone) && (x.PhoneNumber == normalizedPhone || x.PhoneNumber == "+91" + normalizedPhone || x.PhoneNumber == "91" + normalizedPhone) && x.Role == AuthRoles.User) ||
                     (!string.IsNullOrEmpty(normalizedEmail) && x.Email.ToLower() == normalizedEmail));
 
             if (user == null)
