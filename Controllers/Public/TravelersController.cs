@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using System.Security.Claims;
@@ -8,6 +8,7 @@ using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace PickNBook.Api.Controllers
 {
@@ -18,6 +19,10 @@ namespace PickNBook.Api.Controllers
         private static readonly string[] AllowedTypes = ["Adult", "Child", "Infant"];
         private static readonly string[] AllowedTitles = ["Mr", "Mrs", "Ms"];
         private static readonly string[] AllowedGenders = ["Male", "Female", "Other"];
+        private static readonly Regex NameRegex = new(@"^[A-Za-z\s\-']+$", RegexOptions.Compiled);
+        private static readonly Regex EmailRegex = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", RegexOptions.Compiled);
+        private static readonly Regex PhoneRegex = new(@"^\+?[1-9]\d{6,14}$", RegexOptions.Compiled);
+        private static readonly Regex PassportRegex = new(@"^[A-Za-z0-9]{6,20}$", RegexOptions.Compiled);
 
         [HttpGet]
         public async Task<IActionResult> GetTravelers(
@@ -136,15 +141,14 @@ namespace PickNBook.Api.Controllers
                 UserId = userId!,
                 Type = normalizedType!,
                 Title = normalizedTitle!,
-                FirstName = request.FirstName.Trim(),
-                LastName = request.LastName.Trim(),
+                FirstName = (request.FirstName ?? string.Empty).Trim(),
+                LastName = (request.LastName ?? string.Empty).Trim(),
                 Gender = normalizedGender!,
-                //Dob = request.Dob,
                 Age = request.Age,
-                Email = request.Email.Trim(),
-                PhoneNo = request.PhoneNo.Trim(),
-                PassportNo = string.IsNullOrWhiteSpace(request.PassportNo) ? null : request.PassportNo.Trim(),
-                Country = request.Country.Trim(),
+                Email = (request.Email ?? string.Empty).Trim(),
+                PhoneNo = (request.PhoneNo ?? string.Empty).Trim(),
+                PassportNo = string.IsNullOrWhiteSpace(request.PassportNo) ? null : request.PassportNo.Trim().ToUpperInvariant(),
+                Country = (request.Country ?? string.Empty).Trim(),
                 CreatedAtUtc = utcNow,
                 UpdatedAtUtc = utcNow
             };
@@ -185,15 +189,14 @@ namespace PickNBook.Api.Controllers
 
             traveler.Type = normalizedType!;
             traveler.Title = normalizedTitle!;
-            traveler.FirstName = request.FirstName.Trim();
-            traveler.LastName = request.LastName.Trim();
+            traveler.FirstName = (request.FirstName ?? string.Empty).Trim();
+            traveler.LastName = (request.LastName ?? string.Empty).Trim();
             traveler.Gender = normalizedGender!;
-            //traveler.Dob = request.Dob;
             traveler.Age = request.Age;
-            traveler.Email = request.Email.Trim();
-            traveler.PhoneNo = request.PhoneNo.Trim();
-            traveler.PassportNo = string.IsNullOrWhiteSpace(request.PassportNo) ? null : request.PassportNo.Trim();
-            traveler.Country = request.Country.Trim();
+            traveler.Email = (request.Email ?? string.Empty).Trim();
+            traveler.PhoneNo = (request.PhoneNo ?? string.Empty).Trim();
+            traveler.PassportNo = string.IsNullOrWhiteSpace(request.PassportNo) ? null : request.PassportNo.Trim().ToUpperInvariant();
+            traveler.Country = (request.Country ?? string.Empty).Trim();
             traveler.UpdatedAtUtc = DateTime.UtcNow;
 
             await dbContext.SaveChangesAsync();
@@ -246,87 +249,156 @@ namespace PickNBook.Api.Controllers
             UpsertTravelerRequestDto request,
             out string? normalizedType,
             out string? normalizedTitle,
-            out string? normalizedGender
-            )
+            out string? normalizedGender)
         {
-            normalizedType = ResolveAllowedValue(request.Type, AllowedTypes);
             normalizedTitle = ResolveAllowedValue(request.Title, AllowedTitles);
             normalizedGender = ResolveAllowedValue(request.Gender, AllowedGenders);
-           
 
-
-            if (normalizedType is null)
-            {
-                return $"Invalid type. Allowed values: {string.Join(", ", AllowedTypes)}.";
-            }
-
+            // 1. Mandatory Title
             if (normalizedTitle is null)
             {
+                normalizedType = null;
                 return $"Invalid title. Allowed values: {string.Join(", ", AllowedTitles)}.";
             }
 
+            // 2. Mandatory Gender
             if (normalizedGender is null)
             {
+                normalizedType = null;
                 return $"Invalid gender. Allowed values: {string.Join(", ", AllowedGenders)}.";
             }
 
-            if (string.IsNullOrWhiteSpace(request.FirstName) || string.IsNullOrWhiteSpace(request.LastName))
+            // 3. Mandatory FirstName
+            if (string.IsNullOrWhiteSpace(request.FirstName))
             {
-                return "FirstName and LastName are required.";
+                normalizedType = null;
+                return "FirstName is required.";
             }
 
-            //if (string.IsNullOrWhiteSpace(request.Email))
-            //{
-            //    return "Email is required.";
-            //}
-
-            //if (!new EmailAddressAttribute().IsValid(request.Email.Trim()))
-            //{
-            //    return "Email format is invalid.";
-            //}
-
-            //if (string.IsNullOrWhiteSpace(request.PhoneNo))
-            //{
-            //    return "PhoneNo is required.";
-            //}
-
-            if (string.IsNullOrWhiteSpace(request.Country))
+            var firstName = request.FirstName.Trim();
+            if (firstName.Length > 80)
             {
-                return "Country is required.";
+                normalizedType = null;
+                return "FirstName cannot exceed 80 characters.";
             }
 
-            if (request.Age <= 0)
+            if (!NameRegex.IsMatch(firstName))
             {
-                return "Age must be greater than 0.";
+                normalizedType = null;
+                return "FirstName can only contain letters, spaces, or hyphens.";
+            }
+
+            // 4. Mandatory Age
+            if (request.Age < 0 || request.Age > 120)
+            {
+                normalizedType = null;
+                return "Age must be between 0 and 120.";
             }
 
             var age = request.Age;
 
-
-            // 🔥 NOW USE parsedDob instead of request.Dob
-
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
-
-            if (normalizedType == "Adult" && age < 12)
+            // 5. Optional Type (validated only when provided, otherwise auto-inferred from age)
+            if (!string.IsNullOrWhiteSpace(request.Type))
             {
-                return "Type Adult requires age 12+.";
+                normalizedType = ResolveAllowedValue(request.Type, AllowedTypes);
+                if (normalizedType is null)
+                {
+                    return $"Invalid type. Allowed values: {string.Join(", ", AllowedTypes)}.";
+                }
+
+                if (normalizedType == "Adult" && age < 12)
+                {
+                    return "Type Adult requires age 12+.";
+                }
+
+                if (normalizedType == "Child" && (age < 2 || age > 11))
+                {
+                    return "Type Child requires age 2 to 11.";
+                }
+
+                if (normalizedType == "Infant" && (age < 0 || age > 1))
+                {
+                    return "Type Infant requires age 0 to 1.";
+                }
+            }
+            else
+            {
+                normalizedType = age >= 12 ? "Adult" : (age >= 2 ? "Child" : "Infant");
             }
 
-            if (normalizedType == "Child" && (age < 2 || age > 11))
+            // 6. Optional LastName (validated only when provided)
+            if (!string.IsNullOrWhiteSpace(request.LastName))
             {
-                return "Type Child requires age 2 to 11.";
+                var lastName = request.LastName.Trim();
+                if (lastName.Length > 80)
+                {
+                    return "LastName cannot exceed 80 characters.";
+                }
+
+                if (!NameRegex.IsMatch(lastName))
+                {
+                    return "LastName can only contain letters, spaces, or hyphens.";
+                }
             }
 
-            if (normalizedType == "Infant" && (age < 0 || age > 1))
+            // 7. Optional Country (validated only when provided)
+            if (!string.IsNullOrWhiteSpace(request.Country))
             {
-                return "Type Infant requires age 0 to 1.";
+                var country = request.Country.Trim();
+                if (country.Length > 80)
+                {
+                    return "Country cannot exceed 80 characters.";
+                }
+            }
+
+            // 8. Optional Email (validated only when provided)
+            if (!string.IsNullOrWhiteSpace(request.Email))
+            {
+                var email = request.Email.Trim();
+                if (email.Length > 150)
+                {
+                    return "Email cannot exceed 150 characters.";
+                }
+
+                if (!EmailRegex.IsMatch(email))
+                {
+                    return "Email format is invalid.";
+                }
+            }
+
+            // 9. Optional PhoneNo (validated only when provided)
+            if (!string.IsNullOrWhiteSpace(request.PhoneNo))
+            {
+                var rawPhone = request.PhoneNo.Trim();
+                if (rawPhone.Length > 30)
+                {
+                    return "Phone number cannot exceed 30 characters.";
+                }
+
+                var cleanPhone = Regex.Replace(rawPhone, @"[\s\-]", string.Empty);
+                if (!PhoneRegex.IsMatch(cleanPhone))
+                {
+                    return "Invalid phone number format (7 to 15 digits with optional country code).";
+                }
+            }
+
+            // 10. Optional PassportNo (validated only when provided)
+            if (!string.IsNullOrWhiteSpace(request.PassportNo))
+            {
+                var passport = request.PassportNo.Trim();
+                if (passport.Length > 40)
+                {
+                    return "Passport number cannot exceed 40 characters.";
+                }
+
+                if (!PassportRegex.IsMatch(passport))
+                {
+                    return "Passport number must be 6 to 20 alphanumeric characters.";
+                }
             }
 
             return null;
         }
-
-        
 
         private static string? ResolveAllowedValue(string? value, string[] allowed)
         {
