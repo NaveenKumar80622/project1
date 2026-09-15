@@ -123,6 +123,44 @@ namespace PickNBook.Api.Services.Implementations
             return JsonDocument.Parse(responseContent);
         }
 
+        public async Task<JsonDocument> GetRefundsForOrderAsync(string orderId)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{_settings.BaseUrl.TrimEnd('/')}/orders/{orderId}/refunds");
+            request.Headers.Add("x-client-id", _settings.ClientId);
+            request.Headers.Add("x-client-secret", _settings.ClientSecret);
+            request.Headers.Add("x-api-version", _settings.ApiVersion);
+
+            var response = await _httpClient.SendAsync(request);
+            string responseContent = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Cashfree GetRefunds API failed for order {OrderId} with status {Status}: {Response}", orderId, response.StatusCode, responseContent);
+                throw new Exception($"Cashfree GetRefunds API Error: {responseContent}");
+            }
+
+            return JsonDocument.Parse(responseContent);
+        }
+
+        public async Task<JsonDocument> GetRefundStatusAsync(string orderId, string refundId)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, $"{_settings.BaseUrl.TrimEnd('/')}/orders/{orderId}/refunds/{refundId}");
+            request.Headers.Add("x-client-id", _settings.ClientId);
+            request.Headers.Add("x-client-secret", _settings.ClientSecret);
+            request.Headers.Add("x-api-version", _settings.ApiVersion);
+
+            var response = await _httpClient.SendAsync(request);
+            string responseContent = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Cashfree GetRefundStatus API failed for order {OrderId}, refund {RefundId} with status {Status}: {Response}", orderId, refundId, response.StatusCode, responseContent);
+                throw new Exception($"Cashfree GetRefundStatus API Error: {responseContent}");
+            }
+
+            return JsonDocument.Parse(responseContent);
+        }
+
         public bool VerifyWebhookSignature(string rawBody, string timestamp, string signature)
         {
             try

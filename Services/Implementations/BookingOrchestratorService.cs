@@ -195,28 +195,42 @@ namespace PickNBook.Api.Services.Implementations
                     
                     // Check Cashfree's actual refund status from the response
                     string cashfreeRefundStatus = "PENDING";
+                    string? statusDescription = null;
                     if (refundResponse.RootElement.TryGetProperty("refund_status", out var statusEl))
                     {
                         cashfreeRefundStatus = statusEl.GetString() ?? "PENDING";
+                    }
+                    if (refundResponse.RootElement.TryGetProperty("status_description", out var descEl))
+                    {
+                        statusDescription = descEl.GetString();
                     }
                     
                     payment.RefundId = refundId;
                     payment.RefundReason = reason;
                     
-                    if (cashfreeRefundStatus == "SUCCESS")
+                    if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
                     {
                         payment.RefundStatus = "Refunded";
                         payment.Status = "REFUNDED";
+                        payment.LastError = null;
                     }
-                    else if (cashfreeRefundStatus == "CANCELLED")
+                    else if (cashfreeRefundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) || cashfreeRefundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
                     {
                         payment.RefundStatus = "RefundFailed";
-                        payment.LastError = "Cashfree returned CANCELLED for refund.";
+                        payment.LastError = statusDescription ?? "Cashfree returned CANCELLED/FAILED for refund.";
+                    }
+                    else if (cashfreeRefundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
+                    {
+                        payment.RefundStatus = "RefundOnHold";
+                        payment.LastError = statusDescription ?? "Refund on hold because of insufficient account balance";
+                        _logger.LogCritical("CRITICAL: Cashfree refund {RefundId} for Payment {PaymentId} is ONHOLD due to insufficient merchant balance! Note: {StatusDesc}", 
+                            refundId, payment.Id, payment.LastError);
                     }
                     else
                     {
                         // PENDING or any other status — refund is in progress
                         payment.RefundStatus = "RefundProcessing";
+                        payment.LastError = statusDescription;
                     }
                     
                     await _dbContext.SaveChangesAsync();

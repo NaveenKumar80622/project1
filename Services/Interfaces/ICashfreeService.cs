@@ -14,6 +14,10 @@ namespace PickNBook.Api.Services.Interfaces
         
         Task<JsonDocument> InitiateRefundAsync(string orderId, decimal amount, string refundId, string refundNote);
         
+        Task<JsonDocument> GetRefundsForOrderAsync(string orderId);
+
+        Task<JsonDocument> GetRefundStatusAsync(string orderId, string refundId);
+        
         bool VerifyWebhookSignature(string rawBody, string timestamp, string signature);
     }
 }

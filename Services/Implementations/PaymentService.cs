@@ -334,6 +334,54 @@ namespace PickNBook.Api.Services.Implementations
                 return true;
             }
 
+            var paymentRecord = await _dbContext.Payments
+                .FirstOrDefaultAsync(p => p.RefundId == cashfreeRefundId || p.CashfreeOrderId == cashfreeRefundId);
+
+            if (paymentRecord != null)
+            {
+                if (paymentRecord.RefundStatus == "Refunded" || paymentRecord.Status == "REFUNDED")
+                {
+                    _logger.LogInformation("Refund for Payment {PaymentId}, RefundId {RefundId} is already Refunded. Ignoring webhook.", paymentRecord.Id, cashfreeRefundId);
+                    return true;
+                }
+
+                if (refundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                {
+                    paymentRecord.RefundStatus = "Refunded";
+                    paymentRecord.Status = "REFUNDED";
+                    paymentRecord.UpdatedAt = DateTime.UtcNow;
+                    paymentRecord.LastError = null;
+
+                    await _notificationService.EnqueueAsync(
+                        eventType: "RefundCompleted",
+                        channel: "Email",
+                        recipient: paymentRecord.UserId,
+                        templateKey: "REFUND_COMPLETED",
+                        payload: new { Amount = paymentRecord.FinalPayableAmount, BookingId = paymentRecord.PaymentReference }
+                    );
+                }
+                else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase) || refundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
+                {
+                    paymentRecord.RefundStatus = "RefundFailed";
+                    paymentRecord.UpdatedAt = DateTime.UtcNow;
+                }
+                else if (refundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
+                {
+                    paymentRecord.RefundStatus = "RefundOnHold";
+                    paymentRecord.UpdatedAt = DateTime.UtcNow;
+                    paymentRecord.LastError = "Refund on hold because of insufficient account balance";
+                }
+                else
+                {
+                    paymentRecord.RefundStatus = "RefundProcessing";
+                    paymentRecord.UpdatedAt = DateTime.UtcNow;
+                }
+
+                await _dbContext.SaveChangesAsync();
+                _logger.LogInformation("Updated payment refund status for Payment {PaymentId}, RefundId {RefundId} to {Status}", paymentRecord.Id, cashfreeRefundId, paymentRecord.RefundStatus);
+                return true;
+            }
+
             _logger.LogWarning("Received refund webhook for unknown CashfreeRefundId {RefundId}", cashfreeRefundId);
             return false;
         }

@@ -7,16 +7,26 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 
+using PickNBook.Api.Services.Interfaces;
+using Microsoft.Extensions.Logging;
+
 namespace PickNBook.Api.Controllers.Admin
 {
     [Route("api/admin/payments")]
     public class AdminPaymentsController : AdminApiController
     {
         private readonly AppDbContext _dbContext;
+        private readonly ICashfreeService _cashfreeService;
+        private readonly ILogger<AdminPaymentsController> _logger;
 
-        public AdminPaymentsController(AppDbContext dbContext)
+        public AdminPaymentsController(
+            AppDbContext dbContext,
+            ICashfreeService cashfreeService,
+            ILogger<AdminPaymentsController> logger)
         {
             _dbContext = dbContext;
+            _cashfreeService = cashfreeService;
+            _logger = logger;
         }
 
         /// <summary>
@@ -27,13 +37,13 @@ namespace PickNBook.Api.Controllers.Admin
         {
             var payments = await _dbContext.Payments.AsNoTracking().ToListAsync();
 
-            var totalRevenue = payments.Where(p => p.Status == "SUCCESS").Sum(p => p.FinalPayableAmount);
+            var totalRevenue = payments.Where(p => p.Status == "SUCCESS" || p.Status == "Success").Sum(p => p.FinalPayableAmount);
             var totalPayments = payments.Count;
-            var successfulPayments = payments.Count(p => p.Status == "SUCCESS");
-            var failedPayments = payments.Count(p => p.Status != "SUCCESS" && p.Status != "PENDING");
-            var pendingPayments = payments.Count(p => p.Status == "PENDING" || p.Status == "Created");
-            var pendingRefunds = payments.Count(p => p.RefundStatus == "PENDING" || p.RefundStatus == "PROCESSING");
-            var completedRefunds = payments.Count(p => p.RefundStatus == "COMPLETED" || p.RefundStatus == "SUCCESS");
+            var successfulPayments = payments.Count(p => p.Status == "SUCCESS" || p.Status == "Success");
+            var failedPayments = payments.Count(p => p.Status != "SUCCESS" && p.Status != "Success" && p.Status != "PENDING" && p.Status != "Pending" && p.Status != "Created");
+            var pendingPayments = payments.Count(p => p.Status == "PENDING" || p.Status == "Pending" || p.Status == "Created");
+            var pendingRefunds = payments.Count(p => p.RefundStatus == "PENDING" || p.RefundStatus == "PROCESSING" || p.RefundStatus == "RefundProcessing" || p.RefundStatus == "RefundOnHold");
+            var completedRefunds = payments.Count(p => p.RefundStatus == "COMPLETED" || p.RefundStatus == "SUCCESS" || p.RefundStatus == "Refunded");
 
             return Ok(new
             {
@@ -160,7 +170,7 @@ namespace PickNBook.Api.Controllers.Admin
         }
 
         /// <summary>
-        /// Update refund status or initiate refund for a payment record.
+        /// Dispatch refund request to Cashfree gateway or check live refund status for a payment record.
         /// </summary>
         [HttpPost("{id:int}/refund")]
         public async Task<IActionResult> InitiateRefund(int id, [FromBody] AdminRefundRequestDto req)
@@ -171,23 +181,119 @@ namespace PickNBook.Api.Controllers.Admin
                 return NotFound(new { success = false, message = "Payment record not found." });
             }
 
-            payment.RefundStatus = "PENDING";
-            payment.RefundReason = req.RefundReason?.Trim() ?? "Admin initiated refund";
-            payment.UpdatedAt = DateTime.UtcNow;
-
-            await _dbContext.SaveChangesAsync();
-
-            return Ok(new
+            if (payment.RefundStatus == "Refunded" || payment.Status == "REFUNDED")
             {
-                success = true,
-                message = "Refund status updated successfully.",
-                data = new
+                return BadRequest(new { success = false, message = "Payment has already been refunded." });
+            }
+
+            if (payment.Status != "Success" && payment.Status != "PAID" && payment.Status != "SUCCESS")
+            {
+                return BadRequest(new { success = false, message = "Cannot refund an unpaid or failed payment." });
+            }
+
+            decimal refundAmount = req.RefundAmount.HasValue && req.RefundAmount.Value > 0
+                ? req.RefundAmount.Value
+                : payment.FinalPayableAmount;
+
+            string refundReason = !string.IsNullOrWhiteSpace(req.RefundReason)
+                ? req.RefundReason.Trim()
+                : (payment.RefundReason ?? "Admin initiated refund");
+
+            string refundId = payment.RefundId ?? $"REF-{payment.CashfreeOrderId}";
+
+            try
+            {
+                System.Text.Json.JsonDocument? refundResponse = null;
+                try
                 {
-                    paymentId = payment.Id,
-                    refundStatus = payment.RefundStatus,
-                    refundReason = payment.RefundReason
+                    refundResponse = await _cashfreeService.InitiateRefundAsync(
+                        payment.CashfreeOrderId,
+                        refundAmount,
+                        refundId,
+                        refundReason);
                 }
-            });
+                catch (Exception initEx)
+                {
+                    _logger.LogWarning(initEx, "InitiateRefund on Cashfree returned error, attempting to check live refund status for order {OrderId}", payment.CashfreeOrderId);
+                    try
+                    {
+                        refundResponse = await _cashfreeService.GetRefundStatusAsync(payment.CashfreeOrderId, refundId);
+                    }
+                    catch
+                    {
+                        throw initEx;
+                    }
+                }
+
+                string cashfreeRefundStatus = "PENDING";
+                string? statusDescription = null;
+                if (refundResponse.RootElement.TryGetProperty("refund_status", out var stEl))
+                {
+                    cashfreeRefundStatus = stEl.GetString() ?? "PENDING";
+                }
+                if (refundResponse.RootElement.TryGetProperty("status_description", out var descEl))
+                {
+                    statusDescription = descEl.GetString();
+                }
+
+                payment.RefundId = refundId;
+                payment.RefundReason = refundReason;
+                payment.UpdatedAt = DateTime.UtcNow;
+
+                if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                {
+                    payment.RefundStatus = "Refunded";
+                    payment.Status = "REFUNDED";
+                    payment.LastError = null;
+                }
+                else if (cashfreeRefundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
+                {
+                    payment.RefundStatus = "RefundOnHold";
+                    payment.LastError = statusDescription ?? "Refund on hold because of insufficient account balance";
+                }
+                else if (cashfreeRefundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) || cashfreeRefundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
+                {
+                    payment.RefundStatus = "RefundFailed";
+                    payment.LastError = statusDescription ?? "Cashfree refund failed/cancelled.";
+                }
+                else
+                {
+                    payment.RefundStatus = "RefundProcessing";
+                    payment.LastError = statusDescription;
+                }
+
+                await _dbContext.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    success = true,
+                    message = payment.RefundStatus == "RefundOnHold"
+                        ? "Refund initiated but placed ONHOLD by Cashfree due to insufficient merchant account balance. Please recharge your Cashfree account."
+                        : "Refund processed with Cashfree.",
+                    data = new
+                    {
+                        paymentId = payment.Id,
+                        refundId = payment.RefundId,
+                        refundStatus = payment.RefundStatus,
+                        refundReason = payment.RefundReason,
+                        statusDescription = payment.LastError,
+                        gatewayStatus = cashfreeRefundStatus
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Admin failed to dispatch refund for Payment {PaymentId}", id);
+                payment.LastError = ex.Message;
+                payment.UpdatedAt = DateTime.UtcNow;
+                await _dbContext.SaveChangesAsync();
+
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Failed to dispatch refund to Cashfree: " + ex.Message
+                });
+            }
         }
     }
 

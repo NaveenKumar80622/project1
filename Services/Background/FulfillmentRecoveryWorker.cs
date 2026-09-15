@@ -75,7 +75,10 @@ namespace PickNBook.Api.Services.Background
             var cashfreeService = scope.ServiceProvider.GetRequiredService<ICashfreeService>();
 
             var failedRefunds = await dbContext.Payments
-                .Where(p => p.RefundStatus == "RefundPending" || p.RefundStatus == "RefundFailed")
+                .Where(p => p.RefundStatus == "RefundPending" 
+                         || p.RefundStatus == "RefundFailed" 
+                         || p.RefundStatus == "RefundOnHold" 
+                         || p.RefundStatus == "PENDING")
                 .ToListAsync(stoppingToken);
 
             foreach (var payment in failedRefunds)
@@ -85,14 +88,69 @@ namespace PickNBook.Api.Services.Background
                 try
                 {
                     string refundId = payment.RefundId ?? $"REF-{payment.CashfreeOrderId}";
-                    await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, payment.FinalPayableAmount, refundId, payment.RefundReason ?? "Retry failed refund");
+                    System.Text.Json.JsonDocument? refundDoc = null;
 
-                    payment.RefundStatus = "Refunded";
+                    // If refund was already submitted to Cashfree and is on hold or pending, check live gateway status first
+                    if (!string.IsNullOrEmpty(payment.RefundId) || payment.RefundStatus == "RefundOnHold")
+                    {
+                        try
+                        {
+                            refundDoc = await cashfreeService.GetRefundStatusAsync(payment.CashfreeOrderId, refundId);
+                        }
+                        catch (Exception qEx)
+                        {
+                            _logger.LogWarning(qEx, "Failed to query live refund status for Order {OrderId}, refund {RefundId}", payment.CashfreeOrderId, refundId);
+                        }
+                    }
+
+                    // If not found on gateway or status check wasn't possible, initiate
+                    if (refundDoc == null)
+                    {
+                        refundDoc = await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, payment.FinalPayableAmount, refundId, payment.RefundReason ?? "Retry failed refund");
+                    }
+
+                    string cashfreeRefundStatus = "PENDING";
+                    string? statusDescription = null;
+                    if (refundDoc.RootElement.TryGetProperty("refund_status", out var stEl))
+                    {
+                        cashfreeRefundStatus = stEl.GetString() ?? "PENDING";
+                    }
+                    if (refundDoc.RootElement.TryGetProperty("status_description", out var descEl))
+                    {
+                        statusDescription = descEl.GetString();
+                    }
+
                     payment.RefundId = refundId;
-                    payment.Status = "REFUNDED";
-                    await dbContext.SaveChangesAsync(stoppingToken);
-                    
-                    _logger.LogInformation("Successfully recovered refund for Payment {PaymentId}", payment.Id);
+                    payment.UpdatedAt = DateTime.UtcNow;
+
+                    if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                    {
+                        payment.RefundStatus = "Refunded";
+                        payment.Status = "REFUNDED";
+                        payment.LastError = null;
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        _logger.LogInformation("Successfully verified and recovered refund for Payment {PaymentId}", payment.Id);
+                    }
+                    else if (cashfreeRefundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
+                    {
+                        payment.RefundStatus = "RefundOnHold";
+                        payment.LastError = statusDescription ?? "Refund on hold because of insufficient account balance";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                        _logger.LogWarning("Payment {PaymentId} refund {RefundId} is still ONHOLD on Cashfree due to balance shortfall.", payment.Id, refundId);
+                    }
+                    else if (cashfreeRefundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) || cashfreeRefundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        payment.RefundStatus = "RefundFailed";
+                        payment.RefundAttempts += 1;
+                        payment.LastError = statusDescription ?? "Cashfree refund cancelled/failed.";
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                    }
+                    else
+                    {
+                        payment.RefundStatus = "RefundProcessing";
+                        payment.LastError = statusDescription;
+                        await dbContext.SaveChangesAsync(stoppingToken);
+                    }
                 }
                 catch (Exception ex)
                 {
