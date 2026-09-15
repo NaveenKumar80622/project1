@@ -16,6 +16,7 @@ namespace PickNBook.Api.Migrations
                     body = 'Your PickNBook login OTP is {OtpCode}. It is valid for {ExpiryMinutes} minutes. Do not share this OTP with anyone.',
                     provider_template_id = '1777178903191272452',
                     provider_template_name = 'LOGIN_OTP',
+                    subject = 'PICKBK',
                     is_active = 1,
                     updated_at = NOW()
                 WHERE template_key = 'LOGIN_OTP' AND channel = 'SMS';

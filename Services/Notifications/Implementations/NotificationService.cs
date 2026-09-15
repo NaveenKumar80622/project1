@@ -86,7 +86,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             if (provider == null) return (false, "No provider found");
 
             var result = provider is ISmsProvider smsProvider
-                ? await smsProvider.SendSmsAsync(recipient, content, template?.ProviderTemplateId)
+                ? await smsProvider.SendSmsAsync(recipient, content, template?.ProviderTemplateId, template?.Subject)
                 : await provider.SendAsync(recipient, content, subject);
             
             var log = new NotificationLog
