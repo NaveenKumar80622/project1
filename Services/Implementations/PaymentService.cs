@@ -503,7 +503,7 @@ namespace PickNBook.Api.Services.Implementations
                     refundRecord.Status = "Completed";
                     refundRecord.CompletedAtUtc = DateTime.UtcNow;
                 }
-                else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
+                else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase) || refundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
                 {
                     if (refundRecord.Status != "RefundFailed")
                     {
@@ -514,6 +514,30 @@ namespace PickNBook.Api.Services.Implementations
                             templateKey: "REFUND_FAILED",
                             payload: new { Amount = refundRecord.CustomerRefundAmount, BookingId = refundRecord.BookingReference }
                         );
+
+                        if (!string.IsNullOrWhiteSpace(customerPhone))
+                        {
+                            string statusText = refundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) ? "Cancelled" : "Failed";
+                            await _notificationService.EnqueueAsync(
+                                eventType: "RefundFailed",
+                                channel: "SMS",
+                                recipient: customerPhone.Trim(),
+                                templateKey: "REFUND_FAILED",
+                                payload: new
+                                {
+                                    Status = statusText,
+                                    Reference = refundRecord.BookingReference,
+                                    RefundRef = cashfreeRefundId,
+                                    SupportUrl = "https://www.picknbook.in/contact",
+                                    Var1 = statusText,
+                                    Var2 = refundRecord.BookingReference,
+                                    Var3 = cashfreeRefundId,
+                                    Var4 = "https://www.picknbook.in/contact"
+                                },
+                                bookingId: refundRecord.BookingReference,
+                                userId: refundRecord.UserId
+                            );
+                        }
                     }
                     refundRecord.Status = "RefundFailed";
                 }
@@ -625,6 +649,36 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     paymentRecord.RefundStatus = "RefundFailed";
                     paymentRecord.UpdatedAt = DateTime.UtcNow;
+
+                    string? pPhone = null;
+                    if (int.TryParse(paymentRecord.UserId, out int pUid))
+                    {
+                        var user = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == pUid);
+                        pPhone = user?.PhoneNumber;
+                    }
+                    if (!string.IsNullOrWhiteSpace(pPhone))
+                    {
+                        string statusText = refundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) ? "Cancelled" : "Failed";
+                        await _notificationService.EnqueueAsync(
+                            eventType: "RefundFailed",
+                            channel: "SMS",
+                            recipient: pPhone.Trim(),
+                            templateKey: "REFUND_FAILED",
+                            payload: new
+                            {
+                                Status = statusText,
+                                Reference = paymentRecord.PaymentReference,
+                                RefundRef = cashfreeRefundId,
+                                SupportUrl = "https://www.picknbook.in/contact",
+                                Var1 = statusText,
+                                Var2 = paymentRecord.PaymentReference,
+                                Var3 = cashfreeRefundId,
+                                Var4 = "https://www.picknbook.in/contact"
+                            },
+                            bookingId: paymentRecord.PaymentReference,
+                            userId: paymentRecord.UserId
+                        );
+                    }
                 }
                 else if (refundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
                 {
