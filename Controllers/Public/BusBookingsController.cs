@@ -13,6 +13,7 @@ using PickNBook.Api.Services;
 using PickNBook.Api.Services.SeatLayouts;
 using Microsoft.Extensions.Caching.Memory;
 using PickNBook.Api.Filters;
+using PickNBook.Api.Services.Notifications.Interfaces;
 
 namespace PickNBook.Api.Controllers
 {
@@ -31,6 +32,7 @@ namespace PickNBook.Api.Controllers
     PickNBook.Api.Services.Interfaces.IWalletService walletService,
     PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter,
     BusCityCacheService busCityCacheService,
+    INotificationService notificationService,
     ILogger<BusBookingsController> logger) : BaseApiController
     {
         //private const string UserIdHeaderName = "X-User-Id";
@@ -44,6 +46,7 @@ namespace PickNBook.Api.Controllers
         private static readonly string[] AllowedPassengerGenders = ["Male", "Female"];
         private readonly IWhatsAppService _whatsAppService = whatsAppService;
         private readonly ITicketEmailService _ticketEmailService = ticketEmailService;
+        private readonly INotificationService _notificationService = notificationService;
 
         [HttpGet("user/available")]
         [AllowAnonymous]
@@ -4006,6 +4009,34 @@ Refund: ₹{currentRefundAmount}
 
             if (!sent)
                 logger.LogWarning("WhatsApp cancellation failed: {Message}", msg);
+
+            // ---------------- SMS (DLT: BOOKING_CANCELLED) ----------------
+            if (!string.IsNullOrWhiteSpace(booking.PassengerPhone))
+            {
+                try
+                {
+                    await _notificationService.EnqueueAsync(
+                        eventType: "BookingCancelled",
+                        channel: "SMS",
+                        recipient: booking.PassengerPhone.Trim(),
+                        templateKey: "BOOKING_CANCELLED",
+                        payload: new
+                        {
+                            Reference = booking.BookingReference,
+                            Status = "Success",
+                            Var1 = booking.BookingReference,
+                            Var2 = "Success"
+                        },
+                        bookingId: booking.BookingReference,
+                        userId: userId
+                    );
+                    await dbContext.SaveChangesAsync();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to enqueue SMS cancellation for {BookingReference}", booking.BookingReference);
+                }
+            }
         }
 
         private async Task TrySendBusBookingNotificationsAsync(

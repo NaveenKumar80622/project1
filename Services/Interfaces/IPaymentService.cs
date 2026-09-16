@@ -26,7 +26,8 @@ namespace PickNBook.Api.Services.Interfaces
             string? failureReason = null, DateTime? webhookReceivedAt = null);
             
         Task<bool> ProcessWebhookAsync(string cashfreeOrderId, string eventType,
-            string paymentStatus, decimal amount, string? paymentId, string? paymentMethod);
+            string paymentStatus, decimal amount, string? paymentId, string? paymentMethod,
+            string? failureReason = null);
 
         Task<bool> ProcessRefundWebhookAsync(string cashfreeRefundId, string refundStatus);
             

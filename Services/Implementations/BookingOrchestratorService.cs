@@ -507,13 +507,70 @@ namespace PickNBook.Api.Services.Implementations
                         _logger.LogError(pEx, "Failed to persist Failed BusReservation for Payment {PaymentId}", payment.Id);
                     }
                     
-                    await _notificationService.EnqueueAsync(
-                        eventType: "BusBookingFailed",
-                        channel: "Email",
-                        recipient: reservation.PassengerEmail ?? payment.UserId,
-                        templateKey: "BUS_BOOKING_FAILED",
-                        payload: new { Reason = payment.FailureReason, Amount = payment.FinalPayableAmount }
-                    );
+                    // Determine primary customer-facing reference
+                    string bookingRef = !string.IsNullOrWhiteSpace(reservation.BookingReference)
+                        ? reservation.BookingReference
+                        : (!string.IsNullOrWhiteSpace(payment.PaymentReference) ? payment.PaymentReference : reservation.Pnr);
+
+                    string cleanReason = string.IsNullOrWhiteSpace(payment.FailureReason)
+                        ? "Supplier booking error"
+                        : payment.FailureReason.Trim();
+
+                    if (cleanReason.Length > 45)
+                    {
+                        cleanReason = cleanReason.Substring(0, 42) + "...";
+                    }
+
+                    // 1. Enqueue SMS notification if customer mobile is available
+                    if (!string.IsNullOrWhiteSpace(reservation.PassengerPhone))
+                    {
+                        await _notificationService.EnqueueAsync(
+                            eventType: "BusBookingFailed",
+                            channel: "SMS",
+                            recipient: reservation.PassengerPhone.Trim(),
+                            templateKey: "BUS_BOOKING_FAILED",
+                            payload: new
+                            {
+                                Reference = bookingRef,
+                                Reason = cleanReason,
+                                Var1 = bookingRef,
+                                Var2 = cleanReason,
+                                Amount = payment.FinalPayableAmount
+                            },
+                            bookingId: bookingRef,
+                            userId: payment.UserId
+                        );
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Cannot enqueue BusBookingFailed SMS for Payment {PaymentId}: No phone number available.", payment.Id);
+                    }
+
+                    // 2. Enqueue Email notification if customer email is available
+                    var emailRecipient = !string.IsNullOrWhiteSpace(reservation.PassengerEmail) ? reservation.PassengerEmail.Trim() : (payment.UserId.Contains('@') ? payment.UserId : null);
+                    if (!string.IsNullOrWhiteSpace(emailRecipient))
+                    {
+                        await _notificationService.EnqueueAsync(
+                            eventType: "BusBookingFailed",
+                            channel: "Email",
+                            recipient: emailRecipient,
+                            templateKey: "BUS_BOOKING_FAILED",
+                            payload: new
+                            {
+                                Reason = cleanReason,
+                                Amount = payment.FinalPayableAmount,
+                                Reference = bookingRef,
+                                Var1 = bookingRef,
+                                Var2 = cleanReason
+                            },
+                            bookingId: bookingRef,
+                            userId: payment.UserId
+                        );
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Cannot enqueue BusBookingFailed Email for Payment {PaymentId}: No valid email recipient available.", payment.Id);
+                    }
 
                     await _dbContext.SaveChangesAsync();
                     return (false, payment.FailureReason);

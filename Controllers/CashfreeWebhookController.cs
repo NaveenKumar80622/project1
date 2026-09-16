@@ -90,8 +90,9 @@ namespace PickNBook.Api.Controllers
                 decimal amount = payload.Data.Payment.PaymentAmount;
                 string paymentId = payload.Data.Payment.CfPaymentId;
                 string paymentMethod = payload.Data.Payment.PaymentMethod?.GetMethodName();
+                string? paymentMessage = payload.Data.Payment.PaymentMessage;
 
-                bool processed = await _paymentService.ProcessWebhookAsync(orderId, payload.Type, paymentStatus, amount, paymentId, paymentMethod);
+                bool processed = await _paymentService.ProcessWebhookAsync(orderId, payload.Type, paymentStatus, amount, paymentId, paymentMethod, paymentMessage);
                 
                 // Return 200 OK regardless so Cashfree doesn't retry endlessly, as long as signature was valid.
                 return Ok(new { message = processed ? "Webhook processed" : "Webhook ignored" });
