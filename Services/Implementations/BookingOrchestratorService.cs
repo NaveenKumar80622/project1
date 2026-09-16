@@ -627,12 +627,30 @@ namespace PickNBook.Api.Services.Implementations
                     payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName, Amount = payment.FinalPayableAmount }
                 );
 
+                var boardingTime = reservation.BoardingPointTime ?? bus.DepartureTime;
+                string formattedTime = boardingTime.ToString("dd/MM/yyyy hh:mm tt");
+                string boardingPoint = !string.IsNullOrWhiteSpace(reservation.BoardingPointName)
+                    ? reservation.BoardingPointName
+                    : (!string.IsNullOrWhiteSpace(bus.BoardingPoint) ? bus.BoardingPoint : "Bus Station");
+
                 await _notificationService.EnqueueAsync(
                     eventType: "BusBookingSuccess",
                     channel: "SMS",
-                    recipient: reservation.PassengerPhone ?? "",
-                    templateKey: "BUS_BOOKING_CONFIRMED_SMS",
-                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName }
+                    recipient: (reservation.PassengerPhone ?? "").Trim(),
+                    templateKey: "BUS_BOOKING_CONFIRMED",
+                    payload: new
+                    {
+                        Reference = reservation.BookingReference,
+                        Pnr = reservation.Pnr,
+                        Boarding = boardingPoint,
+                        Time = formattedTime,
+                        Var1 = reservation.BookingReference,
+                        Var2 = reservation.Pnr,
+                        Var3 = boardingPoint,
+                        Var4 = formattedTime
+                    },
+                    bookingId: reservation.BookingReference,
+                    userId: payment.UserId
                 );
 
                 // Commit payment and coupon changes
