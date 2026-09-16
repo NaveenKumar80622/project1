@@ -421,6 +421,23 @@ namespace PickNBook.Api.Services.Implementations
                     return true;
                 }
 
+                string? customerPhone = null;
+                if (int.TryParse(refundRecord.UserId, out int uid))
+                {
+                    var user = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == uid);
+                    customerPhone = user?.PhoneNumber;
+                }
+                if (string.IsNullOrWhiteSpace(customerPhone) && refundRecord.BookingType == "Bus")
+                {
+                    var bus = await _dbContext.BusReservations.AsNoTracking().FirstOrDefaultAsync(b => b.BookingReference == refundRecord.BookingReference);
+                    customerPhone = bus?.PassengerPhone;
+                }
+                else if (string.IsNullOrWhiteSpace(customerPhone) && refundRecord.BookingType == "Hotel")
+                {
+                    var hotel = await _dbContext.HotelReservations.AsNoTracking().FirstOrDefaultAsync(h => h.BookingReference == refundRecord.BookingReference);
+                    customerPhone = hotel?.GuestPhone;
+                }
+
                 if (refundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
                 {
                     if (refundRecord.Status != "Completed")
@@ -432,6 +449,30 @@ namespace PickNBook.Api.Services.Implementations
                             templateKey: "REFUND_COMPLETED",
                             payload: new { Amount = refundRecord.CustomerRefundAmount, BookingId = refundRecord.BookingReference }
                         );
+
+                        if (!string.IsNullOrWhiteSpace(customerPhone))
+                        {
+                            string formattedAmount = refundRecord.CustomerRefundAmount.ToString("N2");
+                            await _notificationService.EnqueueAsync(
+                                eventType: "RefundCompleted",
+                                channel: "SMS",
+                                recipient: customerPhone.Trim(),
+                                templateKey: "REFUND_STATUS",
+                                payload: new
+                                {
+                                    Status = "completed",
+                                    Reference = refundRecord.BookingReference,
+                                    RefundRef = cashfreeRefundId,
+                                    Amount = formattedAmount,
+                                    Var1 = "completed",
+                                    Var2 = refundRecord.BookingReference,
+                                    Var3 = cashfreeRefundId,
+                                    Var4 = formattedAmount
+                                },
+                                bookingId: refundRecord.BookingReference,
+                                userId: refundRecord.UserId
+                            );
+                        }
                     }
                     refundRecord.Status = "Completed";
                     refundRecord.CompletedAtUtc = DateTime.UtcNow;
@@ -461,6 +502,30 @@ namespace PickNBook.Api.Services.Implementations
                             templateKey: "REFUND_INITIATED",
                             payload: new { Amount = refundRecord.CustomerRefundAmount, BookingId = refundRecord.BookingReference }
                         );
+
+                        if (!string.IsNullOrWhiteSpace(customerPhone))
+                        {
+                            string formattedAmount = refundRecord.CustomerRefundAmount.ToString("N2");
+                            await _notificationService.EnqueueAsync(
+                                eventType: "RefundInitiated",
+                                channel: "SMS",
+                                recipient: customerPhone.Trim(),
+                                templateKey: "REFUND_STATUS",
+                                payload: new
+                                {
+                                    Status = "initiated",
+                                    Reference = refundRecord.BookingReference,
+                                    RefundRef = cashfreeRefundId,
+                                    Amount = formattedAmount,
+                                    Var1 = "initiated",
+                                    Var2 = refundRecord.BookingReference,
+                                    Var3 = cashfreeRefundId,
+                                    Var4 = formattedAmount
+                                },
+                                bookingId: refundRecord.BookingReference,
+                                userId: refundRecord.UserId
+                            );
+                        }
                     }
                     refundRecord.Status = "RefundInitiated";
                 }
@@ -499,6 +564,36 @@ namespace PickNBook.Api.Services.Implementations
                         templateKey: "REFUND_COMPLETED",
                         payload: new { Amount = paymentRecord.FinalPayableAmount, BookingId = paymentRecord.PaymentReference }
                     );
+
+                    string? pPhone = null;
+                    if (int.TryParse(paymentRecord.UserId, out int pUid))
+                    {
+                        var user = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == pUid);
+                        pPhone = user?.PhoneNumber;
+                    }
+                    if (!string.IsNullOrWhiteSpace(pPhone))
+                    {
+                        string formattedAmount = paymentRecord.FinalPayableAmount.ToString("N2");
+                        await _notificationService.EnqueueAsync(
+                            eventType: "RefundCompleted",
+                            channel: "SMS",
+                            recipient: pPhone.Trim(),
+                            templateKey: "REFUND_STATUS",
+                            payload: new
+                            {
+                                Status = "completed",
+                                Reference = paymentRecord.PaymentReference,
+                                RefundRef = cashfreeRefundId,
+                                Amount = formattedAmount,
+                                Var1 = "completed",
+                                Var2 = paymentRecord.PaymentReference,
+                                Var3 = cashfreeRefundId,
+                                Var4 = formattedAmount
+                            },
+                            bookingId: paymentRecord.PaymentReference,
+                            userId: paymentRecord.UserId
+                        );
+                    }
                 }
                 else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase) || refundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
                 {

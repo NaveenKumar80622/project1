@@ -4037,6 +4037,48 @@ Refund: ₹{currentRefundAmount}
                     logger.LogError(ex, "Failed to enqueue SMS cancellation for {BookingReference}", booking.BookingReference);
                 }
             }
+
+            // ---------------- SMS (DLT: REFUND_STATUS) ----------------
+            if (currentRefundAmount > 0 && !string.IsNullOrWhiteSpace(booking.PassengerPhone))
+            {
+                try
+                {
+                    var cancellation = await dbContext.BookingCancellations
+                        .OrderByDescending(x => x.Id)
+                        .FirstOrDefaultAsync(x => x.BookingReference == booking.BookingReference);
+
+                    string refundRef = !string.IsNullOrWhiteSpace(cancellation?.CashfreeRefundId)
+                        ? cancellation.CashfreeRefundId
+                        : $"REF-CAN-{booking.BookingReference}";
+                    string statusText = (cancellation?.Status == "Completed" || cancellation?.RefundStatus == "COMPLETED") ? "credited" : "initiated";
+                    string formattedAmount = currentRefundAmount.ToString("N2");
+
+                    await _notificationService.EnqueueAsync(
+                        eventType: "RefundStatus",
+                        channel: "SMS",
+                        recipient: booking.PassengerPhone.Trim(),
+                        templateKey: "REFUND_STATUS",
+                        payload: new
+                        {
+                            Status = statusText,
+                            Reference = booking.BookingReference,
+                            RefundRef = refundRef,
+                            Amount = formattedAmount,
+                            Var1 = statusText,
+                            Var2 = booking.BookingReference,
+                            Var3 = refundRef,
+                            Var4 = formattedAmount
+                        },
+                        bookingId: booking.BookingReference,
+                        userId: userId
+                    );
+                    await dbContext.SaveChangesAsync();
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to enqueue REFUND_STATUS SMS for {BookingReference}", booking.BookingReference);
+                }
+            }
         }
 
         private async Task TrySendBusBookingNotificationsAsync(
