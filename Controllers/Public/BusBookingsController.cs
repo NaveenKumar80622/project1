@@ -2836,6 +2836,9 @@ namespace PickNBook.Api.Controllers
                         RefundPreference = effectiveRefundPreference
                     };
 
+                    dbContext.BookingCancellations.Add(cancellationAudit);
+                    await dbContext.SaveChangesAsync();
+
                     if (cancellationConfirmed && calculatedRefund.FinalCustomerRefundAmount > 0 && int.TryParse(curBooking.UserId, out int uId))
                     {
                         var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == curBooking.UserId && p.BookingReferenceId == curBooking.Id && p.BookingType == "Bus");
@@ -2845,20 +2848,23 @@ namespace PickNBook.Api.Controllers
                             BookingType = "Bus",
                             BookingReference = curBooking.BookingReference,
                             RefundAmount = calculatedRefund.FinalCustomerRefundAmount,
-                            PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                            PaymentMethod = payment?.PaymentMethod ?? curBooking.PaymentMethod ?? "Cashfree",
                             CashfreeOrderId = payment?.CashfreeOrderId,
                             RefundPreference = effectiveRefundPreference,
-                            Reason = curBooking.CancellationReason
+                            Reason = curBooking.CancellationReason,
+                            TotalPaidAmount = payment?.TotalAmount ?? payment?.FinalPayableAmount ?? curBooking.TotalPriceInr,
+                            WalletPaidAmount = payment?.WalletUsedAmount ?? curBooking.WalletPaidAmount,
+                            GatewayPaidAmount = payment?.GatewayPaidAmount ?? curBooking.GatewayPaidAmount,
+                            CancellationId = cancellationAudit.Id
                         });
 
                         cancellationAudit.WalletRefundAmount = routeRes.WalletRefunded;
                         cancellationAudit.GatewayRefundAmount = routeRes.GatewayRefunded;
                         cancellationAudit.CashfreeRefundId = routeRes.CashfreeRefundId;
                         cancellationAudit.RefundStatus = routeRes.RefundStatus;
+                        await dbContext.SaveChangesAsync();
                     }
 
-                    dbContext.BookingCancellations.Add(cancellationAudit);
-                    await dbContext.SaveChangesAsync();
                     await transaction.CommitAsync();
 
                     var resultPassengers = await dbContext.BusReservationPassengers

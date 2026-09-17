@@ -36,10 +36,12 @@ namespace PickNBook.Api.Models.DTOs
 
     public class CancellationRefundResultDto
     {
-        public string RefundStatus { get; set; } = "PENDING"; // COMPLETED, PENDING, FAILED
+        public string RefundStatus { get; set; } = "PENDING"; // COMPLETED, PENDING, FAILED, PARTIALLY_REFUNDED, NOT_REQUIRED
         public string RefundDestination { get; set; } = "ORIGINAL_PAYMENT_METHOD"; // WALLET, ORIGINAL_PAYMENT_METHOD
         public decimal WalletRefunded { get; set; }
         public decimal GatewayRefunded { get; set; }
+        public string WalletStatus { get; set; } = "NOT_REQUIRED"; // Pending, Processing, Refunded, Failed, NOT_REQUIRED
+        public string GatewayStatus { get; set; } = "NOT_REQUIRED"; // Pending, Processing, Refunded, Failed, NOT_REQUIRED
         public string? CashfreeRefundId { get; set; }
         public string? Message { get; set; }
     }

@@ -9,10 +9,14 @@ namespace PickNBook.Api.Services.Interfaces
         public string BookingType { get; set; } = string.Empty; // "Bus", "Hotel", "Flight"
         public string BookingReference { get; set; } = string.Empty;
         public decimal RefundAmount { get; set; }
-        public string PaymentMethod { get; set; } = string.Empty; // "Wallet", "Cashfree", etc.
+        public string PaymentMethod { get; set; } = string.Empty; // "Wallet", "Cashfree", "Hybrid"
         public string? CashfreeOrderId { get; set; }
         public string? RefundPreference { get; set; } // "WALLET" or "ORIGINAL_PAYMENT_METHOD"
         public string? Reason { get; set; }
+        public decimal TotalPaidAmount { get; set; }
+        public decimal WalletPaidAmount { get; set; }
+        public decimal GatewayPaidAmount { get; set; }
+        public int? CancellationId { get; set; }
     }
 
     public interface IRefundRouterService

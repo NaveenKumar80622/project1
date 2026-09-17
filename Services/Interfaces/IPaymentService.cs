@@ -8,7 +8,15 @@ namespace PickNBook.Api.Services.Interfaces
             string userId, string bookingType,
             decimal originalAmount, decimal markupAmount, decimal convenienceFee,
             decimal discountAmount, string? couponCode, string? offerCode,
-            decimal finalPayableAmount, string currency);
+            decimal finalPayableAmount, string currency,
+            decimal? totalAmount = null,
+            decimal? walletUsedAmount = null,
+            decimal? gatewayPaidAmount = null,
+            string? paymentMethod = null,
+            string? walletReservationStatus = null,
+            long? walletTransactionId = null,
+            string? gatewayPaymentMethod = null,
+            string? paymentReference = null);
             
         Task<PendingPaymentBooking> CreatePendingBookingAsync(
             int paymentId, string bookingType, string userId,
@@ -32,5 +40,7 @@ namespace PickNBook.Api.Services.Interfaces
         Task<bool> ProcessRefundWebhookAsync(string cashfreeRefundId, string refundStatus);
             
         Task<PaymentVerificationResponse> VerifyPaymentAsync(string cashfreeOrderId);
+        
+        Task<int> ProcessExpiredReservationsAsync(CancellationToken cancellationToken = default);
     }
 }

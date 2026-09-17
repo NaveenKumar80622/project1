@@ -38,5 +38,11 @@ namespace PickNBook.Api.Models.Payments
         /// When provided, server computes FinalPayableAmount and ignores OrderAmount.
         /// </summary>
         public string? BookingPayloadJson { get; set; }
+
+        /// <summary>
+        /// When true, customer requests using their active wallet balance towards this booking.
+        /// Backend calculates authoritative wallet and gateway portions.
+        /// </summary>
+        public bool UseWallet { get; set; } = false;
     }
 }

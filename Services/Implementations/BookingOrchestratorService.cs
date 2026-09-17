@@ -179,74 +179,141 @@ namespace PickNBook.Api.Services.Implementations
             }
         }
 
+        public async Task RetryRefundAsync(int paymentId)
+        {
+            var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.Id == paymentId);
+            if (payment == null) return;
+            await TriggerRefundAsync(payment, payment.RefundReason ?? "Retry failed refund");
+        }
+
         private async Task TriggerRefundAsync(Payment payment, string reason)
         {
             try
             {
-                if (payment.Status == "Success")
+                if (payment.Status == "Success" || payment.Status == PickNBook.Api.Models.Payments.PaymentStatus.Success || payment.Status == "PAID" || (payment.FulfillmentStatus != null && payment.FulfillmentStatus.StartsWith("Failed")))
                 {
-                    // Check if already refunded
-                    if (payment.RefundStatus == "Refunded" || payment.RefundStatus == "RefundProcessing") return;
-                    
-                    var cashfreeService = _serviceProvider.GetRequiredService<PickNBook.Api.Services.Interfaces.ICashfreeService>();
-                    string refundId = $"REF-{payment.CashfreeOrderId}"; // Deterministic!
-                    
-                    var refundResponse = await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, payment.FinalPayableAmount, refundId, reason);
-                    
-                    // Check Cashfree's actual refund status from the response
-                    string cashfreeRefundStatus = "PENDING";
-                    string? statusDescription = null;
-                    if (refundResponse.RootElement.TryGetProperty("refund_status", out var statusEl))
+                    bool isHybrid = string.Equals(payment.PaymentMethod, "Hybrid", StringComparison.OrdinalIgnoreCase);
+                    bool isWallet = string.Equals(payment.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
+                                    (payment.WalletUsedAmount > 0 && payment.GatewayPaidAmount == 0 && !string.Equals(payment.PaymentMethod, "Cashfree", StringComparison.OrdinalIgnoreCase));
+
+                    bool walletRefundRequired = payment.WalletUsedAmount > 0 || isWallet;
+                    bool gatewayRefundRequired = payment.GatewayPaidAmount > 0 || (!isWallet && payment.FinalPayableAmount > 0);
+
+                    // 1. Component: Customer Wallet Refund
+                    if (walletRefundRequired && payment.WalletReservationStatus != "Refunded")
                     {
-                        cashfreeRefundStatus = statusEl.GetString() ?? "PENDING";
+                        if (int.TryParse(payment.UserId, out var customerUserId) && customerUserId > 0)
+                        {
+                            try
+                            {
+                                var walletService = _serviceProvider.GetRequiredService<PickNBook.Api.Services.Interfaces.IWalletService>();
+                                string refundRef = isHybrid ? $"REF-{payment.PaymentReference}-W" : $"REF-{payment.PaymentReference}";
+                                if (refundRef.Length > 40) refundRef = refundRef.Substring(0, 40);
+
+                                decimal walletRefundAmount = payment.WalletUsedAmount > 0 ? payment.WalletUsedAmount : payment.TotalAmount;
+
+                                var refundTx = await walletService.RefundAsync(
+                                    userId: customerUserId,
+                                    amount: walletRefundAmount,
+                                    referenceType: $"{payment.BookingType}Refund",
+                                    refCode: refundRef,
+                                    description: $"Auto-refund for failed {payment.BookingType} booking: {reason}");
+
+                                payment.WalletReservationStatus = "Refunded";
+                                if (isWallet)
+                                {
+                                    payment.RefundId = refundRef;
+                                    payment.RefundReason = reason;
+                                    payment.RefundStatus = "Refunded";
+                                }
+                                _logger.LogInformation("Successfully auto-refunded {Amount} to customer wallet for failed booking Payment {PaymentId}, TxId {TxId}",
+                                    walletRefundAmount, payment.Id, refundTx.Id);
+                            }
+                            catch (Exception wEx)
+                            {
+                                _logger.LogError(wEx, "Failed to auto-refund customer wallet for Payment {PaymentId}", payment.Id);
+                                payment.LastError = $"Wallet refund failed: {wEx.Message}";
+                                payment.RefundAttempts += 1;
+                            }
+                        }
                     }
-                    if (refundResponse.RootElement.TryGetProperty("status_description", out var descEl))
+
+                    // 2. Component: Cashfree Gateway Refund
+                    if (gatewayRefundRequired && payment.RefundStatus != "Refunded" && payment.RefundStatus != "RefundProcessing")
                     {
-                        statusDescription = descEl.GetString();
+                        try
+                        {
+                            var cashfreeService = _serviceProvider.GetRequiredService<PickNBook.Api.Services.Interfaces.ICashfreeService>();
+                            string refundId = $"REF-{payment.CashfreeOrderId}"; // Deterministic!
+                            decimal gatewayRefundAmount = payment.GatewayPaidAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount;
+
+                            var refundResponse = await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, gatewayRefundAmount, refundId, reason);
+
+                            string cashfreeRefundStatus = "PENDING";
+                            string? statusDescription = null;
+                            if (refundResponse.RootElement.TryGetProperty("refund_status", out var statusEl))
+                            {
+                                cashfreeRefundStatus = statusEl.GetString() ?? "PENDING";
+                            }
+                            if (refundResponse.RootElement.TryGetProperty("status_description", out var descEl))
+                            {
+                                statusDescription = descEl.GetString();
+                            }
+
+                            payment.RefundId = refundId;
+                            payment.RefundReason = reason;
+
+                            if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+                            {
+                                payment.RefundStatus = "Refunded";
+                                payment.LastError = null;
+                            }
+                            else if (cashfreeRefundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) || cashfreeRefundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
+                            {
+                                payment.RefundStatus = "RefundFailed";
+                                payment.LastError = statusDescription ?? "Cashfree returned CANCELLED/FAILED for refund.";
+                                payment.RefundAttempts += 1;
+                            }
+                            else if (cashfreeRefundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
+                            {
+                                payment.RefundStatus = "RefundOnHold";
+                                payment.LastError = statusDescription ?? "Refund on hold because of insufficient account balance";
+                                _logger.LogCritical("CRITICAL: Cashfree refund {RefundId} for Payment {PaymentId} is ONHOLD due to insufficient merchant balance! Note: {StatusDesc}", 
+                                    refundId, payment.Id, payment.LastError);
+                            }
+                            else
+                            {
+                                // PENDING or any other status — refund is in progress
+                                payment.RefundStatus = "RefundProcessing";
+                                payment.LastError = statusDescription;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to initiate refund for Payment {PaymentId}, Order {OrderId}", payment.Id, payment.CashfreeOrderId);
+                            payment.RefundStatus = "RefundFailed";
+                            payment.RefundReason = reason;
+                            payment.RefundId = $"REF-{payment.CashfreeOrderId}";
+                            payment.LastError = ex.Message;
+                            payment.RefundAttempts += 1;
+                        }
                     }
-                    
-                    payment.RefundId = refundId;
-                    payment.RefundReason = reason;
-                    
-                    if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
+
+                    // 3. Evaluate terminal refund status
+                    bool walletCompleted = !walletRefundRequired || payment.WalletReservationStatus == "Refunded";
+                    bool gatewayCompleted = !gatewayRefundRequired || payment.RefundStatus == "Refunded";
+
+                    if (walletCompleted && gatewayCompleted)
                     {
-                        payment.RefundStatus = "Refunded";
                         payment.Status = "REFUNDED";
-                        payment.LastError = null;
                     }
-                    else if (cashfreeRefundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase) || cashfreeRefundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase))
-                    {
-                        payment.RefundStatus = "RefundFailed";
-                        payment.LastError = statusDescription ?? "Cashfree returned CANCELLED/FAILED for refund.";
-                    }
-                    else if (cashfreeRefundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase))
-                    {
-                        payment.RefundStatus = "RefundOnHold";
-                        payment.LastError = statusDescription ?? "Refund on hold because of insufficient account balance";
-                        _logger.LogCritical("CRITICAL: Cashfree refund {RefundId} for Payment {PaymentId} is ONHOLD due to insufficient merchant balance! Note: {StatusDesc}", 
-                            refundId, payment.Id, payment.LastError);
-                    }
-                    else
-                    {
-                        // PENDING or any other status — refund is in progress
-                        payment.RefundStatus = "RefundProcessing";
-                        payment.LastError = statusDescription;
-                    }
-                    
+
                     await _dbContext.SaveChangesAsync();
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to initiate refund for Payment {PaymentId}, Order {OrderId}", payment.Id, payment.CashfreeOrderId);
-                
-                // Do not swallow! Save the failure state for the background sweeper
-                payment.RefundStatus = "RefundFailed";
-                payment.RefundReason = reason;
-                payment.RefundId = $"REF-{payment.CashfreeOrderId}";
-                payment.LastError = ex.Message;
-                payment.RefundAttempts += 1;
-                await _dbContext.SaveChangesAsync();
+                _logger.LogError(ex, "Failed to trigger auto-refund for Payment {PaymentId}", payment.Id);
             }
         }
 
@@ -370,8 +437,11 @@ namespace PickNBook.Api.Services.Implementations
                     PassengerPhone = request.PassengerPhone.Trim(),
                     PassengerEmail = string.IsNullOrWhiteSpace(request.PassengerEmail) ? null : request.PassengerEmail.Trim(),
                     SeatsBooked = seatsRequired,
-                    TotalPriceInr = payment.FinalPayableAmount, // Pre-calculated
-                    CustomerFareInr = payment.FinalPayableAmount,
+                    TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                    CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                    PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                    WalletPaidAmount = payment.WalletUsedAmount,
+                    GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     NetFareInr = payment.OriginalAmount,
                     BaseFareInr = payment.OriginalAmount, // Adjust based on DB structure
                     MarkupAmountInr = payment.MarkupAmount,
@@ -821,7 +891,10 @@ namespace PickNBook.Api.Services.Implementations
                     MarkupAmount = payment.MarkupAmount,
                     BasePrice = payment.OriginalAmount,
                     ConvenienceFee = payment.ConvenienceFee,
-                    TotalPrice = payment.FinalPayableAmount,
+                    TotalPrice = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                    PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                    WalletPaidAmount = payment.WalletUsedAmount,
+                    GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     
                     SrdvGstAmount = firstRoom?.Price?.TotalGSTAmount ?? 0m,
                     SrdvCgstAmount = firstRoom?.Price?.GST?.CGSTAmount ?? 0m,
@@ -1258,8 +1331,11 @@ namespace PickNBook.Api.Services.Implementations
                             BookedAtUtc = DateTime.UtcNow,
                             TraceId = traceId,
                             ResultIndex = resultIndex,
-                            TotalPriceInr = payment.FinalPayableAmount,
-                            CustomerFareInr = payment.FinalPayableAmount,
+                            TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                            CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                            PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                            WalletPaidAmount = payment.WalletUsedAmount,
+                            GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                             NetFareInr = payment.OriginalAmount,
                             MarkupAmount = payment.MarkupAmount,
                             CouponDiscount = payment.DiscountAmount,
@@ -1307,6 +1383,11 @@ namespace PickNBook.Api.Services.Implementations
                     reservation.SrdvTicketResponseJson = responseRaw;
                     reservation.TicketStatus = resp.TryGetProperty("TicketStatus", out var ts) ? ts.ToString() : reservation.TicketStatus;
                     if (!string.IsNullOrEmpty(returnPnr)) reservation.ReturnPnr = returnPnr;
+                    reservation.TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount;
+                    reservation.CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount;
+                    reservation.PaymentMethod = payment.PaymentMethod ?? "Cashfree";
+                    reservation.WalletPaidAmount = payment.WalletUsedAmount;
+                    reservation.GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount;
                 }
             }
             else
@@ -1321,8 +1402,11 @@ namespace PickNBook.Api.Services.Implementations
                     BookedAtUtc = DateTime.UtcNow,
                     TraceId = traceId,
                     ResultIndex = resultIndex,
-                    TotalPriceInr = payment.FinalPayableAmount,
-                    CustomerFareInr = payment.FinalPayableAmount,
+                    TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                    CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
+                    PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                    WalletPaidAmount = payment.WalletUsedAmount,
+                    GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     NetFareInr = payment.OriginalAmount,
                     MarkupAmount = payment.MarkupAmount,
                     CouponDiscount = payment.DiscountAmount,
@@ -1341,6 +1425,7 @@ namespace PickNBook.Api.Services.Implementations
                 };
                 
                 _dbContext.FlightReservations.Add(reservation);
+                await _dbContext.SaveChangesAsync();
             }
 
             if (reservation != null)

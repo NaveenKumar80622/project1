@@ -1710,10 +1710,14 @@ namespace PickNBook.Api.Controllers
                             BookingType = "Hotel",
                             BookingReference = booking.BookingReference,
                             RefundAmount = calculatedRefund.FinalCustomerRefundAmount,
-                            PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                            PaymentMethod = payment?.PaymentMethod ?? booking.PaymentMethod ?? "Cashfree",
                             CashfreeOrderId = payment?.CashfreeOrderId,
                             RefundPreference = effectiveRefundPreference,
-                            Reason = booking.CancellationReason
+                            Reason = booking.CancellationReason,
+                            TotalPaidAmount = payment?.TotalAmount ?? payment?.FinalPayableAmount ?? booking.TotalPrice,
+                            WalletPaidAmount = payment?.WalletUsedAmount ?? booking.WalletPaidAmount,
+                            GatewayPaidAmount = payment?.GatewayPaidAmount ?? booking.GatewayPaidAmount,
+                            CancellationId = cancellationAudit.Id
                         });
 
                         cancellationAudit.RefundPreference = effectiveRefundPreference ?? "OriginalMethod";

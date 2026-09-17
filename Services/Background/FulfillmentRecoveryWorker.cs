@@ -34,6 +34,7 @@ namespace PickNBook.Api.Services.Background
                     await ProcessFailedRefundsAsync(stoppingToken);
                     await ProcessStrandedFulfillmentsAsync(stoppingToken);
                     await ProcessPendingFlightCancellationsAsync(stoppingToken);
+                    await ProcessExpiredReservationsAsync(stoppingToken);
                 }
                 catch (Exception ex)
                 {
@@ -212,6 +213,7 @@ namespace PickNBook.Api.Services.Background
             var cashfreeService = scope.ServiceProvider.GetRequiredService<ICashfreeService>();
             var refundCalculator = scope.ServiceProvider.GetRequiredService<ICancellationRefundCalculator>();
             var emailService = scope.ServiceProvider.GetRequiredService<PickNBook.Api.Services.ITicketEmailService>();
+            var refundRouter = scope.ServiceProvider.GetRequiredService<IRefundRouterService>();
 
             var pendingCancellations = await dbContext.BookingCancellations
                 .Where(c => c.Status == "Pending" && c.BookingType == "Flight" && c.SrdvChangeRequestId != null)
@@ -438,39 +440,44 @@ namespace PickNBook.Api.Services.Background
                         // PERSIST FIRST
                         await dbContext.SaveChangesAsync(stoppingToken);
 
-                        // THEN Initiate Cashfree Refund
+                        // THEN Route Refund via RefundRouter
                         if (calculatedRefund.FinalCustomerRefundAmount > 0)
                         {
                             var payment = await dbContext.Payments.FindAsync(new object[] { cancelRecord.PaymentId }, stoppingToken);
-                            if (payment != null && payment.CashfreeOrderId != null)
+                            int.TryParse(cancelRecord.UserId, out int uId);
+
+                            var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
                             {
-                                try
-                                {
-                                    await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, calculatedRefund.FinalCustomerRefundAmount, cancelRecord.CashfreeRefundId, "Flight Cancellation via Background Poller");
-                                    cancelRecord.Status = "RefundInitiated";
-                                }
-                                catch (Exception ex)
-                                {
-                                    cancelRecord.Status = "RefundFailed";
-                                    cancelRecord.FailureReason = ex.Message;
-                                    _logger.LogError(ex, "Failed to initiate Cashfree refund for BookingCancellation {CancellationId}", cancelRecord.Id);
-                                }
-                            }
-                            else
-                            {
-                                cancelRecord.Status = "Failed";
-                                cancelRecord.FailureReason = "Payment or CashfreeOrderId missing.";
-                            }
+                                UserId = uId,
+                                BookingType = "Flight",
+                                BookingReference = res.BookingReference,
+                                RefundAmount = calculatedRefund.FinalCustomerRefundAmount,
+                                PaymentMethod = payment?.PaymentMethod ?? res.PaymentMethod ?? "Cashfree",
+                                CashfreeOrderId = payment?.CashfreeOrderId,
+                                RefundPreference = cancelRecord.RefundPreference ?? cancelReq.RefundPreference,
+                                Reason = "Flight Cancellation via Background Poller",
+                                TotalPaidAmount = payment?.TotalAmount ?? payment?.FinalPayableAmount ?? res.TotalPriceInr,
+                                WalletPaidAmount = payment?.WalletUsedAmount ?? res.WalletPaidAmount,
+                                GatewayPaidAmount = payment?.GatewayPaidAmount ?? res.GatewayPaidAmount,
+                                CancellationId = cancelRecord.Id
+                            });
+
+                            cancelRecord.WalletRefundAmount = routeRes.WalletRefunded;
+                            cancelRecord.GatewayRefundAmount = routeRes.GatewayRefunded;
+                            cancelRecord.CashfreeRefundId = routeRes.CashfreeRefundId;
+                            cancelRecord.RefundStatus = routeRes.RefundStatus;
+                            cancelRecord.Status = routeRes.RefundStatus == "COMPLETED" ? "Completed" : (routeRes.RefundStatus == "Failed" ? "Failed" : "Processing");
                         }
                         else
                         {
                             cancelRecord.Status = "Completed";
+                            cancelRecord.RefundStatus = "NOT_REQUIRED";
                             cancelRecord.CompletedAtUtc = DateTime.UtcNow;
                         }
 
                         await dbContext.SaveChangesAsync(stoppingToken);
 
-                        if (cancelRecord.Status == "RefundInitiated" || cancelRecord.Status == "Completed")
+                        if (cancelRecord.Status == "RefundInitiated" || cancelRecord.Status == "Completed" || cancelRecord.Status == "Processing")
                         {
                             // Send Email Notification
                             try
@@ -511,6 +518,20 @@ namespace PickNBook.Api.Services.Background
                 {
                     _logger.LogError(ex, "Failed to poll flight cancellation for Id {Id}", cancelId);
                 }
+            }
+        }
+
+        private async Task ProcessExpiredReservationsAsync(CancellationToken stoppingToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var paymentService = scope.ServiceProvider.GetRequiredService<IPaymentService>();
+            try
+            {
+                await paymentService.ProcessExpiredReservationsAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred processing expired wallet reservations.");
             }
         }
     }

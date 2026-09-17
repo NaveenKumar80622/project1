@@ -79,5 +79,10 @@ namespace PickNBook.Api.Models
         public string? SrdvIndex { get; set; }
         public string? SrdvCallbackResponseJson { get; set; }
         public DateTime? CallbackReceivedAtUtc { get; set; }
+
+        // Payment Tender Breakdown
+        public string? PaymentMethod { get; set; }
+        public decimal WalletPaidAmount { get; set; }
+        public decimal GatewayPaidAmount { get; set; }
     }
 }

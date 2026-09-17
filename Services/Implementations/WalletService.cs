@@ -15,6 +15,8 @@ namespace PickNBook.Api.Services.Implementations
     {
         private readonly AppDbContext _context;
         private readonly ILogger<WalletService> _logger;
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<int, System.Threading.SemaphoreSlim> _userLocks = new();
+        private static readonly object _inMemoryLock = new object();
 
         public WalletService(AppDbContext context, ILogger<WalletService> logger)
         {
@@ -24,56 +26,109 @@ namespace PickNBook.Api.Services.Implementations
 
         public async Task<WalletTransaction> DebitAsync(int userId, decimal amount, string referenceType, string refCode, string description)
         {
+            if (userId <= 0)
+                throw new ArgumentException("User ID must be greater than zero.", nameof(userId));
+
             if (amount <= 0)
                 throw new ArgumentException("Debit amount must be greater than zero.", nameof(amount));
 
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
-            if (user == null)
-                throw new InvalidOperationException($"User with ID {userId} not found.");
+            if (string.IsNullOrWhiteSpace(referenceType))
+                throw new ArgumentException("Reference type is required.", nameof(referenceType));
 
-            if (!string.Equals(user.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("User wallet is not active.");
+            if (string.IsNullOrWhiteSpace(refCode))
+                throw new ArgumentException("RefCode is required.", nameof(refCode));
 
-            if (user.WalletBalance < amount)
-                throw new InvalidOperationException($"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
-
-            // Double-spend idempotency check
-            var existingDebit = await _context.WalletTransactions
-                .FirstOrDefaultAsync(t => t.UserId == userId &&
-                                          t.RefCode == refCode &&
-                                          t.ReferenceType == referenceType &&
-                                          t.TransactionType == "Debit" &&
-                                          t.Status == "Completed");
-
-            if (existingDebit != null)
+            var userLock = _userLocks.GetOrAdd(userId, _ => new System.Threading.SemaphoreSlim(1, 1));
+            await userLock.WaitAsync();
+            try
             {
-                _logger.LogWarning("Duplicate debit attempt detected for User {UserId}, RefCode {RefCode}, RefType {RefType}. Returning existing transaction.",
-                    userId, refCode, referenceType);
-                return existingDebit;
+                // 1. Idempotency check: check if an existing completed debit already exists
+                var existingDebit = await _context.WalletTransactions
+                    .FirstOrDefaultAsync(t => t.UserId == userId &&
+                                              t.RefCode == refCode &&
+                                              t.ReferenceType == referenceType &&
+                                              t.TransactionType == "Debit" &&
+                                              t.Status == "Completed");
+
+                if (existingDebit != null)
+                {
+                    _logger.LogInformation("Duplicate debit attempt detected for User {UserId}, RefCode {RefCode}, RefType {RefType}. Returning existing transaction.",
+                        userId, refCode, referenceType);
+                    return existingDebit;
+                }
+
+                // 2. Initial state validation
+                var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+                if (user == null)
+                    throw new InvalidOperationException($"User with ID {userId} not found.");
+
+                if (!string.Equals(user.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("User wallet is not active.");
+
+                if (user.WalletBalance < amount)
+                    throw new InvalidOperationException($"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
+
+                // 3. Authoritative database-level atomic conditional update
+                bool isRelational = _context.Database.IsRelational();
+                if (isRelational)
+                {
+                    int affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
+                        $"UPDATE users SET WalletBalance = WalletBalance - {amount} WHERE Id = {userId} AND WalletStatus = 'Active' AND WalletBalance >= {amount};");
+
+                    if (affectedRows == 0)
+                    {
+                        await _context.Entry(user).ReloadAsync();
+
+                        if (!string.Equals(user.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
+                            throw new InvalidOperationException("User wallet is not active.");
+
+                        if (user.WalletBalance < amount)
+                            throw new InvalidOperationException(
+                                $"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
+
+                        throw new InvalidOperationException("Concurrent wallet modification detected. Debit failed.");
+                    }
+
+                    await _context.Entry(user).ReloadAsync();
+                }
+                else
+                {
+                    lock (_inMemoryLock)
+                    {
+                        if (user.WalletBalance < amount)
+                            throw new InvalidOperationException(
+                                $"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
+
+                        user.WalletBalance -= amount;
+                    }
+                }
+
+                // 4. Record completed debit transaction
+                var transaction = new WalletTransaction
+                {
+                    UserId = userId,
+                    TransactionType = "Debit",
+                    Amount = amount,
+                    RunningBalance = user.WalletBalance,
+                    ReferenceType = referenceType,
+                    RefCode = refCode,
+                    Description = description,
+                    Status = "Completed",
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                _context.WalletTransactions.Add(transaction);
+                await _context.SaveChangesAsync();
+
+                _logger.LogInformation("Successfully debited {Amount:N2} from User {UserId}. New Balance: {Balance:N2}. RefCode: {RefCode}",
+                    amount, userId, user.WalletBalance, refCode);
+
+                return transaction;
             }
-
-            user.WalletBalance -= amount;
-
-            var transaction = new WalletTransaction
+            finally
             {
-                UserId = userId,
-                TransactionType = "Debit",
-                Amount = amount,
-                RunningBalance = user.WalletBalance,
-                ReferenceType = referenceType,
-                RefCode = refCode,
-                Description = description,
-                Status = "Completed",
-                CreatedAt = DateTime.UtcNow
-            };
-
-            _context.WalletTransactions.Add(transaction);
-            await _context.SaveChangesAsync();
-
-            _logger.LogInformation("Successfully debited {Amount:N2} from User {UserId}. New Balance: {Balance:N2}. RefCode: {RefCode}",
-                amount, userId, user.WalletBalance, refCode);
-
-            return transaction;
+                userLock.Release();
+            }
         }
 
         public async Task<WalletTransaction> CreditAsync(int userId, decimal amount, string referenceType, string refCode, string description)

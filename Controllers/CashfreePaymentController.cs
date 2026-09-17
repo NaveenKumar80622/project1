@@ -5,6 +5,7 @@ using PickNBook.Api.Data;
 using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Models.Payments;
+using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
 using PickNBook.Api.Services;
 using System.Text.Json;
@@ -29,6 +30,10 @@ namespace PickNBook.Api.Controllers
         private readonly IHotelMarkupService _hotelMarkupService;
         private readonly AppDbContext _dbContext;
         private readonly IMemoryCache _cache;
+        private readonly IWalletReservationService _walletReservationService;
+        private readonly IWalletService _walletService;
+        private readonly IBackgroundJobQueue _backgroundJobQueue;
+        private readonly IServiceScopeFactory _scopeFactory;
 
         public CashfreePaymentController(
             IOptions<CashfreeSettings> settings,
@@ -41,7 +46,11 @@ namespace PickNBook.Api.Controllers
             IFlightPricingService flightPricingService,
             IHotelMarkupService hotelMarkupService,
             AppDbContext dbContext,
-            IMemoryCache cache)
+            IMemoryCache cache,
+            IWalletReservationService walletReservationService,
+            IWalletService walletService,
+            IBackgroundJobQueue backgroundJobQueue,
+            IServiceScopeFactory scopeFactory)
         {
             _settings = settings.Value;
             _cashfreeService = cashfreeService;
@@ -54,6 +63,10 @@ namespace PickNBook.Api.Controllers
             _hotelMarkupService = hotelMarkupService;
             _dbContext = dbContext;
             _cache = cache;
+            _walletReservationService = walletReservationService;
+            _walletService = walletService;
+            _backgroundJobQueue = backgroundJobQueue;
+            _scopeFactory = scopeFactory;
         }
 
         [HttpPost("create-order")]
@@ -459,11 +472,21 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
-                    // Strict Price Parity Check (Rounded)
-                    if (Math.Round(calculatedFinalAmount, 2) != Math.Round(request.OrderAmount, 2))
+                    // Authoritative total fare calculated by server
+                    decimal totalFare = calculatedFinalAmount;
+                    if (totalFare <= 0)
                     {
-                        _logger.LogWarning("Price mismatch detected. Frontend sent {FrontendAmount}, Backend calculated {BackendAmount}", request.OrderAmount, calculatedFinalAmount);
-                        return BadRequest(new { message = $"Price mismatch. The calculated final amount is {Math.Round(calculatedFinalAmount, 2)}, but the request specified {Math.Round(request.OrderAmount, 2)}. Please refresh the pricing." });
+                        return BadRequest(new { message = "Calculated total fare must be greater than zero." });
+                    }
+
+                    // Strict Price Parity Check (Rounded) when customer is paying full Cashfree
+                    if (!request.UseWallet)
+                    {
+                        if (Math.Round(totalFare, 2) != Math.Round(request.OrderAmount, 2))
+                        {
+                            _logger.LogWarning("Price mismatch detected. Frontend sent {FrontendAmount}, Backend calculated {BackendAmount}", request.OrderAmount, totalFare);
+                            return BadRequest(new { message = $"Price mismatch. The calculated final amount is {Math.Round(totalFare, 2)}, but the request specified {Math.Round(request.OrderAmount, 2)}. Please refresh the pricing." });
+                        }
                     }
 
                     // Populate Snapshot
@@ -477,7 +500,7 @@ namespace PickNBook.Api.Controllers
                         SsrAmount = ssrAmount,
                         CouponCode = actualCouponCode,
                         OfferCode = request.SelectedFeaturedOfferId?.ToString(),
-                        FinalPayableAmount = calculatedFinalAmount,
+                        FinalPayableAmount = totalFare,
                         CalculatedAtUtc = DateTime.UtcNow
                     });
                 }
@@ -486,31 +509,340 @@ namespace PickNBook.Api.Controllers
                     return BadRequest(new { message = "BookingPayloadJson and BookingType are strictly required for Cashfree orders." });
                 }
 
-                // Create Payment Record (using calculatedFinalAmount instead of request.OrderAmount directly)
-                var payment = await _paymentService.CreatePaymentAsync(
-                    userIdStr, request.BookingType,
-                    providerAmount, markupAmount, convenienceFee, discountAmount, 
-                    actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
-                    calculatedFinalAmount, request.OrderCurrency);
+                // ==========================================
+                // PHASE 2C: MULTI-TENDER AMOUNT DETERMINATION
+                // ==========================================
+                decimal calculatedTotalFare = calculatedFinalAmount;
+                decimal walletUsedAmount = 0m;
+                decimal gatewayPaidAmount = calculatedTotalFare;
+                string paymentMethod = "Cashfree";
 
-                // Create Pending Booking
+                if (request.UseWallet)
+                {
+                    if (!int.TryParse(userIdStr, out var customerId) || customerId <= 0)
+                    {
+                        return BadRequest(new { message = "A logged-in user account is required to use wallet balance." });
+                    }
+
+                    var user = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == customerId);
+                    if (user == null)
+                    {
+                        return BadRequest(new { message = "User not found." });
+                    }
+
+                    if (!string.Equals(user.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return BadRequest(new { message = "Customer wallet is not active." });
+                    }
+
+                    decimal availableBalance = Math.Max(0m, user.WalletBalance);
+
+                    if (availableBalance <= 0)
+                    {
+                        // Wallet = 0 -> Cashfree full amount
+                        _logger.LogInformation("User {UserId} has zero wallet balance. Proceeding with full Cashfree payment.", customerId);
+                        walletUsedAmount = 0m;
+                        gatewayPaidAmount = calculatedTotalFare;
+                        paymentMethod = "Cashfree";
+                    }
+                    else
+                    {
+                        // Calculate authoritative amounts
+                        walletUsedAmount = Math.Min(availableBalance, calculatedTotalFare);
+                        gatewayPaidAmount = calculatedTotalFare - walletUsedAmount;
+
+                        // Invariant guards
+                        if (gatewayPaidAmount < 0) gatewayPaidAmount = 0m;
+                        if (walletUsedAmount > calculatedTotalFare) walletUsedAmount = calculatedTotalFare;
+                        if (walletUsedAmount + gatewayPaidAmount != calculatedTotalFare)
+                        {
+                            throw new InvalidOperationException($"Invariant violation: walletUsedAmount ({walletUsedAmount}) + gatewayPaidAmount ({gatewayPaidAmount}) != totalFare ({calculatedTotalFare})");
+                        }
+
+                        if (gatewayPaidAmount == 0)
+                        {
+                            paymentMethod = "Wallet";
+                        }
+                        else
+                        {
+                            paymentMethod = "Hybrid";
+                        }
+                    }
+                }
+
+                // ==========================================
+                // BRANCH 1: FULL WALLET (Zero Gateway)
+                // ==========================================
+                if (paymentMethod == "Wallet")
+                {
+                    string paymentRef = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+                    int customerUserId = int.Parse(userIdStr);
+
+                    Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? dbTx = null;
+                    if (_dbContext.Database.IsRelational())
+                    {
+                        dbTx = await _dbContext.Database.BeginTransactionAsync();
+                    }
+
+                    WalletTransaction walletTx;
+                    try
+                    {
+                        walletTx = await _walletService.DebitAsync(
+                            userId: customerUserId,
+                            amount: calculatedTotalFare,
+                            referenceType: request.BookingType ?? "Booking",
+                            refCode: paymentRef,
+                            description: $"Full wallet payment for {request.BookingType} ({paymentRef})");
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        if (dbTx != null) await dbTx.RollbackAsync();
+                        _logger.LogWarning(ex, "Full wallet debit failed for User {UserId}, amount {Amount}", customerUserId, calculatedTotalFare);
+                        var currentBalance = await _dbContext.Users.Where(u => u.Id == customerUserId).Select(u => u.WalletBalance).FirstOrDefaultAsync();
+                        return StatusCode(StatusCodes.Status409Conflict, new
+                        {
+                            code = "WALLET_BALANCE_CHANGED",
+                            message = "Your wallet balance has changed. Please refresh and review your payment summary.",
+                            currentWalletBalance = currentBalance
+                        });
+                    }
+
+                    Payment payment;
+                    try
+                    {
+                        payment = await _paymentService.CreatePaymentAsync(
+                            userIdStr, request.BookingType,
+                            providerAmount, markupAmount, convenienceFee, discountAmount,
+                            actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
+                            finalPayableAmount: 0m,
+                            currency: request.OrderCurrency,
+                            totalAmount: calculatedTotalFare,
+                            walletUsedAmount: calculatedTotalFare,
+                            gatewayPaidAmount: 0m,
+                            paymentMethod: "Wallet",
+                            walletReservationStatus: "None",
+                            walletTransactionId: walletTx.Id,
+                            gatewayPaymentMethod: null,
+                            paymentReference: paymentRef);
+
+                        payment.Status = PaymentStatus.Success;
+                        payment.PaidAt = DateTime.UtcNow;
+                        payment.FulfillmentStatus = "Pending";
+                        await _dbContext.SaveChangesAsync();
+
+                        await _paymentService.CreatePendingBookingAsync(
+                            payment.Id, request.BookingType, userIdStr, calculatedTotalFare, request.OrderCurrency,
+                            request.BookingPayloadJson, pricingSnapshotJson, DateTime.UtcNow.AddMinutes(30));
+
+                        if (dbTx != null) await dbTx.CommitAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Payment creation or persistence failed for full wallet payment {PaymentRef}. Performing technical rollback.", paymentRef);
+                        if (dbTx != null)
+                        {
+                            await dbTx.RollbackAsync();
+                        }
+                        else
+                        {
+                            // In-memory fallback technical rollback: restore balance and remove orphan debit
+                            var u = await _dbContext.Users.FindAsync(customerUserId);
+                            if (u != null)
+                            {
+                                u.WalletBalance += calculatedTotalFare;
+                                var orphanTx = await _dbContext.WalletTransactions.FindAsync(walletTx.Id);
+                                if (orphanTx != null) _dbContext.WalletTransactions.Remove(orphanTx);
+                                await _dbContext.SaveChangesAsync();
+                            }
+                        }
+                        throw;
+                    }
+                    finally
+                    {
+                        if (dbTx != null) await dbTx.DisposeAsync();
+                    }
+
+                    // Enqueue immediate fulfillment
+                    _backgroundJobQueue.QueueBackgroundWorkItem(async (sp, token) =>
+                    {
+                        var orchestrator = sp.GetRequiredService<IBookingOrchestratorService>();
+                        try
+                        {
+                            await orchestrator.ProcessFulfillmentAsync(payment.Id);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Background fulfillment failed for full wallet payment {PaymentId}", payment.Id);
+                        }
+                    });
+
+                    return Ok(new CreateOrderResponseDto
+                    {
+                        TotalAmount = calculatedTotalFare,
+                        WalletUsedAmount = calculatedTotalFare,
+                        GatewayPaidAmount = 0m,
+                        PaymentMethod = "Wallet",
+                        IsWalletFullyPaid = true,
+                        PaymentReference = payment.PaymentReference
+                    });
+                }
+
+                // ==========================================
+                // BRANCH 2: HYBRID (Wallet Hold + Cashfree)
+                // ==========================================
+                if (paymentMethod == "Hybrid")
+                {
+                    string paymentRef = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+                    int customerUserId = int.Parse(userIdStr);
+
+                    WalletTransaction reservationTx;
+                    try
+                    {
+                        reservationTx = await _walletReservationService.ReserveAsync(
+                            userId: customerUserId,
+                            amount: walletUsedAmount,
+                            referenceType: request.BookingType ?? "Booking",
+                            refCode: paymentRef,
+                            description: $"Wallet hold for {request.BookingType} ({paymentRef})");
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        _logger.LogWarning(ex, "Wallet reservation failed for User {UserId}, amount {Amount}", customerUserId, walletUsedAmount);
+                        var currentBalance = await _dbContext.Users.Where(u => u.Id == customerUserId).Select(u => u.WalletBalance).FirstOrDefaultAsync();
+                        return StatusCode(StatusCodes.Status409Conflict, new
+                        {
+                            code = "WALLET_BALANCE_CHANGED",
+                            message = "Your wallet balance has changed. Please refresh and review your payment details.",
+                            currentWalletBalance = currentBalance
+                        });
+                    }
+
+                    Payment payment;
+                    try
+                    {
+                        payment = await _paymentService.CreatePaymentAsync(
+                            userIdStr, request.BookingType,
+                            providerAmount, markupAmount, convenienceFee, discountAmount,
+                            actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
+                            finalPayableAmount: gatewayPaidAmount,
+                            currency: request.OrderCurrency,
+                            totalAmount: calculatedTotalFare,
+                            walletUsedAmount: walletUsedAmount,
+                            gatewayPaidAmount: gatewayPaidAmount,
+                            paymentMethod: "Hybrid",
+                            walletReservationStatus: "Reserved",
+                            walletTransactionId: reservationTx.Id,
+                            gatewayPaymentMethod: null,
+                            paymentReference: paymentRef);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Payment persistence failed for User {UserId}. Releasing reservation {TxId}", customerUserId, reservationTx.Id);
+                        await _walletReservationService.ReleaseReservationAsync(reservationTx.Id, "Payment persistence failed");
+                        throw;
+                    }
+
+                    try
+                    {
+                        await _paymentService.CreatePendingBookingAsync(
+                            payment.Id, request.BookingType, userIdStr, calculatedTotalFare, request.OrderCurrency,
+                            request.BookingPayloadJson, pricingSnapshotJson, DateTime.UtcNow.AddMinutes(30));
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Pending booking creation failed. Releasing reservation {TxId}", reservationTx.Id);
+                        await _walletReservationService.ReleaseReservationAsync(reservationTx.Id, "Pending booking creation failed");
+                        payment.Status = PaymentStatus.Failed;
+                        payment.FailureReason = "Pending booking creation failed";
+                        payment.WalletReservationStatus = "Released";
+                        await _dbContext.SaveChangesAsync();
+                        throw;
+                    }
+
+                    string notifyUrl = !string.IsNullOrEmpty(_settings.WebhookUrl) ? _settings.WebhookUrl : request.NotifyUrl;
+                    string orderId = payment.PaymentReference;
+                    CashfreeOrderResponse cfResponse;
+
+                    try
+                    {
+                        cfResponse = await _cashfreeService.CreateOrderAsync(
+                            orderId, gatewayPaidAmount, request.OrderCurrency,
+                            request.CustomerId, request.CustomerName, request.CustomerEmail, request.CustomerPhone,
+                            request.ReturnUrl, notifyUrl);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Cashfree CreateOrderAsync failed for payment {PaymentId}. Releasing reservation {TxId}", payment.Id, reservationTx.Id);
+                        await _walletReservationService.ReleaseReservationAsync(reservationTx.Id, "Cashfree order creation failed: " + ex.Message);
+                        payment.Status = PaymentStatus.Failed;
+                        payment.FailureReason = "Cashfree order creation failed: " + ex.Message;
+                        payment.WalletReservationStatus = "Released";
+                        await _dbContext.SaveChangesAsync();
+                        throw;
+                    }
+
+                    await _paymentService.AssociateCashfreeOrderAsync(payment.Id, cfResponse.OrderId, cfResponse.CfOrderId, cfResponse.PaymentSessionId);
+
+                    return Ok(new CreateOrderResponseDto
+                    {
+                        TotalAmount = calculatedTotalFare,
+                        WalletUsedAmount = walletUsedAmount,
+                        GatewayPaidAmount = gatewayPaidAmount,
+                        PaymentMethod = "Hybrid",
+                        IsWalletFullyPaid = false,
+                        CashfreeOrderId = cfResponse.OrderId,
+                        PaymentSessionId = cfResponse.PaymentSessionId,
+                        CfOrderId = cfResponse.CfOrderId,
+                        OrderStatus = cfResponse.OrderStatus
+                    });
+                }
+
+                // ==========================================
+                // BRANCH 3: CASHFREE ONLY
+                // ==========================================
+                string paymentRefCashfree = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+
+                var paymentCashfree = await _paymentService.CreatePaymentAsync(
+                    userIdStr, request.BookingType,
+                    providerAmount, markupAmount, convenienceFee, discountAmount,
+                    actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
+                    finalPayableAmount: calculatedTotalFare,
+                    currency: request.OrderCurrency,
+                    totalAmount: calculatedTotalFare,
+                    walletUsedAmount: 0m,
+                    gatewayPaidAmount: calculatedTotalFare,
+                    paymentMethod: "Cashfree",
+                    walletReservationStatus: "None",
+                    walletTransactionId: null,
+                    gatewayPaymentMethod: null,
+                    paymentReference: paymentRefCashfree);
+
                 await _paymentService.CreatePendingBookingAsync(
-                    payment.Id, request.BookingType, userIdStr, calculatedFinalAmount, request.OrderCurrency,
+                    paymentCashfree.Id, request.BookingType, userIdStr, calculatedTotalFare, request.OrderCurrency,
                     request.BookingPayloadJson, pricingSnapshotJson, DateTime.UtcNow.AddMinutes(30));
 
-                // Create Cashfree Order
-                string notifyUrl = !string.IsNullOrEmpty(_settings.WebhookUrl) ? _settings.WebhookUrl : request.NotifyUrl;
-                string orderId = payment.PaymentReference;
+                string notifyUrlCashfree = !string.IsNullOrEmpty(_settings.WebhookUrl) ? _settings.WebhookUrl : request.NotifyUrl;
+                string orderIdCashfree = paymentCashfree.PaymentReference;
 
-                var cfResponse = await _cashfreeService.CreateOrderAsync(
-                    orderId, calculatedFinalAmount, request.OrderCurrency,
+                var cfResponseCashfree = await _cashfreeService.CreateOrderAsync(
+                    orderIdCashfree, calculatedTotalFare, request.OrderCurrency,
                     request.CustomerId, request.CustomerName, request.CustomerEmail, request.CustomerPhone,
-                    request.ReturnUrl, notifyUrl);
+                    request.ReturnUrl, notifyUrlCashfree);
 
-                // Update Payment with Cashfree IDs
-                await _paymentService.AssociateCashfreeOrderAsync(payment.Id, cfResponse.OrderId, cfResponse.CfOrderId, cfResponse.PaymentSessionId);
+                await _paymentService.AssociateCashfreeOrderAsync(paymentCashfree.Id, cfResponseCashfree.OrderId, cfResponseCashfree.CfOrderId, cfResponseCashfree.PaymentSessionId);
 
-                return Ok(cfResponse);
+                return Ok(new CreateOrderResponseDto
+                {
+                    TotalAmount = calculatedTotalFare,
+                    WalletUsedAmount = 0m,
+                    GatewayPaidAmount = calculatedTotalFare,
+                    PaymentMethod = "Cashfree",
+                    IsWalletFullyPaid = false,
+                    CashfreeOrderId = cfResponseCashfree.OrderId,
+                    PaymentSessionId = cfResponseCashfree.PaymentSessionId,
+                    CfOrderId = cfResponseCashfree.CfOrderId,
+                    OrderStatus = cfResponseCashfree.OrderStatus
+                });
             }
             catch (InvalidOperationException ex)
             {

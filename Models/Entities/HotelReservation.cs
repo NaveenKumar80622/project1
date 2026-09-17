@@ -63,5 +63,10 @@ namespace PickNBook.Api.Models
         public decimal SrdvCgstAmount { get; set; } = 0m;
         public decimal SrdvSgstAmount { get; set; } = 0m;
         public decimal SrdvIgstAmount { get; set; } = 0m;
+
+        // Payment Tender Breakdown
+        public string? PaymentMethod { get; set; }
+        public decimal WalletPaidAmount { get; set; }
+        public decimal GatewayPaidAmount { get; set; }
     }
 }

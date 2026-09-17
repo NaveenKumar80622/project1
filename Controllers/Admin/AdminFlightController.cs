@@ -726,10 +726,13 @@ namespace PickNBook.Api.Controllers
                         BookingType = "Flight",
                         BookingReference = reservation.BookingReference,
                         RefundAmount = row.CustomerRefundAmountInr,
-                        PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                        PaymentMethod = payment?.PaymentMethod ?? reservation.PaymentMethod ?? "Cashfree",
                         CashfreeOrderId = payment?.CashfreeOrderId,
                         RefundPreference = row.RefundPreference,
-                        Reason = row.CustomerRemark ?? row.AdminRemark
+                        Reason = row.CustomerRemark ?? row.AdminRemark,
+                        TotalPaidAmount = payment?.TotalAmount ?? payment?.FinalPayableAmount ?? reservation.TotalPriceInr,
+                        WalletPaidAmount = payment?.WalletUsedAmount ?? reservation.WalletPaidAmount,
+                        GatewayPaidAmount = payment?.GatewayPaidAmount ?? reservation.GatewayPaidAmount
                     });
 
                     row.WalletRefundAmount = routeRes.WalletRefunded;

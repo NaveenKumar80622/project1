@@ -13,5 +13,6 @@ namespace PickNBook.Api.Services.Interfaces
         /// <returns>A tuple indicating success status and an optional error message.</returns>
         Task<(bool Success, string? ErrorMessage)> ProcessFulfillmentAsync(int paymentId);
         Task RecoverFulfillmentAsync(int paymentId);
+        Task RetryRefundAsync(int paymentId);
     }
 }

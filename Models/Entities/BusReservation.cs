@@ -73,6 +73,9 @@ namespace PickNBook.Api.Models
         public string? FinancialStatus { get; set; }
         public long? ProviderCancelId { get; set; }
         public string? SupplierCancelId { get; set; }
+        public string? PaymentMethod { get; set; }
+        public decimal WalletPaidAmount { get; set; }
+        public decimal GatewayPaidAmount { get; set; }
     }
 
     public static class BusBookingStatus

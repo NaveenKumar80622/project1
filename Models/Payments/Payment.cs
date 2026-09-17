@@ -59,6 +59,24 @@ namespace PickNBook.Api.Models.Payments
         /// </summary>
         public decimal FinalPayableAmount { get; set; }
 
+        /// <summary>Total fare computed authoritatively by backend (e.g. 1500.00).</summary>
+        public decimal TotalAmount { get; set; }
+
+        /// <summary>Amount debited or reserved from Customer Wallet (e.g. 600.00).</summary>
+        public decimal WalletUsedAmount { get; set; }
+
+        /// <summary>Amount to be charged through Cashfree Payment Gateway (e.g. 900.00).</summary>
+        public decimal GatewayPaidAmount { get; set; }
+
+        /// <summary>Wallet reservation state: "None", "Reserved", "Committed", "Released", "Refunded".</summary>
+        public string WalletReservationStatus { get; set; } = "None";
+
+        /// <summary>Links to the WalletTransaction holding the reservation.</summary>
+        public long? WalletTransactionId { get; set; }
+
+        /// <summary>Underlying gateway instrument: "upi", "card", "netbanking", null if pure wallet.</summary>
+        public string? GatewayPaymentMethod { get; set; }
+
         /// <summary>Currency code, default "INR".</summary>
         public string Currency { get; set; } = "INR";
 
