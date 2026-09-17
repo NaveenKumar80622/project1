@@ -205,6 +205,21 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 
 ---
 
+### 4.3 Bus Boarding Reminder
+**TemplateKey**: `BUS_BOARDING_REMINDER` (Alias: `BUS_BOARDING_REMINDER_SMS`)
+**EventType**: `BusBoardingReminder`
+**Channel**: `SMS`
+**DLT Content ID**: `1777178962432512946`
+**Provider Template ID**: `1562671`
+**Header (Sender ID)**: `PICNBK`
+**Variables**: `${var1}` / `{Pnr}`, `${var2}` / `{Date}`, `${var3}` / `{Time}`, `${var4}` / `{Boarding}`
+
+**SMS Template**
+*Body*: `PickNBook reminder: Your bus PNR ${var1} departs on ${var2} at ${var3}. Boarding: ${var4}.`
+*Sample Content*: `PickNBook reminder: Your bus PNR PNB26091000125 departs on 21/09/2026 at 06:30 AM. Boarding: MGBS Hyderabad.`
+
+---
+
 ## 5. Payments & Refunds
 
 ### 5.1 Payment Success

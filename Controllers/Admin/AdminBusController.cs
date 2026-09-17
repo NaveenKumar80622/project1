@@ -12,8 +12,11 @@ namespace PickNBook.Api.Controllers
 {
     [ApiController]
     [Route("api/admin/bus")]
-    //public class AdminBusController(AppDbContext dbContext) : ControllerBase
-    public class AdminBusController(AppDbContext dbContext, PickNBook.Api.Services.ISrdvBusService srdvBusService, IMemoryCache cache) : AdminApiController
+    public class AdminBusController(
+        AppDbContext dbContext, 
+        PickNBook.Api.Services.ISrdvBusService srdvBusService, 
+        IMemoryCache cache,
+        PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService) : AdminApiController
     {
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static readonly string[] AllowedDiscountTypes = ["Percentage", "Fixed"];
@@ -1746,5 +1749,69 @@ namespace PickNBook.Api.Controllers
                 return StatusCode(500, new { message = "Error fetching SRDV wallet log", error = ex.Message });
             }
         }
+
+        [HttpPost("bookings/{id:int}/send-boarding-reminder")]
+        public async Task<IActionResult> SendBoardingReminder(int id)
+        {
+            var reservation = await dbContext.BusReservations
+                .Include(r => r.BusBooking)
+                .FirstOrDefaultAsync(r => r.Id == id);
+
+            if (reservation == null)
+            {
+                return NotFound(new { message = $"Bus reservation {id} not found." });
+            }
+
+            if (string.IsNullOrWhiteSpace(reservation.PassengerPhone))
+            {
+                return BadRequest(new { message = "Reservation does not have a valid passenger phone number." });
+            }
+
+            var rawTime = reservation.BoardingPointTime ?? reservation.BusBooking?.DepartureTime ?? DateTime.UtcNow;
+            var istTime = ToIst(rawTime);
+            string formattedDate = istTime.ToString("dd/MM/yyyy");
+            string formattedTime = istTime.ToString("hh:mm tt");
+
+            string boardingPoint = !string.IsNullOrWhiteSpace(reservation.BoardingPointName)
+                ? reservation.BoardingPointName
+                : (!string.IsNullOrWhiteSpace(reservation.BusBooking?.BoardingPoint) ? reservation.BusBooking.BoardingPoint : "Bus Station");
+
+            string pnr = !string.IsNullOrWhiteSpace(reservation.Pnr) ? reservation.Pnr : reservation.BookingReference;
+
+            var result = await notificationService.SendImmediateAsync(
+                eventType: "BusBoardingReminder",
+                channel: "SMS",
+                recipient: reservation.PassengerPhone.Trim(),
+                templateKey: "BUS_BOARDING_REMINDER",
+                payload: new
+                {
+                    Pnr = pnr,
+                    Date = formattedDate,
+                    Time = formattedTime,
+                    Boarding = boardingPoint,
+                    Var1 = pnr,
+                    Var2 = formattedDate,
+                    Var3 = formattedTime,
+                    Var4 = boardingPoint
+                }
+            );
+
+            if (!result.IsSuccess)
+            {
+                return StatusCode(500, new { message = "Failed to send boarding reminder SMS", error = result.ErrorMessage });
+            }
+
+            return Ok(new
+            {
+                message = "Bus boarding reminder SMS sent successfully.",
+                pnr,
+                recipient = reservation.PassengerPhone,
+                date = formattedDate,
+                time = formattedTime,
+                boardingPoint
+            });
+        }
     }
 }
+
+
