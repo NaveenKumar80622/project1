@@ -13,6 +13,8 @@ using System.Collections.Generic;
 using System.Security.Claims;
 using System.Threading.Tasks;
 
+using PickNBook.Api.Services.Notifications.Interfaces;
+
 namespace PickNBook.Api.Controllers
 {
     [Route("api/[controller]")]
@@ -29,6 +31,7 @@ namespace PickNBook.Api.Controllers
         private readonly PickNBook.Api.Services.Interfaces.ICashfreeService _cashfreeService;
         private readonly PickNBook.Api.Services.Interfaces.IWalletService _userWalletService;
         private readonly PickNBook.Api.Services.Interfaces.IRefundRouterService _refundRouter;
+        private readonly INotificationService _notificationService;
 
         public HotelsController(
             IHotelService hotelService,
@@ -40,7 +43,8 @@ namespace PickNBook.Api.Controllers
             PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator refundCalculator,
             PickNBook.Api.Services.Interfaces.ICashfreeService cashfreeService,
             PickNBook.Api.Services.Interfaces.IWalletService userWalletService,
-            PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter)
+            PickNBook.Api.Services.Interfaces.IRefundRouterService refundRouter,
+            INotificationService notificationService)
         {
             _hotelService = hotelService;
             _dbContext = dbContext;
@@ -52,6 +56,7 @@ namespace PickNBook.Api.Controllers
             _cashfreeService = cashfreeService;
             _userWalletService = userWalletService;
             _refundRouter = refundRouter;
+            _notificationService = notificationService;
         }
 
         // =====================================
@@ -935,6 +940,32 @@ namespace PickNBook.Api.Controllers
                         if (reservation != null)
                         {
                             await _ticketEmailService.SendHotelCancellationAsync(reservation);
+
+                            if (!string.IsNullOrWhiteSpace(reservation.GuestPhone))
+                            {
+                                try
+                                {
+                                    await _notificationService.EnqueueAsync(
+                                        eventType: "HotelBookingCancelled",
+                                        channel: "SMS",
+                                        recipient: reservation.GuestPhone.Trim(),
+                                        templateKey: "HOTEL_BOOKING_CANCELLED",
+                                        payload: new
+                                        {
+                                            Reference = reservation.BookingReference,
+                                            Status = "Confirmed",
+                                            Var1 = reservation.BookingReference,
+                                            Var2 = "Confirmed"
+                                        },
+                                        bookingId: reservation.Id.ToString(),
+                                        userId: reservation.UserId
+                                    );
+                                }
+                                catch (Exception smsEx)
+                                {
+                                    _logger.LogError(smsEx, "Failed to enqueue hotel cancellation SMS for TraceId {TraceId}", request.TraceId);
+                                }
+                            }
                         }
                     }
                     catch (Exception mailEx)
@@ -1096,6 +1127,32 @@ namespace PickNBook.Api.Controllers
                         catch (Exception mailEx)
                         {
                             _logger.LogError(mailEx, "Failed to send hotel cancellation email for booking {BookingReference}", reservation.BookingReference);
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(reservation.GuestPhone))
+                        {
+                            try
+                            {
+                                await _notificationService.EnqueueAsync(
+                                    eventType: "HotelBookingCancelled",
+                                    channel: "SMS",
+                                    recipient: reservation.GuestPhone.Trim(),
+                                    templateKey: "HOTEL_BOOKING_CANCELLED",
+                                    payload: new
+                                    {
+                                        Reference = reservation.BookingReference,
+                                        Status = "Confirmed",
+                                        Var1 = reservation.BookingReference,
+                                        Var2 = "Confirmed"
+                                    },
+                                    bookingId: reservation.Id.ToString(),
+                                    userId: reservation.UserId
+                                );
+                            }
+                            catch (Exception smsEx)
+                            {
+                                _logger.LogError(smsEx, "Failed to enqueue hotel cancellation SMS for booking {BookingReference}", reservation.BookingReference);
+                            }
                         }
 
                         cancelRes.RefundDetails = new RefundDetailsDto
@@ -1678,6 +1735,35 @@ namespace PickNBook.Api.Controllers
                     catch (Exception mailEx)
                     {
                         _logger.LogError(mailEx, "Failed to send hotel booking cancellation email for booking {BookingReference}", booking.BookingReference);
+                    }
+
+                    if (providerCancelled &&
+                        !string.IsNullOrEmpty(booking.ProviderBookingId) &&
+                        !booking.ProviderBookingId.StartsWith("MOCK-BK-", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(booking.GuestPhone))
+                    {
+                        try
+                        {
+                            await _notificationService.EnqueueAsync(
+                                eventType: "HotelBookingCancelled",
+                                channel: "SMS",
+                                recipient: booking.GuestPhone.Trim(),
+                                templateKey: "HOTEL_BOOKING_CANCELLED",
+                                payload: new
+                                {
+                                    Reference = booking.BookingReference,
+                                    Status = "Confirmed",
+                                    Var1 = booking.BookingReference,
+                                    Var2 = "Confirmed"
+                                },
+                                bookingId: booking.Id.ToString(),
+                                userId: booking.UserId
+                            );
+                        }
+                        catch (Exception smsEx)
+                        {
+                            _logger.LogError(smsEx, "Failed to enqueue hotel booking cancellation SMS for booking {BookingReference}", booking.BookingReference);
+                        }
                     }
 
                     return Ok(new HotelCancellationDto

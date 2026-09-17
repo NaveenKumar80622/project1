@@ -170,6 +170,7 @@ builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IS
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IWhatsAppProvider, PickNBook.Api.Services.Notifications.Providers.MockWhatsAppProvider>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.NotificationOutboxWorker>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.BusBoardingReminderHostedService>();
+builder.Services.AddHostedService<PickNBook.Api.Services.Background.HotelCheckInReminderHostedService>();
 
 builder.Services.AddScoped<IExclusiveOfferSubscriptionService, ExclusiveOfferSubscriptionService>();
 builder.Services.AddScoped<ITicketPdfService, TicketPdfService>();

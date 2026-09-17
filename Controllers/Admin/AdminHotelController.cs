@@ -18,12 +18,18 @@ public class AdminHotelController : AdminApiController
     private readonly AppDbContext _context;
     private readonly IHotelService _hotelService;
     private readonly ILogger<AdminHotelController> _logger;
+    private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
 
-    public AdminHotelController(AppDbContext context, IHotelService hotelService, ILogger<AdminHotelController> logger)
+    public AdminHotelController(
+        AppDbContext context, 
+        IHotelService hotelService, 
+        ILogger<AdminHotelController> logger,
+        PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService)
     {
         _context = context;
         _hotelService = hotelService;
         _logger = logger;
+        _notificationService = notificationService;
     }
 
     // 1. List All Bookings: GET /api/admin/hotel/bookings
@@ -502,6 +508,164 @@ public class AdminHotelController : AdminApiController
         _logger.LogInformation("Admin BalanceLog POST request received");
         var res = await _hotelService.GetBalanceLogAsync(request);
         return Ok(res);
+    }
+
+    [HttpPost("bookings/{id:int}/resend-confirmation-sms")]
+    public async Task<IActionResult> ResendConfirmationSms(int id)
+    {
+        var reservation = await _context.HotelReservations.FindAsync(id);
+        if (reservation == null)
+        {
+            return NotFound(new { message = $"Hotel reservation {id} not found." });
+        }
+
+        if (string.IsNullOrWhiteSpace(reservation.GuestPhone))
+        {
+            return BadRequest(new { message = "Reservation does not have a valid guest phone number." });
+        }
+
+        string checkInFormatted = reservation.CheckInDate.ToString("dd/MM/yyyy");
+        string checkOutFormatted = reservation.CheckOutDate.ToString("dd/MM/yyyy");
+
+        var result = await _notificationService.SendImmediateAsync(
+            eventType: "HotelBookingSuccess",
+            channel: "SMS",
+            recipient: reservation.GuestPhone.Trim(),
+            templateKey: "HOTEL_BOOKING_CONFIRMED",
+            payload: new
+            {
+                Reference = reservation.BookingReference,
+                Hotel = reservation.HotelName,
+                HotelName = reservation.HotelName,
+                CheckIn = checkInFormatted,
+                CheckOut = checkOutFormatted,
+                Var1 = reservation.BookingReference,
+                Var2 = reservation.HotelName,
+                Var3 = checkInFormatted,
+                Var4 = checkOutFormatted
+            }
+        );
+
+        if (!result.IsSuccess)
+        {
+            return StatusCode(500, new { message = "Failed to send hotel confirmation SMS", error = result.ErrorMessage });
+        }
+
+        return Ok(new
+        {
+            message = "Hotel booking confirmation SMS sent successfully.",
+            bookingReference = reservation.BookingReference,
+            recipient = reservation.GuestPhone,
+            hotel = reservation.HotelName,
+            checkIn = checkInFormatted,
+            checkOut = checkOutFormatted
+        });
+    }
+
+    [HttpPost("bookings/{id:int}/send-failure-sms")]
+    public async Task<IActionResult> SendFailureSms(int id, [FromQuery] string? reason)
+    {
+        var reservation = await _context.HotelReservations.FindAsync(id);
+        if (reservation == null)
+        {
+            return NotFound(new { message = $"Hotel reservation {id} not found." });
+        }
+
+        if (string.IsNullOrWhiteSpace(reservation.GuestPhone))
+        {
+            return BadRequest(new { message = "Reservation does not have a valid guest phone number." });
+        }
+
+        string failureReason = !string.IsNullOrWhiteSpace(reason) 
+            ? reason 
+            : (!string.IsNullOrWhiteSpace(reservation.CancellationReason) ? reservation.CancellationReason : "Room unavailable");
+        if (failureReason.Length > 45)
+        {
+            failureReason = failureReason.Substring(0, 42) + "...";
+        }
+
+        var result = await _notificationService.SendImmediateAsync(
+            eventType: "HotelBookingFailed",
+            channel: "SMS",
+            recipient: reservation.GuestPhone.Trim(),
+            templateKey: "HOTEL_BOOKING_FAILED",
+            payload: new
+            {
+                Reference = reservation.BookingReference,
+                Reason = failureReason,
+                Var1 = reservation.BookingReference,
+                Var2 = failureReason
+            }
+        );
+
+        if (!result.IsSuccess)
+        {
+            return StatusCode(500, new { message = "Failed to send hotel failure SMS", error = result.ErrorMessage });
+        }
+
+        return Ok(new
+        {
+            message = "Hotel booking failure SMS sent successfully.",
+            bookingReference = reservation.BookingReference,
+            recipient = reservation.GuestPhone,
+            reason = failureReason
+        });
+    }
+
+    [HttpPost("bookings/{id:int}/send-checkin-reminder-sms")]
+    public async Task<IActionResult> SendCheckInReminderSms(int id)
+    {
+        var reservation = await _context.HotelReservations.FindAsync(id);
+        if (reservation == null)
+        {
+            return NotFound(new { message = $"Hotel reservation {id} not found." });
+        }
+
+        if (string.IsNullOrWhiteSpace(reservation.GuestPhone))
+        {
+            return BadRequest(new { message = "Reservation does not have a valid guest phone number." });
+        }
+
+        string formattedDate = reservation.CheckInDate.ToString("dd/MM/yyyy");
+        string hotelName = !string.IsNullOrWhiteSpace(reservation.HotelName) 
+            ? reservation.HotelName.Trim() 
+            : "Hotel";
+
+        if (hotelName.Length > 40)
+        {
+            hotelName = hotelName.Substring(0, 37) + "...";
+        }
+
+        var result = await _notificationService.SendImmediateAsync(
+            eventType: "HotelCheckInReminder",
+            channel: "SMS",
+            recipient: reservation.GuestPhone.Trim(),
+            templateKey: "HOTEL_CHECKIN_REMINDER",
+            payload: new
+            {
+                Hotel = hotelName,
+                CheckIn = formattedDate,
+                Date = formattedDate,
+                Reference = reservation.BookingReference,
+                Var1 = hotelName,
+                Var2 = formattedDate,
+                Var3 = reservation.BookingReference
+            }
+        );
+
+        if (!result.IsSuccess)
+        {
+            return StatusCode(500, new { message = "Failed to send hotel check-in reminder SMS", error = result.ErrorMessage });
+        }
+
+        return Ok(new
+        {
+            message = "Hotel check-in reminder SMS sent successfully.",
+            bookingReference = reservation.BookingReference,
+            recipient = reservation.GuestPhone,
+            hotel = hotelName,
+            checkInDate = formattedDate
+        });
     }
 }
 

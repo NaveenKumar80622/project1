@@ -137,9 +137,15 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 ```
 
 **SMS/WhatsApp Template**
-*TemplateKey*: `HOTEL_BOOKING_CONFIRMED_SMS`
-*Variables*: `{HotelName}`, `{Name}`
-*Body*: `Dear {Name}, your hotel booking at {HotelName} is confirmed! Check your email for the voucher. PickNBook.`
+*TemplateKey*: `HOTEL_BOOKING_CONFIRMED` (Alias: `HOTEL_BOOKING_CONFIRMED_SMS`)
+*EventType*: `HotelBookingSuccess`
+*Channel*: `SMS`
+*DLT Content ID*: `1777178962451868362`
+*Provider Template ID*: `1562672`
+*Header (Sender ID)*: `PICNBK`
+*Variables*: `${var1}` / `{Reference}`, `${var2}` / `{Hotel}`, `${var3}` / `{CheckIn}`, `${var4}` / `{CheckOut}`
+*Body*: `PickNBook: Hotel booking confirmed. Ref ${var1}. Hotel: ${var2}. Check-in: ${var3}. Check-out: ${var4}.`
+*Sample Content*: `PickNBook: Hotel booking confirmed. Ref PNB26091000125. Hotel: Grand Hyderabad Hotel. Check-in: 20/09/2026. Check-out: 22/09/2026.`
 
 ---
 
@@ -158,7 +164,47 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 ```
 
 **SMS/WhatsApp Template**
-*Body*: `Your PickNBook hotel booking failed. Any deducted amount will be refunded. Reason: {Reason}.`
+*TemplateKey*: `HOTEL_BOOKING_FAILED` (Alias: `HOTEL_BOOKING_FAILED_SMS`)
+*EventType*: `HotelBookingFailed`
+*Channel*: `SMS`
+*DLT Content ID*: `1777178962464726766`
+*Provider Template ID*: `1562673`
+*Header (Sender ID)*: `PICNBK`
+*Variables*: `${var1}` / `{Reference}`, `${var2}` / `{Reason}`
+*Body*: `PickNBook: Hotel booking could not be completed. Ref ${var1}. Reason: ${var2}.`
+*Sample Content*: `PickNBook: Hotel booking could not be completed. Ref PNB26091000125. Reason: Room unavailable.`
+
+---
+
+### 3.3 Hotel Booking Cancelled
+**TemplateKey**: `HOTEL_BOOKING_CANCELLED` (Alias: `HOTEL_BOOKING_CANCELLED_SMS`)
+**EventType**: `HotelBookingCancelled`
+**Channel**: `SMS`
+**DLT Content ID**: `1777178962472996371`
+**DLT Reference Number**: `11-1REDXMU54CVAK`
+**Provider Template ID**: `1562674`
+**Header (Sender ID)**: `PICNBK`
+**Variables**: `${var1}` / `{Reference}`, `${var2}` / `{Status}`
+
+**SMS Template**
+*Body*: `PickNBook: Hotel booking ${var1} has been cancelled. Cancellation status: ${var2}.`
+*Sample Content*: `PickNBook: Hotel booking PNB26091000125 has been cancelled. Cancellation status: Confirmed.`
+
+---
+
+### 3.4 Hotel Check-In Reminder
+**TemplateKey**: `HOTEL_CHECKIN_REMINDER` (Alias: `HOTEL_CHECKIN_REMINDER_SMS`)
+**EventType**: `HotelCheckInReminder`
+**Channel**: `SMS`
+**DLT Content ID**: `1777178962486170496`
+**DLT Reference Number**: `11-1REDXMU54FOY0`
+**Provider Template ID**: `1562675`
+**Header (Sender ID)**: `PICNBK`
+**Variables**: `${var1}` / `{Hotel}`, `${var2}` / `{CheckIn}`, `${var3}` / `{Reference}`
+
+**SMS Template**
+*Body*: `PickNBook reminder: Your check-in at ${var1} is on ${var2}. Booking Ref ${var3}.`
+*Sample Content*: `PickNBook reminder: Your check-in at Grand Hyderabad Hotel is on 20/09/2026. Booking Ref PNB26091000125.`
 
 ---
 

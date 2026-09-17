@@ -912,12 +912,40 @@ namespace PickNBook.Api.Services.Implementations
                         _logger.LogError(pEx, "Failed to persist Failed HotelReservation for Payment {PaymentId}", payment.Id);
                     }
 
+                    string cleanReason = !string.IsNullOrWhiteSpace(payment.FailureReason) 
+                        ? payment.FailureReason 
+                        : "Room unavailable";
+                    if (cleanReason.Length > 45)
+                    {
+                        cleanReason = cleanReason.Substring(0, 42) + "...";
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(reservation.GuestPhone))
+                    {
+                        await _notificationService.EnqueueAsync(
+                            eventType: "HotelBookingFailed",
+                            channel: "SMS",
+                            recipient: reservation.GuestPhone.Trim(),
+                            templateKey: "HOTEL_BOOKING_FAILED",
+                            payload: new
+                            {
+                                Reference = reservation.BookingReference,
+                                Reason = cleanReason,
+                                Var1 = reservation.BookingReference,
+                                Var2 = cleanReason,
+                                Amount = payment.FinalPayableAmount
+                            },
+                            bookingId: reservation.BookingReference,
+                            userId: payment.UserId
+                        );
+                    }
+
                     await _notificationService.EnqueueAsync(
                         eventType: "HotelBookingFailed",
                         channel: "Email",
                         recipient: reservation.GuestEmail ?? payment.UserId,
                         templateKey: "HOTEL_BOOKING_FAILED",
-                        payload: new { Reason = payment.FailureReason, Amount = payment.FinalPayableAmount }
+                        payload: new { Reason = cleanReason, Amount = payment.FinalPayableAmount, Reference = reservation.BookingReference }
                     );
 
                     await _dbContext.SaveChangesAsync();
@@ -951,12 +979,28 @@ namespace PickNBook.Api.Services.Implementations
                         payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName, Amount = payment.FinalPayableAmount }
                     );
 
+                    string checkInFormatted = reservation.CheckInDate.ToString("dd/MM/yyyy");
+                    string checkOutFormatted = reservation.CheckOutDate.ToString("dd/MM/yyyy");
+
                     await _notificationService.EnqueueAsync(
                         eventType: "HotelBookingSuccess",
                         channel: "SMS",
-                        recipient: reservation.GuestPhone ?? "",
-                        templateKey: "HOTEL_BOOKING_CONFIRMED_SMS",
-                        payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName }
+                        recipient: (reservation.GuestPhone ?? "").Trim(),
+                        templateKey: "HOTEL_BOOKING_CONFIRMED",
+                        payload: new
+                        {
+                            Reference = reservation.BookingReference,
+                            Hotel = reservation.HotelName,
+                            HotelName = reservation.HotelName,
+                            CheckIn = checkInFormatted,
+                            CheckOut = checkOutFormatted,
+                            Var1 = reservation.BookingReference,
+                            Var2 = reservation.HotelName,
+                            Var3 = checkInFormatted,
+                            Var4 = checkOutFormatted
+                        },
+                        bookingId: reservation.BookingReference,
+                        userId: payment.UserId
                     );
                 }
 
