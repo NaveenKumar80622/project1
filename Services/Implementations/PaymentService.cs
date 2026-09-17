@@ -521,7 +521,7 @@ namespace PickNBook.Api.Services.Implementations
                 };
             }
 
-            var cfPaymentsResponse = await _cashfreeService.GetPaymentsForOrderAsync(cashfreeOrderId);
+            using var cfPaymentsResponse = await _cashfreeService.GetPaymentsForOrderAsync(cashfreeOrderId);
             
             bool isSuccess = false;
             string? cfPaymentId = null;

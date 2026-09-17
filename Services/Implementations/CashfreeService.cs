@@ -53,7 +53,7 @@ namespace PickNBook.Api.Services.Implementations
             request.Headers.Add("x-client-id", _settings.ClientId);
             request.Headers.Add("x-client-secret", _settings.ClientSecret);
             request.Headers.Add("x-api-version", _settings.ApiVersion);
-            request.Headers.Add("x-idempotency-key", Guid.NewGuid().ToString());
+            request.Headers.Add("x-idempotency-key", orderId);
 
             string jsonBody = JsonSerializer.Serialize(requestBody);
             request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");

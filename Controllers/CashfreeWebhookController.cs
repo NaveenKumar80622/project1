@@ -64,12 +64,18 @@ namespace PickNBook.Api.Controllers
                 }
 
                 var payload = JsonSerializer.Deserialize<CashfreeWebhookPayload>(rawBody);
+                if (payload == null)
+                {
+                    _logger.LogWarning("Webhook payload deserialization returned null.");
+                    return Ok(new { message = "Invalid payload - ignored" });
+                }
+
                 if (payload.Type == "REFUND_STATUS_WEBHOOK")
                 {
                     if (payload.Data?.Refund == null)
                     {
                         _logger.LogWarning("Refund Webhook payload missing refund data.");
-                        return BadRequest(new { message = "Invalid refund payload" });
+                        return Ok(new { message = "Invalid refund payload - ignored" });
                     }
 
                     string refundId = payload.Data.Refund.RefundId;
@@ -79,10 +85,10 @@ namespace PickNBook.Api.Controllers
                     return Ok(new { message = refundProcessed ? "Refund webhook processed" : "Refund webhook ignored" });
                 }
 
-                if (payload?.Data?.Order == null || payload.Data.Payment == null)
+                if (payload.Data?.Order == null || payload.Data.Payment == null)
                 {
                     _logger.LogWarning("Webhook payload missing order/payment data.");
-                    return BadRequest(new { message = "Invalid payload" });
+                    return Ok(new { message = "Invalid payload - ignored" });
                 }
 
                 string orderId = payload.Data.Order.OrderId;
@@ -97,11 +103,19 @@ namespace PickNBook.Api.Controllers
                 // Return 200 OK regardless so Cashfree doesn't retry endlessly, as long as signature was valid.
                 return Ok(new { message = processed ? "Webhook processed" : "Webhook ignored" });
             }
+            catch (Exception ex) when (ex is System.Net.Sockets.SocketException 
+                                       || ex is TimeoutException
+                                       || (ex is Microsoft.EntityFrameworkCore.DbUpdateException && ex.InnerException is System.Net.Sockets.SocketException))
+            {
+                // Transient infrastructure failures — return 500 so Cashfree retries
+                _logger.LogError(ex, "Transient error processing Cashfree webhook. Cashfree will retry.");
+                return StatusCode(500, new { message = "Transient processing failure" });
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing Cashfree webhook.");
-                // Return 500 to allow Cashfree to retry for temporary internal errors
-                return StatusCode(500, new { message = "Internal processing failure" });
+                // Permanent/business logic errors — return 200 to prevent infinite Cashfree retries
+                _logger.LogError(ex, "Permanent error processing Cashfree webhook. Returning 200 to prevent retry storm.");
+                return Ok(new { message = "Webhook processing error - logged for investigation" });
             }
         }
     }

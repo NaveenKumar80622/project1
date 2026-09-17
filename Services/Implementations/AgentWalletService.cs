@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace PickNBook.Api.Services
@@ -33,13 +34,37 @@ namespace PickNBook.Api.Services
                 throw new Exception("Agent wallet is inactive.");
             }
 
-            if (agent.WalletBalance < amount)
+            // Idempotency check: prevent double-debit on retries
+            var existingDebit = await _context.AgentLedgerEntries
+                .FirstOrDefaultAsync(e => e.AgentId == agentId &&
+                                          e.ReferenceId == bookingReference &&
+                                          e.TransactionType == "Booking");
+            if (existingDebit != null)
             {
-                throw new Exception("Insufficient wallet balance.");
+                return; // Already debited for this booking
             }
 
-            // Deduct balance
-            agent.WalletBalance -= amount;
+            // Atomic conditional update to prevent negative balance under concurrency
+            if (_context.Database.IsRelational())
+            {
+                int affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE users SET WalletBalance = WalletBalance - {amount} WHERE Id = {agentId} AND WalletBalance >= {amount}");
+
+                if (affectedRows == 0)
+                {
+                    throw new Exception("Insufficient wallet balance.");
+                }
+
+                await _context.Entry(agent).ReloadAsync();
+            }
+            else
+            {
+                if (agent.WalletBalance < amount)
+                {
+                    throw new Exception("Insufficient wallet balance.");
+                }
+                agent.WalletBalance -= amount;
+            }
 
             // Save ledger entry
             var ledgerEntry = new AgentLedgerEntry
@@ -70,8 +95,28 @@ namespace PickNBook.Api.Services
                 throw new Exception("User is not an authorized agent.");
             }
 
-            // Credit balance
-            agent.WalletBalance += amount;
+            // Idempotency check: prevent double-credit on retries
+            var existingCredit = await _context.AgentLedgerEntries
+                .FirstOrDefaultAsync(e => e.AgentId == agentId &&
+                                          e.ReferenceId == bookingReference &&
+                                          e.TransactionType == "Refund");
+            if (existingCredit != null)
+            {
+                return; // Already credited for this booking refund
+            }
+
+            // Atomic database-level balance update
+            if (_context.Database.IsRelational())
+            {
+                await _context.Database.ExecuteSqlInterpolatedAsync(
+                    $"UPDATE users SET WalletBalance = WalletBalance + {amount} WHERE Id = {agentId}");
+
+                await _context.Entry(agent).ReloadAsync();
+            }
+            else
+            {
+                agent.WalletBalance += amount;
+            }
 
             // Save ledger entry
             var ledgerEntry = new AgentLedgerEntry

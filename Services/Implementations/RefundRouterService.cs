@@ -270,7 +270,11 @@ namespace PickNBook.Api.Services.Implementations
                     refundId ??= $"REF-CAN-{context.BookingReference}-G";
                     if (refundId.Length > 40)
                     {
-                        refundId = refundId.Substring(0, 40);
+                        // Use a hash suffix to prevent truncation collisions between different booking references
+                        using var sha = System.Security.Cryptography.SHA256.Create();
+                        var hashBytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(refundId));
+                        string hashSuffix = BitConverter.ToString(hashBytes).Replace("-", "").Substring(0, 8);
+                        refundId = refundId.Substring(0, 31) + "-" + hashSuffix;
                     }
 
                     try

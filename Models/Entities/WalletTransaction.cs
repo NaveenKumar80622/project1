@@ -38,7 +38,7 @@ namespace PickNBook.Api.Models.Entities
 
         [Required]
         [MaxLength(20)]
-        public string Status { get; set; } = "Completed"; // "Completed", "Failed", "Pending"
+        public string Status { get; set; } = "Completed"; // "Completed", "Failed", "Pending", "Reserved", "Released"
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
