@@ -48,7 +48,11 @@ namespace PickNBook.Api.Services.Implementations
             var trimmedQuery = query?.Trim() ?? string.Empty;
             var queryLower = trimmedQuery.ToLowerInvariant();
 
-            var cacheKey = $"places:{normalizedTripType}:{requestType?.ToLowerInvariant() ?? "all"}:{normalizedField}:{queryLower}:{limit}";
+            var isSingleChar = queryLower.Length == 1;
+            var cacheKey = isSingleChar
+                ? $"places:alpha:{normalizedTripType}:{requestType?.ToLowerInvariant() ?? "all"}:{normalizedField}:{queryLower}:{limit}"
+                : $"places:{normalizedTripType}:{requestType?.ToLowerInvariant() ?? "all"}:{normalizedField}:{queryLower}:{limit}";
+
             if (_cache.TryGetValue(cacheKey, out List<PlaceSuggestionDto>? cachedResult) && cachedResult != null)
             {
                 return cachedResult;
@@ -67,16 +71,29 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (!string.IsNullOrWhiteSpace(queryLower))
                 {
-                    newAirportQuery = newAirportQuery.Where(a =>
-                        a.AirportCode == queryLower ||
-                        a.CityName.StartsWith(queryLower) ||
-                        a.CityName.Contains(queryLower) ||
-                        a.AirportName.StartsWith(queryLower) ||
-                        a.AirportName.Contains(queryLower));
+                    if (queryLower.Length < 3)
+                    {
+                        // Single/double character: strict prefix match on CityName or AirportCode
+                        var prefix = $"{queryLower}%";
+                        newAirportQuery = newAirportQuery.Where(a =>
+                            EF.Functions.Like(a.CityName, prefix) ||
+                            EF.Functions.Like(a.AirportCode, prefix));
+                    }
+                    else
+                    {
+                        newAirportQuery = newAirportQuery.Where(a =>
+                            a.AirportCode == queryLower ||
+                            a.CityName.StartsWith(queryLower) ||
+                            a.CityName.Contains(queryLower) ||
+                            a.AirportName.StartsWith(queryLower) ||
+                            a.AirportName.Contains(queryLower));
+                    }
                 }
 
+                // Prioritize domestic Indian airports first, then alphabetical by CityName
                 var flightAirports = await newAirportQuery
-                    .OrderBy(a => a.CityName)
+                    .OrderByDescending(a => a.CountryCode == "IN" ? 1 : 0)
+                    .ThenBy(a => a.CityName)
                     .Take(candidateLimit)
                     .Select(a => new PlaceSuggestionDto
                     {
@@ -106,13 +123,24 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (!string.IsNullOrWhiteSpace(queryLower))
                 {
-                    hotelQuery = hotelQuery.Where(h =>
-                        h.CityCode == queryLower ||
-                        h.CityName.StartsWith(queryLower) ||
-                        h.CityName.Contains(queryLower) ||
-                        h.FullName.Contains(queryLower) ||
-                        (h.StateName != null && h.StateName.StartsWith(queryLower)) ||
-                        (h.DistrictName != null && h.DistrictName.StartsWith(queryLower)));
+                    if (queryLower.Length < 3)
+                    {
+                        // Single/double character: strict prefix match on CityName
+                        var prefix = $"{queryLower}%";
+                        hotelQuery = hotelQuery.Where(h =>
+                            EF.Functions.Like(h.CityName, prefix) ||
+                            h.CityCode == queryLower);
+                    }
+                    else
+                    {
+                        hotelQuery = hotelQuery.Where(h =>
+                            h.CityCode == queryLower ||
+                            h.CityName.StartsWith(queryLower) ||
+                            h.CityName.Contains(queryLower) ||
+                            h.FullName.Contains(queryLower) ||
+                            (h.StateName != null && h.StateName.StartsWith(queryLower)) ||
+                            (h.DistrictName != null && h.DistrictName.StartsWith(queryLower)));
+                    }
                 }
 
                 var hotelCities = await hotelQuery
@@ -147,10 +175,21 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (!string.IsNullOrWhiteSpace(queryLower))
                 {
-                    busQuery = busQuery.Where(b =>
-                        b.CityCode == queryLower ||
-                        b.CityName.StartsWith(queryLower) ||
-                        b.CityName.Contains(queryLower));
+                    if (queryLower.Length < 3)
+                    {
+                        // Single/double character: strict prefix match on CityName or CityCode
+                        var prefix = $"{queryLower}%";
+                        busQuery = busQuery.Where(b =>
+                            EF.Functions.Like(b.CityName, prefix) ||
+                            b.CityCode == queryLower);
+                    }
+                    else
+                    {
+                        busQuery = busQuery.Where(b =>
+                            b.CityCode == queryLower ||
+                            b.CityName.StartsWith(queryLower) ||
+                            b.CityName.Contains(queryLower));
+                    }
                 }
 
                 var busCities = await busQuery
@@ -167,6 +206,40 @@ namespace PickNBook.Api.Services.Implementations
                         UsageCount = 1
                     })
                     .ToListAsync(cancellationToken);
+
+                // For short bus queries (< 3 chars), ensure any top-popularity cities starting with queryLower
+                // are guaranteed to be in cityCandidates even if alphabetical Take(candidateLimit) truncated them
+                if (queryLower.Length < 3 && busPlacePopularity.Count > 0)
+                {
+                    var popularMatchingNames = busPlacePopularity
+                        .Where(kvp => kvp.Key.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(kvp => kvp.Value)
+                        .Take(candidateLimit)
+                        .Select(kvp => kvp.Key)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    var existingNames = busCities.Select(c => c.CityName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var missingNames = popularMatchingNames.Where(name => !existingNames.Contains(name)).ToList();
+
+                    if (missingNames.Count > 0)
+                    {
+                        var missingCities = await _dbContext.BusCities.AsNoTracking()
+                            .Where(b => b.IsActive && missingNames.Contains(b.CityName))
+                            .Select(b => new PlaceSuggestionDto
+                            {
+                                CityName = b.CityName,
+                                CityCode = b.CityCode,
+                                StateName = b.StateName,
+                                CountryCode = b.CountryCode ?? "IN",
+                                CountryName = b.CountryName ?? "India",
+                                TripType = "bus",
+                                UsageCount = 1
+                            })
+                            .ToListAsync(cancellationToken);
+
+                        busCities.AddRange(missingCities);
+                    }
+                }
 
                 cityCandidates.AddRange(busCities);
             }
@@ -209,7 +282,11 @@ namespace PickNBook.Api.Services.Implementations
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
                     .GroupBy(x => x.AirportCode ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
                     .Select(g => g.First())
-                    .OrderBy(x => x.CityName)
+                    .OrderByDescending(x =>
+                        !string.IsNullOrWhiteSpace(queryLower) &&
+                        x.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                    .ThenByDescending(x => string.Equals(x.CountryCode, "IN", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                    .ThenBy(x => x.CityName)
                     .Take(limit)
                     .ToList();
             }
@@ -250,8 +327,11 @@ namespace PickNBook.Api.Services.Implementations
                     .ToList();
             }
 
-            // Cache for configured minutes
-            _cache.Set(cacheKey, response, TimeSpan.FromMinutes(_settings.CacheExpirationMinutes));
+            // Cache for 24 hours if single-letter query, else configured minutes
+            var cacheDuration = isSingleChar
+                ? TimeSpan.FromHours(24)
+                : TimeSpan.FromMinutes(_settings.CacheExpirationMinutes);
+            _cache.Set(cacheKey, response, cacheDuration);
 
             return response;
         }
@@ -293,9 +373,9 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     score += 40;
                 }
-                else
+                else if (queryLower.Length >= 3)
                 {
-                    // Existing Levenshtein fuzzy distance fallback (allow up to 2 typos)
+                    // Existing Levenshtein fuzzy distance fallback (allow up to 2 typos only for 3+ chars)
                     distance = FuzzyMatcher.ComputeLevenshteinDistance(queryLower, nameLower);
                     if (distance <= 2)
                     {
@@ -315,10 +395,10 @@ namespace PickNBook.Api.Services.Implementations
                     {
                         score += Math.Min((int)(Math.Log10(item.HotelCount.Value + 1) * 15), 50);
                     }
-                    // Flight Domestic Hub boost (e.g. HYD India before HDD Pakistan)
+                    // Flight Domestic Hub boost (e.g. DEL India before DUB Ireland for domestic searches)
                     else if (item.TripType == "flight" && string.Equals(item.CountryCode, "IN", StringComparison.OrdinalIgnoreCase))
                     {
-                        score += 5;
+                        score += (queryLower.Length < 3 ? 25 : 5);
                     }
 
                     scoredCandidates.Add((item, score, distance));
