@@ -22,6 +22,7 @@ namespace PickNBook.Api.Services
         private HashSet<long> _validCityIds = new();
         private Dictionary<long, string> _cityIdToName = new();
         private Dictionary<string, long> _cityNameToId = new(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<long, List<long>> _cityAliases = new();
 
         public BusCityCacheService(ILogger<BusCityCacheService> logger, IServiceScopeFactory scopeFactory)
         {
@@ -52,6 +53,7 @@ namespace PickNBook.Api.Services
                 var validIds = new HashSet<long>(dbCities.Count);
                 var idToName = new Dictionary<long, string>(dbCities.Count);
                 var nameToId = new Dictionary<string, long>(dbCities.Count * 2, StringComparer.OrdinalIgnoreCase);
+                var clusterMap = new Dictionary<string, List<long>>(StringComparer.OrdinalIgnoreCase);
 
                 foreach (var c in dbCities)
                 {
@@ -69,6 +71,21 @@ namespace PickNBook.Api.Services
                         {
                             nameToId[cleanName] = c.CityId;
                         }
+
+                        // Cluster main CITY entities sharing the same normalized name and state
+                        if (string.Equals(c.Type, "CITY", StringComparison.OrdinalIgnoreCase) || c.ParentCityId == null || c.ParentCityId == 0)
+                        {
+                            var clusterKey = $"{cleanName}|{c.StateName}".Trim().ToLowerInvariant();
+                            if (!clusterMap.TryGetValue(clusterKey, out var aliasList))
+                            {
+                                aliasList = new List<long>();
+                                clusterMap[clusterKey] = aliasList;
+                            }
+                            if (!aliasList.Contains(c.CityId))
+                            {
+                                aliasList.Add(c.CityId);
+                            }
+                        }
                     }
 
                     cities.Add(new PlaceSuggestionDto
@@ -83,17 +100,40 @@ namespace PickNBook.Api.Services
                     });
                 }
 
+                // Build reciprocal alias mapping: each ID in a cluster maps to all IDs in that cluster
+                var aliases = new Dictionary<long, List<long>>();
+                foreach (var group in clusterMap.Values)
+                {
+                    if (group.Count > 1)
+                    {
+                        foreach (var id in group)
+                        {
+                            aliases[id] = group;
+                        }
+                    }
+                }
+
                 BusCities = cities;
                 _validCityIds = validIds;
                 _cityIdToName = idToName;
                 _cityNameToId = nameToId;
+                _cityAliases = aliases;
 
-                _logger.LogInformation($"Loaded {BusCities.Count} Bus City Codes from Database.");
+                _logger.LogInformation($"Loaded {BusCities.Count} Bus City Codes and {_cityAliases.Count} aliased cluster IDs from Database.");
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to load bus city code cache from database.");
             }
+        }
+
+        public IReadOnlyList<long> GetCityAliases(long cityId)
+        {
+            if (_cityAliases.TryGetValue(cityId, out var aliases) && aliases.Count > 0)
+            {
+                return aliases;
+            }
+            return new[] { cityId };
         }
 
         public bool IsValidCity(long cityId)

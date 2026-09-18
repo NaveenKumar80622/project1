@@ -9,6 +9,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
@@ -173,6 +174,29 @@ namespace PickNBook.Api.Services
 
         public async Task<string> SearchBusesProxyAsync(BusSearchProxyRequestDto request)
         {
+            var fromAliases = _cityCache != null ? _cityCache.GetCityAliases(request.FromCityCode) : new[] { request.FromCityCode };
+            var toAliases = _cityCache != null ? _cityCache.GetCityAliases(request.ToCityCode) : new[] { request.ToCityCode };
+
+            if (fromAliases.Count <= 1 && toAliases.Count <= 1)
+            {
+                return await ExecuteSingleSearchProxyAsync(request.FromCityCode, request.ToCityCode, request.DepartDate);
+            }
+
+            var tasks = new List<Task<string>>();
+            foreach (var fCode in fromAliases)
+            {
+                foreach (var tCode in toAliases)
+                {
+                    tasks.Add(ExecuteSingleSearchProxyAsync(fCode, tCode, request.DepartDate));
+                }
+            }
+
+            var results = await Task.WhenAll(tasks);
+            return MergeBusSearchResults(results);
+        }
+
+        private async Task<string> ExecuteSingleSearchProxyAsync(long fromCityCode, long toCityCode, string departDate)
+        {
             if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
             {
                 _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
@@ -180,14 +204,82 @@ namespace PickNBook.Api.Services
 
             var requestBody = new
             {
-                FromCityCode = request.FromCityCode,
-                ToCityCode = request.ToCityCode,
-                DepartDate = request.DepartDate
+                FromCityCode = fromCityCode,
+                ToCityCode = toCityCode,
+                DepartDate = departDate
             };
 
             var searchUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Search";
             var response = await _httpClient.PostAsJsonAsync(searchUrl, requestBody, _jsonOptions);
             return await response.Content.ReadAsStringAsync();
+        }
+
+        private string MergeBusSearchResults(string[] responses)
+        {
+            if (responses == null || responses.Length == 0)
+            {
+                return "{\"Error\":{\"ErrorCode\":1,\"ErrorMessage\":\"No search results\"}}";
+            }
+
+            if (responses.Length == 1)
+            {
+                return responses[0];
+            }
+
+            JsonNode? primaryRoot = null;
+            var mergedBuses = new JsonArray();
+            var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var raw in responses)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+
+                try
+                {
+                    var node = JsonNode.Parse(raw);
+                    if (node == null) continue;
+
+                    var errorCode = node["Error"]?["ErrorCode"]?.ToString();
+                    if (errorCode == "0" && primaryRoot == null)
+                    {
+                        primaryRoot = node;
+                    }
+
+                    if (node["Result"] is JsonArray busArray)
+                    {
+                        foreach (var bus in busArray)
+                        {
+                            if (bus == null) continue;
+
+                            var operatorName = bus["TravelsName"]?.ToString() ?? bus["OperatorName"]?.ToString() ?? string.Empty;
+                            var deptTime = bus["DepartureTime"]?.ToString() ?? string.Empty;
+                            var busType = bus["BusType"]?.ToString() ?? string.Empty;
+                            var routeId = bus["RouteId"]?.ToString() ?? string.Empty;
+
+                            var dedupeKey = !string.IsNullOrEmpty(routeId)
+                                ? routeId
+                                : $"{operatorName}|{deptTime}|{busType}".Trim();
+
+                            if (!string.IsNullOrEmpty(dedupeKey) && seenKeys.Add(dedupeKey))
+                            {
+                                mergedBuses.Add(JsonNode.Parse(bus.ToJsonString())!);
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore individual parse failures on partial errors
+                }
+            }
+
+            if (primaryRoot != null)
+            {
+                primaryRoot["Result"] = mergedBuses;
+                return primaryRoot.ToJsonString();
+            }
+
+            return responses.FirstOrDefault(r => !string.IsNullOrWhiteSpace(r)) ?? responses[0];
         }
 
         public async Task<List<SrdvBusOfferDto>> SearchBusesAsync(string originId, string destinationId, string journeyDate)
@@ -224,31 +316,22 @@ namespace PickNBook.Api.Services
             _ = long.TryParse(fromCodeStr, out var fromCode);
             _ = long.TryParse(toCodeStr, out var toCode);
 
-            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
-            {
-                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
-            }
-
-            var requestBody = new
+            var rawJson = await SearchBusesProxyAsync(new BusSearchProxyRequestDto
             {
                 FromCityCode = fromCode,
                 ToCityCode = toCode,
                 DepartDate = journeyDate
-            };
+            });
 
-            var searchUrl = $"{_settings.BusBaseUrl.TrimEnd('/')}/Search";
-            var response = await _httpClient.PostAsJsonAsync(searchUrl, requestBody, _jsonOptions);
-            response.EnsureSuccessStatusCode();
-
-            using var contentStream = await response.Content.ReadAsStreamAsync();
-            var json = await JsonDocument.ParseAsync(contentStream);
+            using var contentDoc = JsonDocument.Parse(rawJson);
+            var json = contentDoc.RootElement;
             
             var res = new List<SrdvBusOfferDto>();
 
             int errorCode = -1;
             string errorMessage = "Unknown SRDV error";
 
-            if (json.RootElement.TryGetProperty("Error", out var errorProp))
+            if (json.TryGetProperty("Error", out var errorProp))
             {
                 if (errorProp.TryGetProperty("ErrorCode", out var codeProp))
                 {
@@ -262,12 +345,12 @@ namespace PickNBook.Api.Services
 
             if (errorCode == 0)
             {
-                var traceIdProp = json.RootElement.GetProperty("TraceId");
+                var traceIdProp = json.GetProperty("TraceId");
                 var traceId = traceIdProp.ValueKind == JsonValueKind.Number 
                     ? traceIdProp.GetInt64().ToString() 
                     : traceIdProp.GetString() ?? string.Empty;
 
-                if (json.RootElement.TryGetProperty("Result", out var results) && results.ValueKind == JsonValueKind.Array)
+                if (json.TryGetProperty("Result", out var results) && results.ValueKind == JsonValueKind.Array)
                 {
                     var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
                     var cutoffTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone).AddMinutes(-5);

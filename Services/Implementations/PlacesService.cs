@@ -17,6 +17,16 @@ namespace PickNBook.Api.Services.Implementations
 {
     public class PlacesService : IPlacesService
     {
+        public static readonly Dictionary<string, (string CityName, string CountryCode, string CountryName, string Description, string[] AirportCodes)> KnownMetroAirportClusters =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["GOA"] = ("Goa", "IN", "India", "All Airports (GOI, GOX)", new[] { "GOI", "GOX" }),
+                ["LON"] = ("London", "GB", "United Kingdom", "All Airports (LHR, LGW, STN, LTN, LCY)", new[] { "LHR", "LGW", "STN", "LTN", "LCY" }),
+                ["NYC"] = ("New York", "US", "United States", "All Airports (JFK, EWR, LGA)", new[] { "JFK", "EWR", "LGA" }),
+                ["DXB"] = ("Dubai", "AE", "United Arab Emirates", "All Airports (DXB, DWC)", new[] { "DXB", "DWC" }),
+                ["TYO"] = ("Tokyo", "JP", "Japan", "All Airports (HND, NRT)", new[] { "HND", "NRT" })
+            };
+
         private readonly AppDbContext _dbContext;
         private readonly IMemoryCache _cache;
         private readonly SrdvMasterDataSettings _settings;
@@ -109,6 +119,28 @@ namespace PickNBook.Api.Services.Implementations
                     .ToListAsync(cancellationToken);
 
                 cityCandidates.AddRange(flightAirports);
+
+                // Inject Metro Area Clusters matching the query
+                foreach (var (code, cluster) in KnownMetroAirportClusters)
+                {
+                    if (string.IsNullOrWhiteSpace(queryLower) ||
+                        code.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ||
+                        cluster.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ||
+                        cluster.CityName.Contains(queryLower, StringComparison.OrdinalIgnoreCase))
+                    {
+                        cityCandidates.Add(new PlaceSuggestionDto
+                        {
+                            CityName = cluster.CityName,
+                            AirportCode = code,
+                            AirportName = cluster.Description,
+                            CityCode = code,
+                            CountryCode = cluster.CountryCode,
+                            CountryName = cluster.CountryName,
+                            TripType = "flight",
+                            UsageCount = 1000
+                        });
+                    }
+                }
             }
 
             // 3. Query Hotel Cities from DB
@@ -266,8 +298,8 @@ namespace PickNBook.Api.Services.Implementations
             {
                 response = cityCandidates
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
-                    .GroupBy(x => x.CityId ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.First())
+                    .GroupBy(x => $"{x.CityName.Trim()}|{x.StateName?.Trim()}|{x.CountryCode?.Trim()}", StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.OrderByDescending(x => x.HotelCount ?? 0).First())
                     .OrderByDescending(x =>
                         !string.IsNullOrWhiteSpace(queryLower) &&
                         x.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
@@ -281,10 +313,12 @@ namespace PickNBook.Api.Services.Implementations
                 response = cityCandidates
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
                     .GroupBy(x => x.AirportCode ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.First())
+                    .Select(g => g.OrderByDescending(x => x.UsageCount).First())
                     .OrderByDescending(x =>
                         !string.IsNullOrWhiteSpace(queryLower) &&
-                        x.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+                        (string.Equals(x.AirportCode, queryLower, StringComparison.OrdinalIgnoreCase) ||
+                         x.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase)) ? 1 : 0)
+                    .ThenByDescending(x => x.UsageCount)
                     .ThenByDescending(x => string.Equals(x.CountryCode, "IN", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
                     .ThenBy(x => x.CityName)
                     .Take(limit)
@@ -294,8 +328,20 @@ namespace PickNBook.Api.Services.Implementations
             {
                 response = cityCandidates
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
-                    .GroupBy(x => x.CityCode ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
-                    .Select(g => g.OrderByDescending(x => x.UsageCount).First())
+                    .GroupBy(x => x.CityName.Split('(')[0].Trim(), StringComparer.OrdinalIgnoreCase)
+                    .Select(g => {
+                        var best = g.OrderByDescending(x => x.UsageCount).First();
+                        return new PlaceSuggestionDto
+                        {
+                            CityName = g.Key,
+                            CityCode = best.CityCode,
+                            StateName = best.StateName,
+                            CountryCode = best.CountryCode,
+                            CountryName = best.CountryName,
+                            TripType = "bus",
+                            UsageCount = g.Sum(x => x.UsageCount)
+                        };
+                    })
                     .OrderByDescending(x =>
                         !string.IsNullOrWhiteSpace(queryLower) &&
                         x.CityName.StartsWith(queryLower, StringComparison.OrdinalIgnoreCase) ? 1 : 0)

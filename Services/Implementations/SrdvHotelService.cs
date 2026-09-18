@@ -148,10 +148,16 @@ namespace PickNBook.Api.Services
                 supplierReq.NoOfNights = 1;
             }
 
-            // CityId (positive integer)
-            if (request.CityId.HasValue && request.CityId.Value > 0)
+            // CityId (positive integer) - auto-redirect known low-inventory duplicate IDs to primary catalogue
+            var resolvedCityId = request.CityId;
+            if (resolvedCityId == 2922907)
             {
-                supplierReq.CityId = request.CityId.Value;
+                resolvedCityId = 2947514; // Hyderabad master inventory (2,071 hotels)
+            }
+
+            if (resolvedCityId.HasValue && resolvedCityId.Value > 0)
+            {
+                supplierReq.CityId = resolvedCityId.Value;
             }
 
             // HotelCodes (integer[], max 200, positive integers)

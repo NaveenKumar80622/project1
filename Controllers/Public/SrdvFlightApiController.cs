@@ -16,6 +16,7 @@ using PickNBook.Api.Models.Config;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
+using PickNBook.Api.Services.Implementations;
 
 namespace PickNBook.Api.Controllers.Public
 {
@@ -138,7 +139,19 @@ namespace PickNBook.Api.Controllers.Public
                 };
                 var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "";
                 
-                var responseRaw = await _srdvFlightService.SearchFlightsRawAsync(request);
+                var expandedRequests = ExpandMetroClusterRequests(request);
+                string responseRaw;
+                if (expandedRequests.Count <= 1)
+                {
+                    responseRaw = await _srdvFlightService.SearchFlightsRawAsync(request);
+                }
+                else
+                {
+                    var flightTasks = expandedRequests.Select(r => _srdvFlightService.SearchFlightsRawAsync(r)).ToList();
+                    var rawResponses = await Task.WhenAll(flightTasks);
+                    responseRaw = MergeFlightSearchResponses(rawResponses);
+                }
+
                 var jsonNode = JsonNode.Parse(responseRaw);
                 var responseObj = jsonNode; // The root is the response object
                 
@@ -201,6 +214,172 @@ namespace PickNBook.Api.Controllers.Public
                 _logger.LogError(ex, "Error searching flights.");
                 return StatusCode(500, new { message = "Failed to search flights.", error = ex.Message });
             }
+        }
+
+        private static List<AirSearchRequestDto> ExpandMetroClusterRequests(AirSearchRequestDto baseRequest)
+        {
+            var requests = new List<AirSearchRequestDto> { baseRequest };
+
+            for (int segIdx = 0; segIdx < baseRequest.Segments.Count; segIdx++)
+            {
+                var seg = baseRequest.Segments[segIdx];
+                string[]? origAirports = null;
+                string[]? destAirports = null;
+
+                if (PlacesService.KnownMetroAirportClusters.TryGetValue(seg.Origin, out var origCluster) && origCluster.AirportCodes.Length > 1)
+                {
+                    origAirports = origCluster.AirportCodes;
+                }
+
+                if (PlacesService.KnownMetroAirportClusters.TryGetValue(seg.Destination, out var destCluster) && destCluster.AirportCodes.Length > 1)
+                {
+                    destAirports = destCluster.AirportCodes;
+                }
+
+                if (destAirports != null)
+                {
+                    var nextRequests = new List<AirSearchRequestDto>();
+                    foreach (var r in requests)
+                    {
+                        foreach (var airportCode in destAirports)
+                        {
+                            var clonedSegments = r.Segments.Select(s => new AirSearchSegmentDto
+                            {
+                                Origin = s.Origin,
+                                Destination = s.Destination,
+                                PreferredDepartureTime = s.PreferredDepartureTime,
+                                FlightCabinClass = s.FlightCabinClass
+                            }).ToList();
+
+                            clonedSegments[segIdx].Destination = airportCode;
+                            if (r.Segments.Count == 2 && segIdx == 0 && r.Segments[1].Origin.Equals(seg.Destination, StringComparison.OrdinalIgnoreCase))
+                            {
+                                clonedSegments[1].Origin = airportCode;
+                            }
+
+                            nextRequests.Add(new AirSearchRequestDto
+                            {
+                                EndUserIp = r.EndUserIp,
+                                AdultCount = r.AdultCount,
+                                ChildCount = r.ChildCount,
+                                InfantCount = r.InfantCount,
+                                JourneyType = r.JourneyType,
+                                CurrencyCode = r.CurrencyCode,
+                                FareType = r.FareType,
+                                DirectFlight = r.DirectFlight,
+                                Segments = clonedSegments
+                            });
+                        }
+                    }
+                    requests = nextRequests;
+                }
+
+                if (origAirports != null)
+                {
+                    var nextRequests = new List<AirSearchRequestDto>();
+                    foreach (var r in requests)
+                    {
+                        foreach (var airportCode in origAirports)
+                        {
+                            var clonedSegments = r.Segments.Select(s => new AirSearchSegmentDto
+                            {
+                                Origin = s.Origin,
+                                Destination = s.Destination,
+                                PreferredDepartureTime = s.PreferredDepartureTime,
+                                FlightCabinClass = s.FlightCabinClass
+                            }).ToList();
+
+                            clonedSegments[segIdx].Origin = airportCode;
+                            if (r.Segments.Count == 2 && segIdx == 0 && r.Segments[1].Destination.Equals(seg.Origin, StringComparison.OrdinalIgnoreCase))
+                            {
+                                clonedSegments[1].Destination = airportCode;
+                            }
+
+                            nextRequests.Add(new AirSearchRequestDto
+                            {
+                                EndUserIp = r.EndUserIp,
+                                AdultCount = r.AdultCount,
+                                ChildCount = r.ChildCount,
+                                InfantCount = r.InfantCount,
+                                JourneyType = r.JourneyType,
+                                CurrencyCode = r.CurrencyCode,
+                                FareType = r.FareType,
+                                DirectFlight = r.DirectFlight,
+                                Segments = clonedSegments
+                            });
+                        }
+                    }
+                    requests = nextRequests;
+                }
+            }
+
+            return requests;
+        }
+
+        private static string MergeFlightSearchResponses(string[] responses)
+        {
+            if (responses == null || responses.Length == 0) return "{}";
+            if (responses.Length == 1) return responses[0];
+
+            JsonNode? primaryRoot = null;
+            var seenResultIndexes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var raw in responses)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                try
+                {
+                    var node = JsonNode.Parse(raw);
+                    if (node == null) continue;
+
+                    var errorCode = node["Error"]?["ErrorCode"]?.ToString();
+                    if (errorCode == "0")
+                    {
+                        if (primaryRoot == null)
+                        {
+                            primaryRoot = node;
+                            var resultsArr = primaryRoot["Results"]?.AsArray();
+                            if (resultsArr != null && resultsArr.Count > 0 && resultsArr[0] is JsonArray firstLegFlights)
+                            {
+                                foreach (var f in firstLegFlights)
+                                {
+                                    var rIndex = f?["ResultIndex"]?.ToString();
+                                    if (!string.IsNullOrEmpty(rIndex)) seenResultIndexes.Add(rIndex);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            var primaryResults = primaryRoot["Results"]?.AsArray();
+                            var otherResults = node["Results"]?.AsArray();
+                            if (primaryResults != null && otherResults != null)
+                            {
+                                for (int legIdx = 0; legIdx < Math.Min(primaryResults.Count, otherResults.Count); legIdx++)
+                                {
+                                    if (primaryResults[legIdx] is JsonArray primaryLeg && otherResults[legIdx] is JsonArray otherLeg)
+                                    {
+                                        foreach (var flight in otherLeg)
+                                        {
+                                            if (flight == null) continue;
+                                            var rIndex = flight["ResultIndex"]?.ToString();
+                                            if (string.IsNullOrEmpty(rIndex) || seenResultIndexes.Add(rIndex))
+                                            {
+                                                primaryLeg.Add(JsonNode.Parse(flight.ToJsonString())!);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore partial parse failures
+                }
+            }
+
+            return primaryRoot?.ToJsonString() ?? responses.FirstOrDefault(r => !string.IsNullOrWhiteSpace(r)) ?? responses[0];
         }
 
         [HttpPost("RecheckSearch")]
