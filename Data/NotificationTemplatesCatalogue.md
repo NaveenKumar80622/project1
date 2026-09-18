@@ -17,7 +17,7 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 ```html
 <h3>Welcome to PickNBook!</h3>
 <p>Your one-time registration code is: <strong>{OtpCode}</strong></p>
-<p>This code expires in 5 minutes.</p>
+<p>This code expires in 2 minutes.</p>
 ```
 
 **SMS Template**

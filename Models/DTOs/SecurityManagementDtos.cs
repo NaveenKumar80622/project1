@@ -31,7 +31,7 @@ namespace PickNBook.Api.Models.DTOs
 
     public class OtpVerificationSettingsDto
     {
-        public int OtpExpirationMinutes { get; set; } = 5;
+        public int OtpExpirationMinutes { get; set; } = 2;
         public int MaxOtpRequestsPerDay { get; set; } = 10;
         public int MaxFailedOtpAttempts { get; set; } = 3;
         public int ResendOtpCooldownSeconds { get; set; } = 60;

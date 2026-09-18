@@ -28,8 +28,8 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             string challengeId = Guid.NewGuid().ToString("N");
             string hash = HashOtp(otpCode);
 
-            // OTP expiry: 6 minutes for Login matching newly approved DLT template sample content; 5 mins default for others
-            int expiryMinutes = purpose == "Login" ? 6 : 5;
+            // User OTP expiry: 2 minutes for user auth flows (Login, Registration, PasswordReset); 5 mins for AdminLogin
+            int expiryMinutes = purpose == "AdminLogin" ? 5 : 2;
 
             var otpRecord = new PickNBook.Api.Models.OTP
             {
@@ -61,7 +61,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                     OtpCode = otpCode,
                     ExpiryMinutes = expiryMinutes,
                     Var1 = otpCode, // DLT ${var1}: OTP code
-                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (5 minutes)
+                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (2 minutes)
                 };
             }
             else if (purpose == "Login" && channel == "SMS")
@@ -71,7 +71,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                     OtpCode = otpCode, // kept for backward compat / email channel
                     ExpiryMinutes = expiryMinutes,
                     Var1 = otpCode, // DLT ${var1}: OTP code
-                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (6 minutes)
+                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (2 minutes)
                 };
             }
             else if (purpose == "PasswordReset" || purpose == "B2BPasswordReset")
@@ -89,7 +89,9 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 payload = new 
                 { 
                     OtpCode = otpCode,
-                    ExpiryMinutes = expiryMinutes
+                    ExpiryMinutes = expiryMinutes,
+                    Var1 = otpCode,
+                    Var2 = expiryMinutes
                 };
             }
 

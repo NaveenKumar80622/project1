@@ -875,6 +875,46 @@ namespace PickNBook.Api.Controllers
                         errCode = ec;
                     }
 
+                    if (errCode == 7023)
+                    {
+                        logger.LogWarning(
+                            "SRDV Block returned ErrorCode 7023 (Already Blocked) for TraceId {TraceId}, ResultIndex {ResultIndex}. Seats are held by a prior session.",
+                            request.TraceId, request.ResultIndex);
+
+                        // Invalidate cached seat layout for this bus so subsequent fetches reflect current availability
+                        _cache.Remove($"bus_seats_{request.TraceId}_{request.ResultIndex}");
+                        _cache.Remove($"bus_seats_{request.TraceId}_{compositeResultIndex}");
+
+                        // Clean up any unconfirmed records in BusBlockedSeatPrices for this TraceId
+                        try
+                        {
+                            var scopedDb = HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                            var partialBlocked = await scopedDb.BusBlockedSeatPrices
+                                .Where(x => x.TraceId == request.TraceId)
+                                .ToListAsync();
+                            if (partialBlocked.Any())
+                            {
+                                scopedDb.BusBlockedSeatPrices.RemoveRange(partialBlocked);
+                                await scopedDb.SaveChangesAsync();
+                            }
+                        }
+                        catch (Exception dbEx)
+                        {
+                            logger.LogWarning(dbEx, "Failed to clean up partial BusBlockedSeatPrices for TraceId {TraceId}", request.TraceId);
+                        }
+
+                        return Ok(new
+                        {
+                            Error = new
+                            {
+                                ErrorCode = 7023,
+                                ErrorMessage = "The selected seat(s) are currently on hold from a previous booking attempt. Bus operators hold seats for 10–15 minutes. Please choose different seats or try again shortly."
+                            },
+                            IsTemporaryHold = true,
+                            HoldDurationMinutes = 15
+                        });
+                    }
+
                     var resultObj = jsonObj["Result"] as System.Text.Json.Nodes.JsonObject;
                     var blockKeyStr = jsonObj["BlockKey"]?.ToString() ?? resultObj?["BlockKey"]?.ToString();
 
