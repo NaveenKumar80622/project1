@@ -6,7 +6,10 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 
 ### 1.1 Registration OTP
 **TemplateKey**: `REGISTRATION_OTP`
-**Variables**: `{OtpCode}`
+**Variables**: `{OtpCode}`, `{ExpiryMinutes}` (or `${var1}`, `${var2}`)
+**Header / SenderId**: `PICNBK`
+**DLT Content ID**: `1777178972156267667`
+**Provider Template**: `NEWREGISTRATION_OTP` (ID: `1562926`)
 
 **Email Template**
 *Subject*: Welcome to PickNBook! Verify your email
@@ -17,14 +20,18 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 <p>This code expires in 5 minutes.</p>
 ```
 
-**SMS/WhatsApp Template**
-*Body*: `Welcome to PickNBook! Your registration OTP is {OtpCode}. It is valid for 5 mins.`
+**SMS Template**
+*Body*: `Your Pick&Book Registration OTP is {OtpCode}. It is valid for {ExpiryMinutes} minutes. Do not share this OTP with anyone.`
+*(Provider format: `Your Pick&Book Registration OTP is ${var1}. It is valid for ${var2} minutes. Do not share this OTP with anyone.`)*
 
 ---
 
 ### 1.2 Login OTP
 **TemplateKey**: `LOGIN_OTP`
-**Variables**: `{OtpCode}`
+**Variables**: `{OtpCode}`, `{ExpiryMinutes}` (or `${var1}`, `${var2}`)
+**Header / SenderId**: `PICNBK`
+**DLT Content ID**: `1777178972075919532`
+**Provider Template**: `NewLOGIN_OTP` (ID: `1562918`)
 
 **Email Template**
 *Subject*: PickNBook Login Verification
@@ -35,14 +42,18 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 <p>If you did not request this, please secure your account.</p>
 ```
 
-**SMS/WhatsApp Template**
-*Body*: `Dear User, your OTP for login to ${var1}  is ${var2} . This OTP is valid for 10 minutes. Do not share it with anyone - PITSOP`
+**SMS Template**
+*Body*: `Your Pick&Book login OTP is {OtpCode}. It is valid for {ExpiryMinutes} minutes. Do not share this OTP with anyone.`
+*(Provider format: `Your Pick&Book login OTP is ${var1}. It is valid for ${var2} minutes. Do not share this OTP with anyone.`)*
 
 ---
 
 ### 1.3 Password Reset OTP (User & B2B)
 **TemplateKey**: `PASSWORD_RESET_OTP`
-**Variables**: `{OtpCode}`
+**Variables**: `{OtpCode}`, `{ExpiryMinutes}` (or `${var1}`, `${var2}`)
+**Header / SenderId**: `PICNBK`
+**DLT Content ID**: `1777178972177543618`
+**Provider Template**: `NewPassword Reset` (ID: `1562930`)
 
 **Email Template**
 *Subject*: PickNBook Password Reset Request
@@ -53,8 +64,9 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 <p>If you did not request this, ignore this email.</p>
 ```
 
-**SMS/WhatsApp Template**
-*Body*: `PickNBook password reset OTP is {OtpCode}. Valid for 5 mins.`
+**SMS Template**
+*Body*: `Your Pick&Book password reset OTP is {OtpCode}. It is valid for {ExpiryMinutes} minutes. Do not share this OTP.`
+*(Provider format: `Your Pick&Book password reset OTP is ${var1}. It is valid for ${var2} minutes. Do not share this OTP.`)*
 
 ---
 

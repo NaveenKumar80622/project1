@@ -28,8 +28,8 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             string challengeId = Guid.NewGuid().ToString("N");
             string hash = HashOtp(otpCode);
 
-            // OTP expiry: 5 minutes matching approved DLT template sample content
-            int expiryMinutes = 5;
+            // OTP expiry: 6 minutes for Login matching newly approved DLT template sample content; 5 mins default for others
+            int expiryMinutes = purpose == "Login" ? 6 : 5;
 
             var otpRecord = new PickNBook.Api.Models.OTP
             {
@@ -59,7 +59,9 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 payload = new
                 {
                     OtpCode = otpCode,
-                    ExpiryMinutes = expiryMinutes
+                    ExpiryMinutes = expiryMinutes,
+                    Var1 = otpCode, // DLT ${var1}: OTP code
+                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (5 minutes)
                 };
             }
             else if (purpose == "Login" && channel == "SMS")
@@ -68,8 +70,8 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 {
                     OtpCode = otpCode, // kept for backward compat / email channel
                     ExpiryMinutes = expiryMinutes,
-                    Var1 = _routingSettings.LoginOtpAppName ?? "PickNBook", // DLT ${var1}
-                    Var2 = otpCode // DLT ${var2}
+                    Var1 = otpCode, // DLT ${var1}: OTP code
+                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (6 minutes)
                 };
             }
             else if (purpose == "PasswordReset" || purpose == "B2BPasswordReset")
