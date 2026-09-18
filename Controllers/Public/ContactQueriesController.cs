@@ -111,27 +111,63 @@ namespace PickNBook.Api.Controllers
             if ((query.Status == "Resolved" || query.Status == "Replied") && !string.IsNullOrWhiteSpace(query.ReplyMessage))
             {
                 var subject = $"[{query.Status}] Support Ticket #{query.Id} - {query.Subject}";
-                var body = $@"Hello {query.Name},
+                var encodedName = System.Net.WebUtility.HtmlEncode(query.Name);
+                var encodedSubject = System.Net.WebUtility.HtmlEncode(query.Subject);
+                var encodedMessage = System.Net.WebUtility.HtmlEncode(query.Message);
+                var encodedReply = System.Net.WebUtility.HtmlEncode(query.ReplyMessage);
+                
+                var body = $@"<div style=""font-family: Arial, sans-serif; line-height: 1.5; color: #333;"">
+    <h1 style=""color: #0056b3;"">PickNBook</h1>
+    <p style=""font-weight: bold; color: #555;"">SUPPORT &amp; RESOLUTIONS</p>
 
-The support team has reviewed and updated your query.
+    <p>Hello {encodedName},</p>
 
----
-Query Details:
-- Ticket ID: #{query.Id}
-- Subject: {query.Subject}
-Your Original Message:
-""{query.Message}""
+    <p>Thank you for contacting PickNBook.</p>
 
-Resolution Status: {query.Status}
+    <p>Your support ticket has been reviewed and the latest update is available below.</p>
 
-Our Update / Reply:
-""{query.ReplyMessage}""
----
+    <h3 style=""border-bottom: 1px solid #ccc; padding-bottom: 5px;"">TICKET DETAILS</h3>
 
-If you have any further questions or if the problem persists, please reply to this email.
+    <table style=""width: 100%; max-width: 400px; margin-bottom: 20px;"">
+        <tr>
+            <td style=""font-weight: bold; width: 100px;"">Ticket ID</td>
+            <td>#{query.Id}</td>
+        </tr>
+        <tr>
+            <td style=""font-weight: bold;"">Subject</td>
+            <td>{encodedSubject}</td>
+        </tr>
+        <tr>
+            <td style=""font-weight: bold;"">Status</td>
+            <td style=""color: #28a745; font-weight: bold;"">{query.Status}</td>
+        </tr>
+    </table>
 
-Best regards,
-Support & Resolutions Team";
+    <h3 style=""border-bottom: 1px solid #ccc; padding-bottom: 5px;"">YOUR REQUEST</h3>
+    <div style=""background-color: #f9f9f9; padding: 10px; border-left: 4px solid #ccc;"">
+        {encodedMessage}
+    </div>
+
+    <h3 style=""border-bottom: 1px solid #ccc; padding-bottom: 5px;"">SUPPORT TEAM RESPONSE</h3>
+    <div style=""background-color: #f1f8ff; padding: 10px; border-left: 4px solid #0056b3;"">
+        {encodedReply}
+    </div>
+
+    <h3 style=""border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 20px;"">Need more assistance?</h3>
+    <p>Simply reply to this email and our support team will assist you further.</p>
+
+    <p style=""margin-top: 30px;"">
+        Regards,<br>
+        <strong>PickNBook Support Team</strong><br>
+        Support &amp; Resolutions
+    </p>
+
+    <hr style=""border: 0; border-top: 1px solid #eee; margin: 20px 0;"">
+
+    <p style=""font-size: 12px; color: #999; text-align: center;"">
+        This is an automated support notification from PickNBook.
+    </p>
+</div>";
 
                 await _emailService.SendEmailAsync(query.Email, subject, body);
             }

@@ -10,6 +10,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 
+using PickNBook.Api.Helpers;
+
 namespace PickNBook.Api.Controllers;
 
 [Route("api/admin/hotel")]
@@ -47,10 +49,6 @@ public class AdminHotelController : AdminApiController
                 query = query.Where(b => b.GuestPhone.Contains(passengerPhone.Trim()));
             }
 
-            if (!string.IsNullOrWhiteSpace(status))
-            {
-                query = query.Where(b => b.Status == status.Trim());
-            }
 
             var queryResult = await query
                 .OrderByDescending(b => b.CreatedAt)
@@ -123,14 +121,22 @@ public class AdminHotelController : AdminApiController
                     TotalPrice = b.TotalPrice,
                     TotalPaid = b.TotalPrice,
                     Currency = b.Currency ?? "INR",
-                    Status = b.Status ?? "Confirmed",
+                    Status = BookingStatusResolver.ResolveStatus(
+                        b.Status,
+                        payment?.Status,
+                        payment?.FulfillmentStatus,
+                        b.CheckOutDate),
                     PaymentStatus = payment?.Status,
                     RefundStatus = payment?.RefundStatus,
                     FulfillmentStatus = payment?.FulfillmentStatus,
                     CreatedAt = DateTime.SpecifyKind(b.CreatedAt, DateTimeKind.Utc),
                     BookedAt = b.CreatedAt != DateTime.MinValue ? b.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ss") : ""
                 };
-            }).ToList();
+            })
+            .Where(b => !string.IsNullOrWhiteSpace(status)
+                ? b.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
+                : (b.Status == "Booked" || b.Status == "Cancelled"))
+            .ToList();
 
             return Ok(list);
         }
@@ -148,42 +154,88 @@ public class AdminHotelController : AdminApiController
         _logger.LogInformation("Retrieving hotel cancellation reports for admin.");
 
         var cancellationsDb = await _context.HotelReservations
+            .AsNoTracking()
             .Where(b => b.Status == "Cancelled")
             .OrderByDescending(b => b.CancelledAt)
-            .Select(b => new
-            {
-                b.Id,
-                b.BookingReference,
-                b.HotelName,
-                b.GuestName,
-                b.GuestPhone,
-                b.CreatedAt,
-                b.CancelledAt,
-                b.CancellationReason,
-                b.TotalPrice,
-                b.RefundAmount,
-                b.CancellationCharges
-            })
             .ToListAsync();
 
-        var cancellations = cancellationsDb.Select(b => new
+        var cancellations = cancellationsDb.Select(b =>
+        {
+            var cancellationCharge = b.CancellationCharges;
+            var refundAmount = b.RefundAmount > 0 ? b.RefundAmount : Math.Max(0m, b.TotalPrice - cancellationCharge);
+            var roomType = !string.IsNullOrWhiteSpace(b.RoomTypeName) ? b.RoomTypeName : "Standard Room";
+
+            return new AdminHotelCancellationRequestDto
             {
-                BookingId = "HB-" + b.Id.ToString("D4"),
+                Id = b.Id,
+                BookingId = b.Id,
                 BookingReference = b.BookingReference,
+                RequestDateUtc = b.CancelledAt.HasValue ? DateTime.SpecifyKind(b.CancelledAt.Value, DateTimeKind.Utc) : (DateTime?)null,
                 HotelName = b.HotelName,
-                PassengerName = b.GuestName,
-                PassengerPhone = b.GuestPhone,
-                BookedAtUtc = DateTime.SpecifyKind(b.CreatedAt, DateTimeKind.Utc),
-                CancelledAtUtc = b.CancelledAt.HasValue ? DateTime.SpecifyKind(b.CancelledAt.Value, DateTimeKind.Utc) : (DateTime?)null,
-                CancellationReason = b.CancellationReason,
-                TotalPriceInr = b.TotalPrice,
-                RefundAmountInr = b.RefundAmount,
-                CancellationChargesInr = b.CancellationCharges,
-                Status = "cancelled"
-            })
-            .ToList();
+                RoomType = roomType,
+                CheckInDate = DateOnly.FromDateTime(b.CheckInDate),
+                CheckOutDate = DateOnly.FromDateTime(b.CheckOutDate),
+                Customer = b.GuestName,
+                CustomerPhone = b.GuestPhone,
+                CustomerEmail = b.GuestEmail,
+                Status = b.Status,
+                CustomerRefundAmountInr = refundAmount,
+                AdminRefundAmountInr = refundAmount,
+                Remark = b.CancellationReason,
+                Details = new AdminHotelCancellationDetailsDto
+                {
+                    CancellationStatus = b.Status,
+                    CustomerRefundStatus = refundAmount > 0 ? "Refunded" : "Completed",
+                    AdminRefundStatus = refundAmount > 0 ? "Refunded" : "Completed",
+                    CustomerRefundAmountInr = refundAmount,
+                    CustomerCancellationChargeInr = cancellationCharge,
+                    CustomerServiceChargeInr = 0m,
+                    AdminRefundAmountInr = refundAmount,
+                    AdminCancellationChargeInr = cancellationCharge,
+                    AdminServiceChargeInr = 0m,
+                    SupplierRemark = null,
+                    CustomerRemark = b.CancellationReason,
+                    AdminRemark = null
+                }
+            };
+        }).ToList();
 
         return Ok(cancellations);
+    }
+
+    [HttpPut("cancellations/{id:int}")]
+    public async Task<IActionResult> UpdateCancellation(int id, [FromBody] HotelCancellationRequestUpdateDto request)
+    {
+        if (request is null)
+        {
+            return BadRequest("Request body is required.");
+        }
+
+        if (request.CustomerRefundAmountInr < 0 ||
+            request.CustomerCancellationChargeInr < 0 ||
+            request.CustomerServiceChargeInr < 0 ||
+            request.AdminRefundAmountInr < 0 ||
+            request.AdminCancellationChargeInr < 0 ||
+            request.AdminServiceChargeInr < 0)
+        {
+            return BadRequest("Refund amounts and fee charges cannot be negative.");
+        }
+
+        var row = await _context.HotelReservations.FirstOrDefaultAsync(x => x.Id == id);
+        if (row is null)
+        {
+            return NotFound("Hotel cancellation record not found.");
+        }
+
+        row.CancellationCharges = request.CustomerCancellationChargeInr;
+        row.RefundAmount = request.CustomerRefundAmountInr;
+        if (!string.IsNullOrWhiteSpace(request.AdminRemark))
+        {
+            row.CancellationReason = request.AdminRemark;
+        }
+
+        await _context.SaveChangesAsync();
+        return Ok(row);
     }
 
     // 3. Cancel Booking (Admin Override): POST /api/admin/hotel/bookings/{bookingId}/cancel

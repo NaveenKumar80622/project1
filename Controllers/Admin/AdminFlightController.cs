@@ -8,6 +8,7 @@ using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Services;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using PickNBook.Api.Helpers;
 
 namespace PickNBook.Api.Controllers
 {
@@ -38,14 +39,8 @@ namespace PickNBook.Api.Controllers
 
             var queryable = dbContext.FlightReservations
                 .AsNoTracking()
-                
+                .Include(x => x.Segments)
                 .AsQueryable();
-
-            if (!string.IsNullOrWhiteSpace(status))
-            {
-                var normalized = status.Trim();
-                queryable = queryable.Where(x => EF.Functions.Like(x.Status, normalized));
-            }
 
             if (!string.IsNullOrWhiteSpace(pnr))
             {
@@ -79,42 +74,136 @@ namespace PickNBook.Api.Controllers
                     g => g.Key,
                     g => g.OrderByDescending(p => p.CreatedAt).FirstOrDefault());
 
-            var response = bookings
-                .Where(x => true)
-                .Select(x =>
-                {
-                    var flight = x;
-                    var departIst = ToIst(flight.DepartureTime);
-                    var journeyDateIst = DateOnly.FromDateTime(departIst);
-                    var customerFare = x.CustomerFareInr > 0 ? x.CustomerFareInr : x.TotalPriceInr;
-                    var netFare = x.NetFareInr > 0 ? x.NetFareInr : x.TotalPriceInr;
-                    var profit = customerFare - netFare;
-                    
-                    paymentsByBooking.TryGetValue(x.Id, out var payment);
+            var passengers = await dbContext.FlightReservationPassengers
+                .AsNoTracking()
+                .Where(p => bookingIds.Contains(p.FlightReservationId))
+                .ToListAsync();
 
-                    return new
-                    {
-                        x.Id,
-                        BookingDateUtc = DateTime.SpecifyKind(x.BookedAtUtc, DateTimeKind.Utc),
-                        BookingDateIst = ToIst(x.BookedAtUtc),
-                        JourneyDateIst = journeyDateIst,
-                        Segment = $"{flight.FromCity} - {flight.ToCity}",
+            var passengersByBooking = passengers
+                .GroupBy(p => p.FlightReservationId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+
+
+            var response = bookings.Select(x =>
+            {
+                var flightSegments = x.Segments?
+                    .OrderBy(s => s.TripIndicator)
+                    .ThenBy(s => s.SegmentIndicator)
+                    .ToList() ?? new List<FlightReservationSegment>();
+
+                string tripType = "OneWay";
+                if (flightSegments.Count > 1)
+                {
+                    bool isRoundTrip = flightSegments.Count == 2 &&
+                        flightSegments[0].FromCity.Equals(flightSegments[1].ToCity, StringComparison.OrdinalIgnoreCase) &&
+                        flightSegments[0].ToCity.Equals(flightSegments[1].FromCity, StringComparison.OrdinalIgnoreCase);
+                    
+                    tripType = isRoundTrip ? "RoundTrip" : "MultiCity";
+                }
+
+                // Preserve exact segment sequence without Distinct()
+                string route = flightSegments.Count > 0
+                    ? string.Join(" - ", flightSegments.Select(s => s.FromCity).Concat(new[] { flightSegments.Last().ToCity }))
+                    : $"{x.FromCity} - {x.ToCity}";
+
+                var segmentDtos = flightSegments.Select(s => new FlightSegmentDto
+                {
+                    SegmentIndicator = s.SegmentIndicator,
+                    TripIndicator = s.TripIndicator,
+                    Airline = string.IsNullOrWhiteSpace(s.Airline) ? x.Airline : s.Airline,
+                    FlightNumber = string.IsNullOrWhiteSpace(s.FlightNumber) ? x.FlightNumber : s.FlightNumber,
+                    Origin = s.FromCity,
+                    Destination = s.ToCity,
+                    DepartureTimeIst = ToIst(s.DepartureTime),
+                    ArrivalTimeIst = ToIst(s.ArrivalTime),
+                    DurationMinutes = s.Duration,
+                    Pnr = string.IsNullOrWhiteSpace(s.Pnr) ? x.Pnr : s.Pnr,
+                    Baggage = s.Baggage,
+                    CabinBaggage = s.CabinBaggage
+                }).ToList();
+
+                passengersByBooking.TryGetValue(x.Id, out var paxList);
+                var passengerDtos = (paxList ?? new List<FlightReservationPassenger>()).Select(p => new AdminFlightPassengerDto
+                {
+                    Id = p.Id,
+                    FullName = p.FullName,
+                    PassengerType = p.PassengerType,
+                    Gender = p.Gender,
+                    SeatNumber = p.SeatNumber,
+                    TicketNumber = p.TicketNumber,
+                    Status = p.Status
+                }).ToList();
+
+
+                var customerFare = x.CustomerFareInr > 0 ? x.CustomerFareInr : x.TotalPriceInr;
+                var netFare = x.NetFareInr > 0 ? x.NetFareInr : x.TotalPriceInr;
+                var profit = customerFare - netFare;
+
+                paymentsByBooking.TryGetValue(x.Id, out var payment);
+
+                return new AdminFlightBookingResponseDto
+                {
+                    Id = x.Id,
+                    BookingReference = x.BookingReference,
+                    Pnr = x.Pnr,
+                    TripType = tripType,
+                    Status = BookingStatusResolver.ResolveStatus(
                         x.Status,
-                        Pnr = x.Pnr,
-                        BookingReference = x.BookingReference,
-                        Passenger = x.PassengerName,
-                        PassengerPhone = x.PassengerPhone,
-                        CustomerFareInr = customerFare,
-                        NetFareInr = netFare,
-                        ProfitInr = profit,
-                        PaymentStatus = payment?.Status,
-                        RefundStatus = payment?.RefundStatus,
-                        FulfillmentStatus = payment?.FulfillmentStatus,
-                        BookedBy = x.UserId,
-                        TravelClass = x.TravelClass
-                    };
-                })
-                .ToList();
+                        payment?.Status,
+                        payment?.FulfillmentStatus,
+                        x.DepartureTime),
+
+                    BookingDateUtc = DateTime.SpecifyKind(x.BookedAtUtc, DateTimeKind.Utc),
+                    BookingDateIst = ToIst(x.BookedAtUtc),
+                    JourneyDateIst = DateOnly.FromDateTime(ToIst(x.DepartureTime)),
+
+                    // Backward-compatible frontend fields
+                    FromCity = x.FromCity,
+                    ToCity = x.ToCity,
+                    Segment = $"{x.FromCity} - {x.ToCity}",
+                    Passenger = x.PassengerName,
+                    PassengerName = x.PassengerName,
+                    PassengerPhone = x.PassengerPhone,
+                    PassengerEmail = x.PassengerEmail,
+                    BookedBy = x.UserId,
+
+                    // Summary & Route
+                    Route = route,
+                    Airline = x.Airline,
+                    FlightNumber = x.FlightNumber,
+                    TravelClass = x.TravelClass,
+
+                    // Collections
+                    Segments = segmentDtos,
+                    Passengers = passengerDtos,
+
+                    // Financial breakdown
+                    BaseFareInr = x.SupplierBaseFare,
+                    TaxInr = x.SupplierTaxAmount,
+                    MarkupAmountInr = x.MarkupAmount > 0 ? x.MarkupAmount : x.B2CMarkupAmountInr,
+                    DiscountAmountInr = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : x.B2CDiscountAmountInr,
+                    ConvenienceFeeInr = 0,
+                    SsrAmountInr = x.SsrAmountInr,
+                    CustomerFareInr = customerFare,
+                    NetFareInr = netFare,
+                    ProfitInr = profit,
+
+                    // Source from Payments table
+                    PaymentStatus = payment?.Status,
+                    RefundStatus = payment?.RefundStatus,
+                    FulfillmentStatus = payment?.FulfillmentStatus,
+
+                    // Cancellation details
+                    CancelledAtUtc = x.CancelledAtUtc,
+                    CancellationReason = x.CancellationReason,
+                    CancellationChargeInr = x.CancellationChargeInr,
+                    RefundAmountInr = x.RefundAmountInr
+                };
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(status)
+                ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
+                : (x.Status == "Booked" || x.Status == "Cancelled"))
+            .ToList();
 
             return Ok(response);
         }
@@ -597,35 +686,39 @@ namespace PickNBook.Api.Controllers
                 .ToListAsync();
 
             var response = rows
-                .Where(x => true)
+                .Where(x => x.FlightReservation != null)
                 .Select(x =>
                 {
                     var booking = x.FlightReservation!;
-                    var flight = booking;
-                    return new
+                    return new AdminFlightCancellationRequestDto
                     {
-                        x.Id,
+                        Id = x.Id,
+                        BookingId = booking.Id,
+                        BookingReference = booking.BookingReference,
+                        Pnr = booking.Pnr,
                         RequestDateUtc = DateTime.SpecifyKind(x.RequestDateUtc, DateTimeKind.Utc),
-                        Segment = $"{flight.FromCity} - {flight.ToCity}",
+                        Segment = $"{booking.FromCity} - {booking.ToCity}",
                         Customer = booking.PassengerName,
+                        CustomerPhone = booking.PassengerPhone,
+                        CustomerEmail = booking.PassengerEmail,
                         Status = x.CancellationStatus,
                         CustomerRefundAmountInr = x.CustomerRefundAmountInr,
                         AdminRefundAmountInr = x.AdminRefundAmountInr,
                         Remark = x.AdminRemark,
-                        Details = new
+                        Details = new AdminFlightCancellationDetailsDto
                         {
-                            x.CancellationStatus,
-                            x.CustomerRefundStatus,
-                            x.AdminRefundStatus,
-                            x.CustomerRefundAmountInr,
-                            x.CustomerCancellationChargeInr,
-                            x.CustomerServiceChargeInr,
-                            x.AdminRefundAmountInr,
-                            x.AdminCancellationChargeInr,
-                            x.AdminServiceChargeInr,
-                            x.SupplierRemark,
-                            x.CustomerRemark,
-                            x.AdminRemark
+                            CancellationStatus = x.CancellationStatus,
+                            CustomerRefundStatus = x.CustomerRefundStatus,
+                            AdminRefundStatus = x.AdminRefundStatus,
+                            CustomerRefundAmountInr = x.CustomerRefundAmountInr,
+                            CustomerCancellationChargeInr = x.CustomerCancellationChargeInr,
+                            CustomerServiceChargeInr = x.CustomerServiceChargeInr,
+                            AdminRefundAmountInr = x.AdminRefundAmountInr,
+                            AdminCancellationChargeInr = x.AdminCancellationChargeInr,
+                            AdminServiceChargeInr = x.AdminServiceChargeInr,
+                            SupplierRemark = x.SupplierRemark,
+                            CustomerRemark = x.CustomerRemark,
+                            AdminRemark = x.AdminRemark
                         }
                     };
                 })
@@ -696,6 +789,16 @@ namespace PickNBook.Api.Controllers
             if (row is null)
             {
                 return NotFound("Cancellation not found.");
+            }
+
+            if (request.CustomerRefundAmountInr < 0 ||
+                request.CustomerCancellationChargeInr < 0 ||
+                request.CustomerServiceChargeInr < 0 ||
+                request.AdminRefundAmountInr < 0 ||
+                request.AdminCancellationChargeInr < 0 ||
+                request.AdminServiceChargeInr < 0)
+            {
+                return BadRequest("Refund amounts and fee charges cannot be negative.");
             }
 
             row.CancellationStatus = NormalizeStatus(request.CancellationStatus);

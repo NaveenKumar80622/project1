@@ -23,6 +23,7 @@ public class BusCouponRequestDto
     public string Status { get; set; } = "Active";
     public string? Remark { get; set; }
     public decimal MinBookingAmount { get; set; }
+    public string? ImageUrl { get; set; }
 }
 
 public class CreateBusCouponConditionDto
@@ -67,3 +68,56 @@ public class BusGstRequestDto
     public string UpdatedBy { get; set; } = string.Empty;
     public string? Remark { get; set; }
 }
+
+public class AdminBusCancellationRequestDto
+{
+    public int Id { get; set; }
+    public int BookingId { get; set; }
+    public string TicketNo { get; set; } = string.Empty;
+    public string Pnr { get; set; } = string.Empty;
+    public DateTime? RequestDateUtc { get; set; }
+    public string Segment { get; set; } = string.Empty;
+    public DateOnly? JourneyDate { get; set; }
+    public string? BusOperator { get; set; }
+    public string? BusType { get; set; }
+    public string Customer { get; set; } = string.Empty;
+    public string? CustomerPhone { get; set; }
+    public string? CustomerEmail { get; set; }
+    public string Status { get; set; } = "Pending";
+    public decimal CustomerRefundAmountInr { get; set; }
+    public decimal AdminRefundAmountInr { get; set; }
+    public string? Remark { get; set; }
+    public AdminBusCancellationDetailsDto Details { get; set; } = new();
+}
+
+public class AdminBusCancellationDetailsDto
+{
+    public string CancellationStatus { get; set; } = "Pending";
+    public string CustomerRefundStatus { get; set; } = "Pending";
+    public string AdminRefundStatus { get; set; } = "Pending";
+    public decimal CustomerRefundAmountInr { get; set; }
+    public decimal CustomerCancellationChargeInr { get; set; }
+    public decimal CustomerServiceChargeInr { get; set; }
+    public decimal AdminRefundAmountInr { get; set; }
+    public decimal AdminCancellationChargeInr { get; set; }
+    public decimal AdminServiceChargeInr { get; set; }
+    public string? SupplierRemark { get; set; }
+    public string? CustomerRemark { get; set; }
+    public string? AdminRemark { get; set; }
+}
+
+public class BusCancellationRequestUpdateDto
+{
+    public string CancellationStatus { get; set; } = "Pending";
+    public string CustomerRefundStatus { get; set; } = "Pending";
+    public string AdminRefundStatus { get; set; } = "Pending";
+    public decimal CustomerRefundAmountInr { get; set; }
+    public decimal CustomerCancellationChargeInr { get; set; }
+    public decimal CustomerServiceChargeInr { get; set; }
+    public decimal AdminRefundAmountInr { get; set; }
+    public decimal AdminCancellationChargeInr { get; set; }
+    public decimal AdminServiceChargeInr { get; set; }
+    public string? SupplierRemark { get; set; }
+    public string? CustomerRemark { get; set; }
+    public string? AdminRemark { get; set; }
+}

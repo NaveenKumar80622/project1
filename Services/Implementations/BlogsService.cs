@@ -18,18 +18,22 @@ public class BlogsService : IBlogsService
 {
     private readonly AppDbContext _context;
     private readonly IFileStorageService _fileStorageService;
+    private readonly Microsoft.AspNetCore.Http.IHttpContextAccessor _httpContextAccessor;
 
     // Constraints matching original controller rules
     private const long MaxImageBytes = 1 * 1024 * 1024; // 1MB
     private static readonly HashSet<string> AllowedImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".jpg", ".jpeg", ".png", ".webp"
+        ".jpg", ".jpeg", ".png", ".webp",
+        ".gif", ".svg", ".bmp", ".tif", ".tiff",
+        ".ico", ".avif"
     };
 
-    public BlogsService(AppDbContext context, IFileStorageService fileStorageService)
+    public BlogsService(AppDbContext context, IFileStorageService fileStorageService, Microsoft.AspNetCore.Http.IHttpContextAccessor httpContextAccessor)
     {
         _context = context;
         _fileStorageService = fileStorageService;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     /// <summary>
@@ -58,7 +62,7 @@ public class BlogsService : IBlogsService
         var total = await query.CountAsync();
 
         // Project all fields to match frontend paginated blog list contract
-        var blogs = await query
+        var rawBlogs = await query
             .OrderByDescending(x => x.PublishedAtUtc ?? x.CreatedAtUtc)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -85,6 +89,28 @@ public class BlogsService : IBlogsService
             })
             .ToListAsync();
 
+        var blogs = rawBlogs.Select(x => new
+        {
+            x.Id,
+            x.Title,
+            x.Slug,
+            x.Category,
+            x.SubCategory,
+            x.SubTitle,
+            x.ShortDescription,
+            x.LongDescription,
+            ImageUrl = GetAbsoluteUrl(x.ImageUrl),
+            OgImageUrl = GetAbsoluteUrl(x.OgImageUrl),
+            x.IsFeatured,
+            x.IsPublished,
+            x.publishedAtUtc,
+            x.CreatedAtUtc,
+            x.AddedByName,
+            x.MetaTitle,
+            x.MetaKeyword,
+            x.MetaDescription
+        });
+
         return (total, blogs);
     }
 
@@ -101,7 +127,7 @@ public class BlogsService : IBlogsService
         var normalizedSlug = slug.Trim().ToLowerInvariant();
 
         // Retrieve and project full fields (including IsPublished and CreatedAtUtc)
-        return await _context.BlogPosts
+        var rawBlog = await _context.BlogPosts
             .AsNoTracking()
             .Where(x => x.IsPublished && x.Slug == normalizedSlug)
             .Select(x => new
@@ -126,6 +152,30 @@ public class BlogsService : IBlogsService
                 x.MetaDescription
             })
             .FirstOrDefaultAsync();
+
+        if (rawBlog == null) return null;
+
+        return new
+        {
+            rawBlog.Id,
+            rawBlog.Title,
+            rawBlog.Slug,
+            rawBlog.Category,
+            rawBlog.SubCategory,
+            rawBlog.SubTitle,
+            rawBlog.ShortDescription,
+            rawBlog.LongDescription,
+            ImageUrl = GetAbsoluteUrl(rawBlog.ImageUrl),
+            OgImageUrl = GetAbsoluteUrl(rawBlog.OgImageUrl),
+            rawBlog.IsFeatured,
+            rawBlog.IsPublished,
+            rawBlog.publishedAtUtc,
+            rawBlog.CreatedAtUtc,
+            rawBlog.AddedByName,
+            rawBlog.MetaTitle,
+            rawBlog.MetaKeyword,
+            rawBlog.MetaDescription
+        };
     }
 
     /// <summary>
@@ -144,7 +194,7 @@ public class BlogsService : IBlogsService
         var total = await query.CountAsync();
 
         // Sort by creation date descending so newer items show up first, projecting all fields for admin dashboard consistency
-        var blogs = await query
+        var rawBlogs = await query
             .OrderByDescending(x => x.CreatedAtUtc)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
@@ -172,6 +222,29 @@ public class BlogsService : IBlogsService
             })
             .ToListAsync();
 
+        var blogs = rawBlogs.Select(x => new
+        {
+            x.Id,
+            x.Title,
+            x.Slug,
+            x.Category,
+            x.SubCategory,
+            x.SubTitle,
+            x.ShortDescription,
+            x.LongDescription,
+            ImageUrl = GetAbsoluteUrl(x.ImageUrl),
+            OgImageUrl = GetAbsoluteUrl(x.OgImageUrl),
+            x.IsFeatured,
+            x.IsPublished,
+            x.publishedAtUtc,
+            x.CreatedAtUtc,
+            x.UpdatedAtUtc,
+            x.AddedByName,
+            x.MetaTitle,
+            x.MetaKeyword,
+            x.MetaDescription
+        });
+
         return (total, blogs);
     }
 
@@ -181,7 +254,7 @@ public class BlogsService : IBlogsService
     public async Task<(bool Success, string? Error, BlogPost? Blog)> CreateBlogAsync(UpsertBlogRequest request, int? userId)
     {
         // 1. Validate request fields
-        var validationError = ValidateBlogRequest(request);
+        var validationError = await ValidateBlogRequestAsync(request);
         if (validationError != null)
         {
             return (false, validationError, null);
@@ -235,7 +308,7 @@ public class BlogsService : IBlogsService
     public async Task<(bool Success, string? Error, BlogPost? Blog)> UpdateBlogAsync(long id, UpsertBlogRequest request)
     {
         // 1. Validate request fields
-        var validationError = ValidateBlogRequest(request);
+        var validationError = await ValidateBlogRequestAsync(request);
         if (validationError != null)
         {
             return (false, validationError, null);
@@ -316,7 +389,7 @@ public class BlogsService : IBlogsService
     /// <summary>
     /// Internal validation rules matching original controller logic constraints.
     /// </summary>
-    private static string? ValidateBlogRequest(UpsertBlogRequest request)
+    private static async Task<string?> ValidateBlogRequestAsync(UpsertBlogRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Title))
             return "Title is required.";
@@ -329,23 +402,51 @@ public class BlogsService : IBlogsService
         if (string.IsNullOrWhiteSpace(request.LongDescription))
             return "LongDescription is required.";
 
-        if (request.Image != null && request.Image.Length > MaxImageBytes)
-            return "Image size must be less than or equal to 1MB.";
-        if (request.OgImage != null && request.OgImage.Length > MaxImageBytes)
-            return "OG image size must be less than or equal to 1MB.";
+        if (request.Image != null)
+        {
+            var err = await ValidateAndSanitizeImageAsync(request.Image);
+            if (err != null) return $"Image error: {err}";
+        }
 
-        if (request.Image != null && !IsSupportedImage(request.Image.FileName))
-            return "Unsupported image format. Use .jpg, .jpeg, .png, or .webp.";
-        if (request.OgImage != null && !IsSupportedImage(request.OgImage.FileName))
-            return "Unsupported OG image format. Use .jpg, .jpeg, .png, or .webp.";
+        if (request.OgImage != null)
+        {
+            var err = await ValidateAndSanitizeImageAsync(request.OgImage);
+            if (err != null) return $"OG Image error: {err}";
+        }
 
         return null;
     }
 
-    private static bool IsSupportedImage(string fileName)
+    private static async Task<string?> ValidateAndSanitizeImageAsync(Microsoft.AspNetCore.Http.IFormFile file)
     {
-        var extension = Path.GetExtension(fileName);
-        return AllowedImageExtensions.Contains(extension);
+        if (file.Length > MaxImageBytes)
+            return "Image size must be less than or equal to 1MB.";
+
+        var extension = Path.GetExtension(file.FileName);
+        if (string.IsNullOrWhiteSpace(extension) || !AllowedImageExtensions.Contains(extension))
+            return "Unsupported image format. Allowed: .jpg, .jpeg, .png, .webp, .gif, .svg, .bmp, .tif, .tiff, .ico, .avif.";
+
+        var contentType = file.ContentType?.ToLowerInvariant() ?? "";
+        if (!contentType.StartsWith("image/"))
+            return "Invalid MIME type. Must be an image.";
+
+        if (string.Equals(extension, ".svg", StringComparison.OrdinalIgnoreCase) || contentType == "image/svg+xml")
+        {
+            // Scan SVG content for malicious keywords
+            using var reader = new StreamReader(file.OpenReadStream());
+            var content = await reader.ReadToEndAsync();
+            var lowerContent = content.ToLowerInvariant();
+
+            if (lowerContent.Contains("<script") || 
+                lowerContent.Contains("javascript:") || 
+                lowerContent.Contains("<foreignobject") ||
+                System.Text.RegularExpressions.Regex.IsMatch(lowerContent, @"\bon[a-z]+\s*="))
+            {
+                return "SVG file rejected due to potentially malicious content.";
+            }
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -418,5 +519,16 @@ public class BlogsService : IBlogsService
 
         var fullName = $"{user.FirstName} {user.LastName}".Trim();
         return string.IsNullOrWhiteSpace(fullName) ? "Admin" : fullName;
+    }
+
+    private string? GetAbsoluteUrl(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath)) return relativePath;
+
+        var request = _httpContextAccessor.HttpContext?.Request;
+        if (request == null) return relativePath;
+
+        var baseUrl = $"{request.Scheme}://{request.Host}{request.PathBase}";
+        return $"{baseUrl}{relativePath}";
     }
 }

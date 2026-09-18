@@ -26,6 +26,7 @@ namespace PickNBook.Api.Models
         public bool IsAutoApply { get; set; } = false;
         public bool IsFirstTimeUserOnly { get; set; } = false;
         public int Priority { get; set; } = 0;
+        public string? ImageUrl { get; set; }
 
         public ICollection<BusCouponCondition> Conditions { get; set; } = new List<BusCouponCondition>();
         public ICollection<BusCouponUsage> Usages { get; set; } = new List<BusCouponUsage>();

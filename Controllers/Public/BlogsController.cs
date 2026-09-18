@@ -3,8 +3,11 @@ using Microsoft.AspNetCore.Mvc;
 using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Services;
+using System;
+using System.IO;
 using System.Security.Claims;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace PickNBook.Api.Controllers;
 
@@ -15,10 +18,12 @@ namespace PickNBook.Api.Controllers;
 public class BlogsController : BaseApiController
 {
     private readonly IBlogsService _blogsService;
+    private readonly ILogger<BlogsController> _logger;
 
-    public BlogsController(IBlogsService blogsService)
+    public BlogsController(IBlogsService blogsService, ILogger<BlogsController> logger)
     {
         _blogsService = blogsService;
+        _logger = logger;
     }
 
     /// <summary>
@@ -118,18 +123,36 @@ public class BlogsController : BaseApiController
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> CreateBlog([FromForm] UpsertBlogRequest request)
     {
-        // 1. Resolve current user identity
-        var userId = TryGetCurrentUserId();
-        
-        // 2. Delegate creation to service layer
-        var (success, error, blog) = await _blogsService.CreateBlogAsync(request, userId);
-
-        if (!success)
+        try
         {
-            return BadRequest(error);
-        }
+            // 1. Resolve current user identity
+            var userId = TryGetCurrentUserId();
+            
+            // 2. Delegate creation to service layer
+            var (success, error, blog) = await _blogsService.CreateBlogAsync(request, userId);
 
-        return Ok(blog);
+            if (!success)
+            {
+                return BadRequest(error);
+            }
+
+            return Ok(blog);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogError(ex, "Permission denied when saving blog image.");
+            return StatusCode(500, new { message = "Server Configuration Error: The API process lacks write permissions to the uploads folder." });
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "File lock or IO error when saving blog image.");
+            return StatusCode(500, new { message = "Server Configuration Error: The image file is currently locked or cannot be written." });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error creating blog.");
+            return StatusCode(500, new { message = "An unexpected error occurred while saving the blog. Please contact support." });
+        }
     }
 
     /// <summary>
@@ -144,19 +167,37 @@ public class BlogsController : BaseApiController
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UpdateBlog(long id, [FromForm] UpsertBlogRequest request)
     {
-        // 1. Execute update
-        var (success, error, blog) = await _blogsService.UpdateBlogAsync(id, request);
-
-        if (!success)
+        try
         {
-            if (error == "Blog not found.")
-            {
-                return NotFound(error);
-            }
-            return BadRequest(error);
-        }
+            // 1. Execute update
+            var (success, error, blog) = await _blogsService.UpdateBlogAsync(id, request);
 
-        return Ok(blog);
+            if (!success)
+            {
+                if (error == "Blog not found.")
+                {
+                    return NotFound(error);
+                }
+                return BadRequest(error);
+            }
+
+            return Ok(blog);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _logger.LogError(ex, "Permission denied when saving blog image for ID {BlogId}.", id);
+            return StatusCode(500, new { message = "Server Configuration Error: The API process lacks write permissions to the uploads folder." });
+        }
+        catch (IOException ex)
+        {
+            _logger.LogError(ex, "File lock or IO error when saving blog image for ID {BlogId}.", id);
+            return StatusCode(500, new { message = "Server Configuration Error: The image file is currently locked or cannot be written." });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error updating blog ID {BlogId}.", id);
+            return StatusCode(500, new { message = "An unexpected error occurred while saving the blog. Please contact support." });
+        }
     }
 
     /// <summary>

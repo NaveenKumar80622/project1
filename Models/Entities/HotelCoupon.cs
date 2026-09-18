@@ -6,6 +6,9 @@ namespace PickNBook.Api.Models;
 public class HotelCoupon
 {
     public int Id { get; set; }
+    public string PromotionCategory { get; set; } = "Coupon"; // "Coupon" or "Offer"
+    public string? Title { get; set; }
+    public string? Description { get; set; }
     public string CouponCode { get; set; } = string.Empty;
     public string CouponType { get; set; } = "Percentage"; // Percentage, Flat
     public decimal Value { get; set; }
@@ -17,9 +20,13 @@ public class HotelCoupon
     public int UsedCount { get; set; } = 0;
     public int MaxUsagePerUser { get; set; } = 1;
     public string Status { get; set; } = "Active"; // Active, Inactive
+    public bool IsExclusive { get; set; } = true;
+    public bool IsAutoApply { get; set; } = false;
     public bool IsFirstTimeUserOnly { get; set; } = false;
+    public int Priority { get; set; } = 0;
     public DateTime EntryDateUtc { get; set; } = DateTime.UtcNow;
     public string? Remark { get; set; }
+    public string? ImageUrl { get; set; }
 
     public ICollection<HotelCouponCondition> Conditions { get; set; } = new List<HotelCouponCondition>();
 }

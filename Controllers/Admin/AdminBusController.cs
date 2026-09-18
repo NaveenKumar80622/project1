@@ -8,6 +8,8 @@ using Dapper;
 using Microsoft.Extensions.Caching.Memory;
 using PickNBook.Api.Extensions;
 
+using PickNBook.Api.Helpers;
+
 namespace PickNBook.Api.Controllers
 {
     [ApiController]
@@ -42,11 +44,6 @@ namespace PickNBook.Api.Controllers
             var sql = "SELECT * FROM v_BusBookingSummary WHERE 1=1";
             var parameters = new Dapper.DynamicParameters();
 
-            if (!string.IsNullOrWhiteSpace(status))
-            {
-                sql += " AND Status LIKE @Status";
-                parameters.Add("Status", status.Trim());
-            }
 
             if (!string.IsNullOrWhiteSpace(pnr))
             {
@@ -67,6 +64,23 @@ namespace PickNBook.Api.Controllers
 
             using var connection = dbContext.Database.GetDbConnection();
             var bookingSummaries = await connection.QueryAsync<BusBookingSummary>(sql, parameters);
+            var bookingIds = bookingSummaries.Select(b => b.Id).ToList();
+
+            var reservations = await dbContext.BusReservations
+                .AsNoTracking()
+                .Where(r => bookingIds.Contains(r.Id))
+                .ToDictionaryAsync(r => r.Id);
+
+            var payments = await dbContext.Payments
+                .AsNoTracking()
+                .Where(p => p.BookingType == "Bus" && p.BookingReferenceId != null && bookingIds.Contains(p.BookingReferenceId.Value))
+                .ToListAsync();
+
+            var paymentsByBooking = payments
+                .GroupBy(p => p.BookingReferenceId!.Value)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.OrderByDescending(p => p.CreatedAt).FirstOrDefault());
 
             var response = bookingSummaries.Select(x =>
             {
@@ -74,19 +88,34 @@ namespace PickNBook.Api.Controllers
                 var arriveIst = ToIst(x.ArrivalTime);
                 var journeyDateIst = DateOnly.FromDateTime(departIst);
 
+                reservations.TryGetValue(x.Id, out var res);
+                paymentsByBooking.TryGetValue(x.Id, out var payment);
+
+                var resolvedStatus = BookingStatusResolver.ResolveStatus(
+                    x.Status, 
+                    payment?.Status, 
+                    payment?.FulfillmentStatus, 
+                    x.DepartureTime);
+
                 return new
                 {
                     x.Id,
                     BookingDateUtc = DateTime.SpecifyKind(x.BookedAtUtc, DateTimeKind.Utc),
                     BookingDateIst = ToIst(x.BookedAtUtc),
                     Pax = x.SeatsBooked,
+                    PassengerName = res?.PassengerName ?? string.Empty,
+                    PassengerPhone = res?.PassengerPhone ?? string.Empty,
+                    PassengerEmail = res?.PassengerEmail,
                     x.Segment,
                     JourneyDateIst = journeyDateIst,
                     DepartureTimeIst = departIst,
                     ArrivalTimeIst = arriveIst,
                     x.Pnr,
                     x.BookingReference,
-                    x.Status,
+                    Status = resolvedStatus,
+                    PaymentStatus = payment?.Status,
+                    RefundStatus = payment?.RefundStatus,
+                    FulfillmentStatus = payment?.FulfillmentStatus,
                     x.BusOperator,
                     x.BusType,
                     x.CustomerFareInr,
@@ -100,7 +129,11 @@ namespace PickNBook.Api.Controllers
                     x.GstPercent,
                     x.GstAmountInr
                 };
-            }).ToList();
+            })
+            .Where(x => !string.IsNullOrWhiteSpace(status)
+                ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
+                : (x.Status == "Booked" || x.Status == "Cancelled"))
+            .ToList();
 
             return Ok(response);
         }
@@ -514,8 +547,13 @@ namespace PickNBook.Api.Controllers
 
             if (serviceType == "hotel")
             {
-                var hotelCoupons = await dbContext.HotelCoupons.AsNoTracking()
-                    .Include(x => x.Conditions)
+                var hotelQuery = dbContext.HotelCoupons.AsNoTracking().Include(x => x.Conditions).AsQueryable();
+                if (!string.IsNullOrWhiteSpace(category))
+                {
+                    hotelQuery = hotelQuery.Where(x => x.PromotionCategory == category);
+                }
+
+                var hotelCoupons = await hotelQuery
                     .OrderByDescending(x => x.EntryDateUtc)
                     .ToListAsync();
 
@@ -523,9 +561,9 @@ namespace PickNBook.Api.Controllers
                 {
                     x.Id,
                     Type = "hotel",
-                    PromotionCategory = "Coupon",
-                    Title = x.CouponCode,
-                    Description = x.Remark,
+                    x.PromotionCategory,
+                    Title = string.IsNullOrWhiteSpace(x.Title) ? x.CouponCode : x.Title,
+                    Description = string.IsNullOrWhiteSpace(x.Description) ? x.Remark : x.Description,
                     x.Value,
                     x.CouponType,
                     x.CouponCode,
@@ -540,9 +578,10 @@ namespace PickNBook.Api.Controllers
                     x.MinBookingAmount,
                     x.IsFirstTimeUserOnly,
                     x.Remark,
-                    Priority = 0,
-                    IsAutoApply = false,
-                    IsExclusive = true,
+                    x.ImageUrl,
+                    x.Priority,
+                    x.IsAutoApply,
+                    x.IsExclusive,
                     Conditions = x.Conditions.Select(c => new
                     {
                         c.Id,
@@ -567,26 +606,27 @@ namespace PickNBook.Api.Controllers
                 {
                     x.Id,
                     Type = "flight",
-                    PromotionCategory = "Coupon",
-                    Title = x.CouponCode,
-                    Description = x.Remark,
+                    x.PromotionCategory,
+                    Title = string.IsNullOrWhiteSpace(x.Title) ? x.CouponCode : x.Title,
+                    Description = string.IsNullOrWhiteSpace(x.Description) ? x.Remark : x.Description,
                     x.Value,
                     x.CouponType,
                     x.CouponCode,
-                    MaxDiscountAmount = (decimal?)null,
+                    MaxDiscountAmount = x.MaxDiscountAmount,
                     x.StartDate,
                     x.ExpiryDate,
                     x.UseLimit,
                     x.UsedCount,
                     x.Status,
                     x.EntryDateUtc,
-                    MaxUsagePerUser = 1,
-                    MinBookingAmount = 0m,
+                    MaxUsagePerUser = x.MaxUsagePerUser,
+                    MinBookingAmount = x.MinBookingAmount,
                     x.IsFirstTimeUserOnly,
                     x.Remark,
-                    Priority = 0,
-                    IsAutoApply = false,
-                    IsExclusive = true,
+                    x.ImageUrl,
+                    x.Priority,
+                    x.IsAutoApply,
+                    x.IsExclusive,
                     Conditions = x.Conditions.Select(c => new
                     {
                         c.Id,
@@ -632,6 +672,7 @@ namespace PickNBook.Api.Controllers
                 x.MinBookingAmount,
                 x.IsFirstTimeUserOnly,
                 x.Remark,
+                x.ImageUrl,
                 x.Priority,
                 x.IsAutoApply,
                 x.IsExclusive,
@@ -656,36 +697,137 @@ namespace PickNBook.Api.Controllers
             if (serviceType == "hotel")
             {
                 var hotelCoupon = await dbContext.HotelCoupons
-                    .Include(x => x.Conditions)
+                    .Include(c => c.Conditions)
                     .AsNoTracking()
-                    .FirstOrDefaultAsync(x => x.Id == id);
+                    .FirstOrDefaultAsync(c => c.Id == id);
 
                 if (hotelCoupon is null) return NotFound("Hotel coupon not found.");
-                return Ok(hotelCoupon);
+
+                return Ok(new
+                {
+                    hotelCoupon.Id,
+                    Type = "hotel",
+                    hotelCoupon.PromotionCategory,
+                    Title = string.IsNullOrWhiteSpace(hotelCoupon.Title) ? hotelCoupon.CouponCode : hotelCoupon.Title,
+                    Description = string.IsNullOrWhiteSpace(hotelCoupon.Description) ? hotelCoupon.Remark : hotelCoupon.Description,
+                    hotelCoupon.Value,
+                    hotelCoupon.CouponType,
+                    hotelCoupon.CouponCode,
+                    hotelCoupon.MaxDiscountAmount,
+                    hotelCoupon.StartDate,
+                    hotelCoupon.ExpiryDate,
+                    hotelCoupon.UseLimit,
+                    hotelCoupon.UsedCount,
+                    hotelCoupon.Status,
+                    hotelCoupon.EntryDateUtc,
+                    hotelCoupon.MaxUsagePerUser,
+                    hotelCoupon.MinBookingAmount,
+                    hotelCoupon.IsFirstTimeUserOnly,
+                    hotelCoupon.Remark,
+                    hotelCoupon.ImageUrl,
+                    hotelCoupon.Priority,
+                    hotelCoupon.IsAutoApply,
+                    hotelCoupon.IsExclusive,
+                    Conditions = hotelCoupon.Conditions.Select(c => new
+                    {
+                        c.Id,
+                        c.ConditionType,
+                        c.ConditionOperator,
+                        c.Value1,
+                        c.Value2
+                    })
+                });
             }
 
             if (serviceType == "flight")
             {
                 var flightCoupon = await dbContext.FlightCoupons
-                    .Include(x => x.Conditions)
+                    .Include(c => c.Conditions)
                     .AsNoTracking()
-                    .FirstOrDefaultAsync(x => x.Id == id);
+                    .FirstOrDefaultAsync(c => c.Id == id);
 
                 if (flightCoupon is null) return NotFound("Flight coupon not found.");
-                return Ok(flightCoupon);
+
+                return Ok(new
+                {
+                    flightCoupon.Id,
+                    Type = "flight",
+                    flightCoupon.PromotionCategory,
+                    Title = string.IsNullOrWhiteSpace(flightCoupon.Title) ? flightCoupon.CouponCode : flightCoupon.Title,
+                    Description = string.IsNullOrWhiteSpace(flightCoupon.Description) ? flightCoupon.Remark : flightCoupon.Description,
+                    flightCoupon.Value,
+                    flightCoupon.CouponType,
+                    flightCoupon.CouponCode,
+                    MaxDiscountAmount = flightCoupon.MaxDiscountAmount,
+                    flightCoupon.StartDate,
+                    flightCoupon.ExpiryDate,
+                    flightCoupon.UseLimit,
+                    flightCoupon.UsedCount,
+                    flightCoupon.Status,
+                    flightCoupon.EntryDateUtc,
+                    MaxUsagePerUser = flightCoupon.MaxUsagePerUser,
+                    MinBookingAmount = flightCoupon.MinBookingAmount,
+                    flightCoupon.IsFirstTimeUserOnly,
+                    flightCoupon.Remark,
+                    flightCoupon.ImageUrl,
+                    flightCoupon.Priority,
+                    flightCoupon.IsAutoApply,
+                    flightCoupon.IsExclusive,
+                    Conditions = flightCoupon.Conditions.Select(c => new
+                    {
+                        c.Id,
+                        c.ConditionType,
+                        c.ConditionOperator,
+                        c.Value1,
+                        c.Value2
+                    })
+                });
             }
 
-            var coupon = await dbContext.BusCoupons
-                .Include(x => x.Conditions)
+            var busCoupon = await dbContext.BusCoupons
+                .Include(c => c.Conditions)
                 .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Id == id);
+                .FirstOrDefaultAsync(c => c.Id == id);
 
-            if (coupon is null)
+            if (busCoupon is null)
             {
                 return NotFound("Coupon not found.");
             }
 
-            return Ok(coupon);
+            return Ok(new
+            {
+                busCoupon.Id,
+                Type = "bus",
+                busCoupon.PromotionCategory,
+                busCoupon.Title,
+                busCoupon.Description,
+                busCoupon.Value,
+                busCoupon.CouponType,
+                busCoupon.CouponCode,
+                busCoupon.MaxDiscountAmount,
+                busCoupon.StartDate,
+                busCoupon.ExpiryDate,
+                busCoupon.UseLimit,
+                busCoupon.UsedCount,
+                busCoupon.Status,
+                busCoupon.EntryDateUtc,
+                busCoupon.MaxUsagePerUser,
+                busCoupon.MinBookingAmount,
+                busCoupon.IsFirstTimeUserOnly,
+                busCoupon.Remark,
+                busCoupon.ImageUrl,
+                busCoupon.Priority,
+                busCoupon.IsAutoApply,
+                busCoupon.IsExclusive,
+                Conditions = busCoupon.Conditions.Select(c => new
+                {
+                    c.Id,
+                    c.ConditionType,
+                    c.ConditionOperator,
+                    c.Value1,
+                    c.Value2
+                })
+            });
         }
 
         [HttpPost("coupons")]
@@ -751,14 +893,21 @@ namespace PickNBook.Api.Controllers
                     CouponCode = normalizedCode,
                     CouponType = NormalizeDiscountType(request.CouponType),
                     Value = request.Value,
+                    MinBookingAmount = request.MinBookingAmount,
+                    MaxDiscountAmount = request.MaxDiscountAmount,
                     StartDate = request.StartDate,
                     ExpiryDate = request.ExpiryDate,
                     UseLimit = request.UseLimit,
+                    MaxUsagePerUser = request.MaxUsagePerUser,
+                    IsAutoApply = request.IsAutoApply,
+                    IsExclusive = request.IsExclusive,
+                    Priority = request.Priority,
                     UsedCount = 0,
                     Status = NormalizeStatus(request.Status),
                     IsFirstTimeUserOnly = request.IsFirstTimeUserOnly,
                     EntryDateUtc = DateTime.UtcNow,
-                    Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim()
+                    Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim(),
+                    ImageUrl = request.ImageUrl
                 };
 
                 dbContext.FlightCoupons.Add(flightCoupon);
@@ -866,12 +1015,19 @@ namespace PickNBook.Api.Controllers
                 flightCoupon.CouponCode = normalizedCode;
                 flightCoupon.CouponType = NormalizeDiscountType(request.CouponType);
                 flightCoupon.Value = request.Value;
+                flightCoupon.MinBookingAmount = request.MinBookingAmount;
+                flightCoupon.MaxDiscountAmount = request.MaxDiscountAmount;
                 flightCoupon.StartDate = request.StartDate;
                 flightCoupon.ExpiryDate = request.ExpiryDate;
                 flightCoupon.UseLimit = request.UseLimit;
+                flightCoupon.MaxUsagePerUser = request.MaxUsagePerUser;
+                flightCoupon.IsAutoApply = request.IsAutoApply;
+                flightCoupon.IsExclusive = request.IsExclusive;
+                flightCoupon.Priority = request.Priority;
                 flightCoupon.Status = NormalizeStatus(request.Status);
                 flightCoupon.IsFirstTimeUserOnly = request.IsFirstTimeUserOnly;
                 flightCoupon.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
+                flightCoupon.ImageUrl = request.ImageUrl;
 
                 await dbContext.SaveChangesAsync();
                 return Ok(flightCoupon);
@@ -908,14 +1064,19 @@ namespace PickNBook.Api.Controllers
             coupon.Priority = request.Priority;
             coupon.Status = NormalizeStatus(request.Status);
             coupon.Remark = string.IsNullOrWhiteSpace(request.Remark) ? null : request.Remark.Trim();
+            coupon.ImageUrl = request.ImageUrl;
 
             try
             {
                 await dbContext.SaveChangesAsync();
             }
-            catch (DbUpdateException)
+            catch (DbUpdateException ex)
             {
-                return BadRequest("Coupon code already exists (duplicate detected at database level).");
+                if (ex.InnerException is MySqlConnector.MySqlException mysqlEx && mysqlEx.Number == 1062)
+                {
+                    return BadRequest("Coupon code already exists (duplicate detected at database level).");
+                }
+                throw;
             }
 
             return Ok(coupon);
@@ -1385,25 +1546,81 @@ namespace PickNBook.Api.Controllers
                     var journeyDateIst = DateOnly.FromDateTime(departIst);
                     var cancellationCharge = x.CancellationChargeInr ?? 0m;
                     var refundAmount = x.RefundAmountInr ?? Math.Max(0m, x.TotalPriceInr - cancellationCharge);
+                    var segment = $"{bus.FromCity} - {bus.ToCity}";
 
-                    return new
+                    return new AdminBusCancellationRequestDto
                     {
-                        x.Id,
+                        Id = x.Id,
+                        BookingId = x.Id,
+                        TicketNo = x.BookingReference,
                         Pnr = x.Pnr,
-                        BookingReference = x.BookingReference,
-                        CancelledDateUtc = x.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(x.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
-                        Segment = $"{bus.FromCity} - {bus.ToCity}",
-                        JourneyDateIst = journeyDateIst,
-                        PassengerName = x.PassengerName,
-                        AmountInr = x.TotalPriceInr,
-                        CancellationChargeInr = cancellationCharge,
-                        RefundAmountInr = refundAmount,
-                        x.Status
+                        RequestDateUtc = x.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(x.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
+                        Segment = segment,
+                        JourneyDate = journeyDateIst,
+                        BusOperator = bus.OperatorName,
+                        BusType = bus.BusType,
+                        Customer = x.PassengerName,
+                        CustomerPhone = x.PassengerPhone,
+                        CustomerEmail = x.PassengerEmail,
+                        Status = x.Status,
+                        CustomerRefundAmountInr = refundAmount,
+                        AdminRefundAmountInr = refundAmount,
+                        Remark = x.CancellationReason,
+                        Details = new AdminBusCancellationDetailsDto
+                        {
+                            CancellationStatus = x.Status,
+                            CustomerRefundStatus = refundAmount > 0 ? "Refunded" : "Completed",
+                            AdminRefundStatus = refundAmount > 0 ? "Refunded" : "Completed",
+                            CustomerRefundAmountInr = refundAmount,
+                            CustomerCancellationChargeInr = cancellationCharge,
+                            CustomerServiceChargeInr = 0m,
+                            AdminRefundAmountInr = refundAmount,
+                            AdminCancellationChargeInr = cancellationCharge,
+                            AdminServiceChargeInr = 0m,
+                            SupplierRemark = null,
+                            CustomerRemark = x.CancellationReason,
+                            AdminRemark = null
+                        }
                     };
                 })
                 .ToList();
 
             return Ok(response);
+        }
+
+        [HttpPut("cancellations/{id:int}")]
+        public async Task<IActionResult> UpdateCancellation(int id, [FromBody] BusCancellationRequestUpdateDto request)
+        {
+            if (request is null)
+            {
+                return BadRequest("Request body is required.");
+            }
+
+            if (request.CustomerRefundAmountInr < 0 ||
+                request.CustomerCancellationChargeInr < 0 ||
+                request.CustomerServiceChargeInr < 0 ||
+                request.AdminRefundAmountInr < 0 ||
+                request.AdminCancellationChargeInr < 0 ||
+                request.AdminServiceChargeInr < 0)
+            {
+                return BadRequest("Refund amounts and fee charges cannot be negative.");
+            }
+
+            var row = await dbContext.BusReservations.FirstOrDefaultAsync(x => x.Id == id);
+            if (row is null)
+            {
+                return NotFound("Bus cancellation record not found.");
+            }
+
+            row.CancellationChargeInr = request.CustomerCancellationChargeInr;
+            row.RefundAmountInr = request.CustomerRefundAmountInr;
+            if (!string.IsNullOrWhiteSpace(request.AdminRemark))
+            {
+                row.CancellationReason = request.AdminRemark;
+            }
+
+            await dbContext.SaveChangesAsync();
+            return Ok(row);
         }
 
         [HttpGet("searches")]
@@ -1553,6 +1770,34 @@ namespace PickNBook.Api.Controllers
                 return "Type must be one of: bus, hotel, flight.";
             }
 
+            if (!string.IsNullOrWhiteSpace(request.ImageUrl))
+            {
+                if (request.ImageUrl.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "Please provide a valid image URL instead of raw Base64 image data.";
+                }
+
+                var allowedExtensions = new[] 
+                { 
+                    ".jpg", ".jpeg", ".png", ".webp", ".gif", 
+                    ".svg", ".bmp", ".tif", ".tiff", ".ico", ".avif" 
+                };
+                
+                bool isValidFormat = false;
+                foreach (var ext in allowedExtensions)
+                {
+                    if (request.ImageUrl.EndsWith(ext, StringComparison.OrdinalIgnoreCase))
+                    {
+                        isValidFormat = true;
+                        break;
+                    }
+                }
+
+                if (!isValidFormat)
+                {
+                    return "ImageUrl must be a valid image format (e.g., .jpg, .png, .webp).";
+                }
+            }
 
             return null;
         }
