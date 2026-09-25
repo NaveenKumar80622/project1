@@ -1,0 +1,309 @@
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
+
+namespace PickNBook.Api.Models.DTOs
+{
+    public class BusBookV9RequestDto
+    {
+        [Required]
+        [Range(1, long.MaxValue, ErrorMessage = "TraceId must be between 1 and signed 64-bit integer maximum.")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+
+        [Required]
+        [StringLength(500, MinimumLength = 3, ErrorMessage = "ResultIndex must be between 3 and 500 characters.")]
+        public string ResultIndex { get; set; } = string.Empty;
+    }
+
+    public class SrdvBusOfferDto
+    {
+        public string RouteId { get; set; } = string.Empty;
+        public string OperatorName { get; set; } = string.Empty;
+        public string OperatorId { get; set; } = string.Empty;
+        public string BusType { get; set; } = string.Empty;
+        public string DepartureTime { get; set; } = string.Empty;
+        public string ArrivalTime { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public int AvailableSeats { get; set; }
+        
+        public string? TraceId { get; set; }
+        public string? ResultIndex { get; set; }
+        public long? SrdvIndex { get; set; }
+
+        public bool IsGSTMandatory { get; set; }
+        public bool IsTypeRequired { get; set; }
+        public bool IsDropPointMandatory { get; set; }
+    }
+    public class SrdvCancellationPolicyDto
+    {
+        public string CancellationCharge { get; set; } = string.Empty;
+        public string CancellationChargeType { get; set; } = string.Empty;
+        public string TimeBeforeDept { get; set; } = string.Empty;
+        public string FromDate { get; set; } = string.Empty;
+        public string PolicyString { get; set; } = string.Empty;
+    }
+
+    public class BusSeatLayoutProxyRequestDto
+    {
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string TraceId { get; set; } = string.Empty;
+        public string SrdvIndex { get; set; } = string.Empty;
+        public string ResultIndex { get; set; } = string.Empty;
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? BoardingPointId { get; set; }
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? DroppingPointId { get; set; }
+        public bool? BpDpSeatLayout { get; set; }
+    }
+
+    public class BusBoardingPointsProxyRequestDto
+    {
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string TraceId { get; set; } = string.Empty;
+        public string? SrdvIndex { get; set; } = string.Empty;
+        public string ResultIndex { get; set; } = string.Empty;
+    }
+    public class SrdvBusBookingRequestDto
+    {
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string TraceId { get; set; } = string.Empty;
+
+        public string ResultIndex { get; set; } = string.Empty;
+        public long SrdvIndex { get; set; }
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string BoardingPointId { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string DroppingPointId { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? RefId { get; set; }
+
+        public string FromCity { get; set; } = string.Empty;
+        public string ToCity { get; set; } = string.Empty;
+        public string DepartureTime { get; set; } = string.Empty;
+        public string ArrivalTime { get; set; } = string.Empty;
+        public string OperatorName { get; set; } = string.Empty;
+        public string BusType { get; set; } = string.Empty;
+        public decimal TotalFare { get; set; }
+        public List<SrdvBusPassengerDto> Passengers { get; set; } = new();
+
+        [System.Text.Json.Serialization.JsonPropertyName("EndUserIp")]
+        public string EndUserIp { get; set; } = string.Empty;
+    }
+
+    public class SrdvBusPassengerDto
+    {
+        private string _contactNo = string.Empty;
+        private string _phoneNo = string.Empty;
+
+        public string Title { get; set; } = string.Empty;
+        public string FirstName { get; set; } = string.Empty;
+        public string LastName { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int Age { get; set; }
+
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int Gender { get; set; } // 1: Male, 2: Female
+
+        public string SeatName { get; set; } = string.Empty;
+        public decimal Fare { get; set; }
+        public string Address { get; set; } = string.Empty;
+        public string City { get; set; } = string.Empty;
+        public string State { get; set; } = string.Empty;
+
+        public string ContactNo
+        {
+            get => !string.IsNullOrWhiteSpace(_contactNo) ? _contactNo : (!string.IsNullOrWhiteSpace(_phoneNo) ? _phoneNo : string.Empty);
+            set => _contactNo = value ?? string.Empty;
+        }
+
+        public string? PhoneNo
+        {
+            get => !string.IsNullOrWhiteSpace(_phoneNo) ? _phoneNo : (!string.IsNullOrWhiteSpace(_contactNo) ? _contactNo : string.Empty);
+            set => _phoneNo = value ?? string.Empty;
+        }
+
+        public string Email { get; set; } = string.Empty;
+        public bool? LeadPassenger { get; set; }
+        public int? SeatIndex { get; set; }
+        
+        public string? IdType { get; set; }
+        public string? IdNumber { get; set; }
+        public string? GSTCompanyAddress { get; set; }
+        public string? GSTCompanyContactNumber { get; set; }
+        public string? GSTCompanyName { get; set; }
+        public string? GSTNumber { get; set; }
+        public string? GSTCompanyEmail { get; set; }
+    }
+
+    public class SrdvBusBookingResponseDto
+    {
+        public bool Success { get; set; }
+        public int ErrorCode { get; set; }
+        public bool IsExplicitSupplierRejection => !Success && ErrorCode > 0;
+        public string? SrdvBookingId { get; set; }
+        public string? TicketNo { get; set; }
+        public string? TravelOperatorPNR { get; set; }
+        public string? ErrorMessage { get; set; }
+        public string? ResponseJson { get; set; }
+    }
+
+    public class SrdvSeatDto
+    {
+        public string SeatName { get; set; } = string.Empty;
+        public string SeatStatus { get; set; } = string.Empty;
+        public string SeatType { get; set; } = string.Empty;
+        public decimal SeatFare { get; set; }
+        public int RowNo { get; set; }
+        public int ColumnNo { get; set; }
+        public bool IsUpper { get; set; }
+    }
+
+    public class SrdvBoardingDroppingDetailsDto
+    {
+        public List<BusPointDto> BoardingPoints { get; set; } = new();
+        public List<BusPointDto> DroppingPoints { get; set; } = new();
+    }
+
+    public class BusSearchProxyRequestDto
+    {
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long FromCityCode { get; set; }
+
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long ToCityCode { get; set; }
+
+        public string DepartDate { get; set; } = string.Empty; // Format: YYYY-MM-DD
+    }
+
+    public class BusCityDto
+    {
+        public string CityId { get; set; } = string.Empty;
+        public string CityName { get; set; } = string.Empty;
+        public string StateName { get; set; } = string.Empty;
+    }
+
+    public class AdminCancelBusBookingRequestDto
+    {
+        public string Reason { get; set; } = "Cancelled by admin";
+        public decimal CancellationCharges { get; set; } = 0m;
+        public List<int>? PassengerIdsToCancel { get; set; }
+    }
+
+    public class SrdvBusCancelRequestDto
+    {
+        public long TraceId { get; set; }
+        public List<string> SeatName { get; set; } = new();
+        public string Remarks { get; set; } = string.Empty;
+    }
+
+    public class BusCancelV9RequestDto
+    {
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+        public List<string>? SeatName { get; set; }
+        public List<string>? SeatNames { get => SeatName; set => SeatName = value; }
+        public string? SeatId { get; set; } // Legacy alias (e.g. "1,2")
+        public string? Remarks { get; set; }
+        public string? Remark { get; set; } // Legacy alias
+        public string? BookingId { get; set; } // Detected & rejected per V9 spec
+        public string? BusId { get; set; }     // Detected & rejected per V9 spec
+    }
+
+    public class BusBookingDetailsQueryRequestDto
+    {
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long TraceId { get; set; }
+    }
+
+    public class SrdvBusCancelResponseDto
+    {
+        public bool Success { get; set; }
+        public string? Status { get; set; }
+        public long? CancelId { get; set; }
+        public string? SupplierCancelId { get; set; }
+        public decimal CancellationCharge { get; set; }
+        public decimal RefundAmount { get; set; }
+        public int ErrorCode { get; set; }
+        public string? ErrorMessage { get; set; }
+        public bool IsExplicitSupplierRejection { get; set; }
+        public bool IsAmbiguous { get; set; }
+        public string? ResponseJson { get; set; }
+    }
+
+    public class SrdvBusBookingDetailsResponseDto
+    {
+        public bool Success { get; set; }
+        public SrdvBusBookingDetailsErrorDto? Error { get; set; }
+        public long TraceId { get; set; }
+        public SrdvBusBookingDetailsResultDto? Result { get; set; }
+        public string? ResponseJson { get; set; }
+    }
+
+    public class SrdvBusBookingDetailsErrorDto
+    {
+        public int ErrorCode { get; set; }
+        public string? ErrorMessage { get; set; }
+    }
+
+    public class SrdvBusBookingDetailsResultDto
+    {
+        public long SrdvIndex { get; set; }
+        public string? ResultIndex { get; set; }
+        public long? BookingId { get; set; }
+        public string? RefId { get; set; }
+        public string? BookingStatus { get; set; }
+        public string? TicketNo { get; set; }
+        public string? TravelOperatorPNR { get; set; }
+        public decimal DsaFare { get; set; }
+        public string? CurrencyCode { get; set; }
+        public string? CancelStatus { get; set; }
+        public string? RefundStatus { get; set; }
+        public int ErrorCode { get; set; }
+        public string? ErrorMessage { get; set; }
+        public DateTime? CompletedAt { get; set; }
+        public List<SrdvBusBookingDetailsPassengerDto> Passengers { get; set; } = new();
+        public List<SrdvBusBookingDetailsCancellationDto> Cancellations { get; set; } = new();
+    }
+
+    public class SrdvBusBookingDetailsPassengerDto
+    {
+        public string? SeatName { get; set; }
+        public int SeatIndex { get; set; }
+        public bool IsUpper { get; set; }
+        public string? Title { get; set; }
+        public string? FirstName { get; set; }
+        public string? LastName { get; set; }
+        public string? Gender { get; set; }
+        public int Age { get; set; }
+        public bool LeadPassenger { get; set; }
+        public string? CurrencyCode { get; set; }
+        public decimal BaseFare { get; set; }
+        public decimal Tax { get; set; }
+        public decimal PublishedFare { get; set; }
+        public decimal OfferedFare { get; set; }
+        public decimal GstRate { get; set; }
+        public decimal GSTAmount { get; set; }
+        public string? CancelStatus { get; set; }
+        public DateTime? CancelledAt { get; set; }
+    }
+
+    public class SrdvBusBookingDetailsCancellationDto
+    {
+        public long? CancelId { get; set; }
+        public string? Status { get; set; }
+        public string? CancellationType { get; set; }
+        public List<string> SeatName { get; set; } = new();
+        public string? SupplierCancelId { get; set; }
+        public decimal RefundAmount { get; set; }
+        public decimal CancellationCharge { get; set; }
+        public string? RefundStatus { get; set; }
+        public int ErrorCode { get; set; }
+        public string? ErrorMessage { get; set; }
+        public DateTime? CompletedAt { get; set; }
+    }
+}
