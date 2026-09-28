@@ -290,7 +290,7 @@ namespace PickNBook.Api.Controllers.Public
                     _logger.LogWarning("ErrorCode was not 0. It was {ErrorCode}. Not logging to DB.", errorCode);
                     if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
                     {
-                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode, errObj["ErrorMessage"]?.ToString());
                     }
                 }
 
@@ -337,6 +337,7 @@ namespace PickNBook.Api.Controllers.Public
                                 Origin = s.Origin,
                                 Destination = s.Destination,
                                 PreferredDepartureTime = s.PreferredDepartureTime,
+                                PreferredArrivalTime = s.PreferredArrivalTime,
                                 FlightCabinClass = s.FlightCabinClass
                             }).ToList();
 
@@ -375,6 +376,7 @@ namespace PickNBook.Api.Controllers.Public
                                 Origin = s.Origin,
                                 Destination = s.Destination,
                                 PreferredDepartureTime = s.PreferredDepartureTime,
+                                PreferredArrivalTime = s.PreferredArrivalTime,
                                 FlightCabinClass = s.FlightCabinClass
                             }).ToList();
 
@@ -521,7 +523,7 @@ namespace PickNBook.Api.Controllers.Public
                 {
                     if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
                     {
-                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode, errObj["ErrorMessage"]?.ToString());
                     }
                 }
 
@@ -755,7 +757,7 @@ namespace PickNBook.Api.Controllers.Public
                 {
                     if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
                     {
-                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode, errObj["ErrorMessage"]?.ToString());
                     }
                 }
 
@@ -906,7 +908,7 @@ namespace PickNBook.Api.Controllers.Public
                 {
                     if (responseObj?["Error"] is System.Text.Json.Nodes.JsonObject errObj)
                     {
-                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode);
+                        errObj["ErrorMessage"] = PickNBook.Api.Infrastructure.Helpers.SrdvErrorHelper.GetErrorMessage(errorCode, errObj["ErrorMessage"]?.ToString());
                     }
                 }
                 return Ok(jsonNode);

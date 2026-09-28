@@ -2,9 +2,9 @@ namespace PickNBook.Api.Infrastructure.Helpers
 {
     public static class SrdvErrorHelper
     {
-        public static string GetErrorMessage(string? errorCode)
+        public static string GetErrorMessage(string? errorCode, string? defaultSupplierMessage = null)
         {
-            return errorCode switch
+            var mapped = errorCode switch
             {
                 "0" => "Request executed successfully",
                 "1" => "Supplier Log not found",
@@ -16,9 +16,24 @@ namespace PickNBook.Api.Infrastructure.Helpers
                 "997" => "User Name or Password mismatch",
                 "998" => "API not activated, Please contact your Air Representative or Support Team",
                 "999" => "Invalid Api-Token / Account Not Activated",
+                "1003" => "Invalid Request",
+                "1005" => "Forbidden",
                 "1100" => "Invalid JSON Format",
-                _ => "An unknown error occurred with the flight supplier"
+                "2008" => "Invalid API Token",
+                _ => null
             };
+
+            if (!string.IsNullOrWhiteSpace(mapped))
+            {
+                return mapped;
+            }
+
+            if (!string.IsNullOrWhiteSpace(defaultSupplierMessage))
+            {
+                return defaultSupplierMessage;
+            }
+
+            return "An unknown error occurred with the flight supplier";
         }
     }
 }
