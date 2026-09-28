@@ -1479,7 +1479,7 @@ namespace PickNBook.Api.Data
 
             modelBuilder.Entity<UserPasskey>(entity =>
             {
-                entity.ToTable("UserPasskeys");
+                entity.ToTable("user_passkeys");
                 entity.HasKey(x => x.Id);
                 entity.HasIndex(x => x.CredentialId).IsUnique();
                 entity.HasIndex(x => x.UserId);

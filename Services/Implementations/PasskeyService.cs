@@ -112,6 +112,7 @@ namespace PickNBook.Api.Services.Implementations
                 throw new InvalidOperationException($"User {userId} not found.");
 
             string deviceName = string.IsNullOrWhiteSpace(request.DeviceName) ? "WebAuthn Authenticator" : request.DeviceName.Trim();
+            if (deviceName.Length > 100) deviceName = deviceName.Substring(0, 100);
 
             var passkey = new UserPasskey
             {
@@ -293,6 +294,7 @@ namespace PickNBook.Api.Services.Implementations
             if (passkey == null) return false;
 
             passkey.DeviceName = newName.Trim();
+            if (passkey.DeviceName.Length > 100) passkey.DeviceName = passkey.DeviceName.Substring(0, 100);
             await _context.SaveChangesAsync();
             return true;
         }

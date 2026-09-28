@@ -4,7 +4,7 @@ using System.ComponentModel.DataAnnotations.Schema;
 
 namespace PickNBook.Api.Models.Entities
 {
-    [Table("UserPasskeys")]
+    [Table("user_passkeys")]
     public class UserPasskey
     {
         [Key]
@@ -35,7 +35,7 @@ namespace PickNBook.Api.Models.Entities
 
         public Guid? AaGuid { get; set; }
 
-        [MaxLength(150)]
+        [MaxLength(100)]
         public string? DeviceName { get; set; }
 
         public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
