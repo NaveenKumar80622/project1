@@ -480,9 +480,10 @@ namespace PickNBook.Api.Controllers
 
                         bool TryGetProp(JsonElement elem, string name, out JsonElement val)
                         {
-                            if (elem.TryGetProperty(name, out val)) return true;
                             if (elem.ValueKind == JsonValueKind.Object)
                             {
+                                if (elem.TryGetProperty(name, out val)) return true;
+
                                 foreach (var p in elem.EnumerateObject())
                                 {
                                     if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
@@ -492,6 +493,7 @@ namespace PickNBook.Api.Controllers
                                     }
                                 }
                             }
+
                             val = default;
                             return false;
                         }
