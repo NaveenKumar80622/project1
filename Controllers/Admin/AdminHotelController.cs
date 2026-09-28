@@ -354,12 +354,24 @@ public class AdminHotelController : AdminApiController
         
         var query = _context.HotelSearchLogs.AsQueryable();
 
+        List<long> matchingCityIds = new();
         if (!string.IsNullOrWhiteSpace(searchTerm))
         {
             var term = searchTerm.Trim().ToLowerInvariant();
+            
+            matchingCityIds = await _context.HotelCities.AsNoTracking()
+                .Where(c => (c.CityName != null && c.CityName.ToLower().Contains(term)) ||
+                            (c.FullName != null && c.FullName.ToLower().Contains(term)))
+                .Select(c => c.CityId)
+                .ToListAsync();
+
+            var matchingCityIdStrings = matchingCityIds.Select(id => id.ToString()).ToList();
+
             query = query.Where(s => 
                 (s.CityName != null && s.CityName.ToLower().Contains(term)) ||
                 s.SearchQuery.ToLower().Contains(term) ||
+                (s.CityId.HasValue && matchingCityIds.Contains(s.CityId.Value)) ||
+                matchingCityIdStrings.Contains(s.SearchQuery) ||
                 (s.UserId != null && s.UserId.ToLower().Contains(term)));
         }
 
@@ -367,20 +379,44 @@ public class AdminHotelController : AdminApiController
             .OrderByDescending(s => s.SearchedAtUtc)
             .ToListAsync();
 
-        var list = logs.Select(s => new
+        var cityIds = logs
+            .Select(s => s.CityId ?? (long.TryParse(s.SearchQuery, out var cid) ? cid : (long?)null))
+            .Where(cid => cid.HasValue)
+            .Select(cid => cid!.Value)
+            .Distinct()
+            .ToList();
+
+        var cityDict = new Dictionary<long, string>();
+        if (cityIds.Count > 0)
         {
-            SearchId = "sh-" + s.Id,
-            SearchQuery = s.CityName ?? s.SearchQuery,
-            CityName = s.CityName ?? s.SearchQuery,
-            CityId = s.CityId.HasValue 
-                ? s.CityId.Value.ToString() 
-                : (long.TryParse(s.SearchQuery, out _) ? s.SearchQuery : null),
-            CheckInDate = s.CheckInDate.ToString("yyyy-MM-dd"),
-            CheckOutDate = s.CheckOutDate.ToString("yyyy-MM-dd"),
-            Adults = s.Adults,
-            Rooms = s.Rooms,
-            UserId = s.UserId,
-            SearchedAtUtc = DateTime.SpecifyKind(s.SearchedAtUtc, DateTimeKind.Utc)
+            cityDict = await _context.HotelCities.AsNoTracking()
+                .Where(c => cityIds.Contains(c.CityId))
+                .GroupBy(c => c.CityId)
+                .ToDictionaryAsync(g => g.Key, g => g.First().CityName);
+        }
+
+        var list = logs.Select(s =>
+        {
+            long? resolvedId = s.CityId ?? (long.TryParse(s.SearchQuery, out var parsed) ? parsed : null);
+            string? displayName = s.CityName;
+            if (string.IsNullOrWhiteSpace(displayName) && resolvedId.HasValue && cityDict.TryGetValue(resolvedId.Value, out var matchName))
+            {
+                displayName = matchName;
+            }
+
+            return new
+            {
+                SearchId = "sh-" + s.Id,
+                SearchQuery = displayName ?? s.SearchQuery,
+                CityName = displayName ?? s.SearchQuery,
+                CityId = resolvedId?.ToString(),
+                CheckInDate = s.CheckInDate.ToString("yyyy-MM-dd"),
+                CheckOutDate = s.CheckOutDate.ToString("yyyy-MM-dd"),
+                Adults = s.Adults,
+                Rooms = s.Rooms,
+                UserId = s.UserId,
+                SearchedAtUtc = DateTime.SpecifyKind(s.SearchedAtUtc, DateTimeKind.Utc)
+            };
         }).ToList();
 
         return Ok(list);

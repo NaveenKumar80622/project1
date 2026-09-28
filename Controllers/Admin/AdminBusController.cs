@@ -1117,6 +1117,7 @@ namespace PickNBook.Api.Controllers
         // COUPON CONDITION ENDPOINTS (Authoritative Condition Settings: DayOfWeek Only)
         // =========================================================================
         [HttpGet("coupons/{couponId:int}/conditions")]
+        [HttpGet("discounts/{couponId:int}/conditions")]
         public async Task<IActionResult> GetCouponConditions(int couponId, [FromQuery] string? type = "bus")
         {
             var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
@@ -1160,6 +1161,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPost("coupons/{couponId:int}/conditions")]
+        [HttpPost("discounts/{couponId:int}/conditions")]
         public async Task<IActionResult> CreateCouponCondition(int couponId, [FromBody] CreateBusCouponConditionDto request, [FromQuery] string? type = "bus")
         {
             if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
@@ -1301,6 +1303,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPut("coupons/conditions/{conditionId:int}")]
+        [HttpPut("discounts/conditions/{conditionId:int}")]
         public async Task<IActionResult> UpdateCouponCondition(int conditionId, [FromBody] UpdateBusCouponConditionDto request, [FromQuery] string? type = "bus")
         {
             if (string.IsNullOrWhiteSpace(request.ConditionType) || string.IsNullOrWhiteSpace(request.Value1))
@@ -1377,6 +1380,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpDelete("coupons/conditions/{conditionId:int}")]
+        [HttpDelete("discounts/conditions/{conditionId:int}")]
         public async Task<IActionResult> DeleteCouponCondition(int conditionId, [FromQuery] string? type = "bus")
         {
             var serviceType = string.IsNullOrWhiteSpace(type) ? "bus" : type.Trim().ToLowerInvariant();
