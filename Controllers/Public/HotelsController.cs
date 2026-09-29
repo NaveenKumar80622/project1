@@ -615,7 +615,7 @@ namespace PickNBook.Api.Controllers
                                 LastName = lName,
                                 Email = request.GuestEmail ?? "",
                                 Phoneno = request.GuestPhone ?? "",
-                                PAN = request.PAN ?? "",
+                                PAN = string.IsNullOrWhiteSpace(request.PAN) ? string.Empty : request.PAN.Trim().ToUpperInvariant(),
                                 LeadPassenger = true,
                                 PaxType = "1"
                             }
