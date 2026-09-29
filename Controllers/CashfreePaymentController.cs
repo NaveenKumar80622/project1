@@ -507,6 +507,19 @@ namespace PickNBook.Api.Controllers
                         int infants = 0;
                         DateTime depTime = DateTime.UtcNow.AddDays(1);
                         TripType tripType = TripType.OneWay;
+                        if (TryGetProp(root, "JourneyType", out var jtProp))
+                        {
+                            int jt = jtProp.ValueKind == JsonValueKind.Number 
+                                ? jtProp.GetInt32() 
+                                : (int.TryParse(jtProp.GetString(), out var pj) ? pj : 1);
+
+                            tripType = jt switch
+                            {
+                                2 => TripType.RoundTrip,
+                                3 => TripType.MultiCity,
+                                _ => TripType.OneWay
+                            };
+                        }
 
                         if (TryGetProp(root, "Passengers", out var paxArray) && paxArray.ValueKind == JsonValueKind.Array)
                         {
@@ -582,11 +595,24 @@ namespace PickNBook.Api.Controllers
 
                         if (TryGetProp(root, "Segments", out var segArray) && segArray.ValueKind == JsonValueKind.Array && segArray.GetArrayLength() > 0)
                         {
-                            var firstSeg = segArray[0];
+                            var firstSegCandidate = segArray[0];
+                            var firstSeg = (firstSegCandidate.ValueKind == JsonValueKind.Array && firstSegCandidate.GetArrayLength() > 0)
+                                ? firstSegCandidate[0]
+                                : firstSegCandidate;
+
+                            var lastLegCandidate = segArray[segArray.GetArrayLength() - 1];
+                            var lastSeg = (lastLegCandidate.ValueKind == JsonValueKind.Array && lastLegCandidate.GetArrayLength() > 0)
+                                ? lastLegCandidate[lastLegCandidate.GetArrayLength() - 1]
+                                : lastLegCandidate;
+
                             if (string.IsNullOrEmpty(airline))
                             {
-                                if (TryGetProp(firstSeg, "AirlineCode", out var sAcode)) airline = sAcode.GetString() ?? "";
-                                else if (TryGetProp(firstSeg, "Airline", out var sAir) && sAir.ValueKind == JsonValueKind.String) airline = sAir.GetString() ?? "";
+                                if (TryGetProp(firstSeg, "Airline", out var sAir))
+                                {
+                                    if (sAir.ValueKind == JsonValueKind.String) airline = sAir.GetString() ?? "";
+                                    else if (sAir.ValueKind == JsonValueKind.Object && TryGetProp(sAir, "AirlineCode", out var acNode)) airline = acNode.GetString() ?? "";
+                                }
+                                else if (TryGetProp(firstSeg, "AirlineCode", out var sAcode)) airline = sAcode.GetString() ?? "";
                                 else if (TryGetProp(firstSeg, "AirlineDetails", out var aDetails) && TryGetProp(aDetails, "AirlineCode", out var adCode)) airline = adCode.GetString() ?? "";
                             }
                             if (string.IsNullOrEmpty(fromCity))
@@ -595,25 +621,34 @@ namespace PickNBook.Api.Controllers
                                 else if (TryGetProp(firstSeg, "Origin", out var sOrig))
                                 {
                                     if (sOrig.ValueKind == JsonValueKind.String) fromCity = sOrig.GetString() ?? "";
-                                    else if (sOrig.ValueKind == JsonValueKind.Object && TryGetProp(sOrig, "CityCode", out var sCc)) fromCity = sCc.GetString() ?? "";
-                                    else if (sOrig.ValueKind == JsonValueKind.Object && TryGetProp(sOrig, "AirportCode", out var sAc)) fromCity = sAc.GetString() ?? "";
+                                    else if (sOrig.ValueKind == JsonValueKind.Object)
+                                    {
+                                        if (TryGetProp(sOrig, "CityCode", out var sCc) && !string.IsNullOrWhiteSpace(sCc.GetString())) fromCity = sCc.GetString() ?? "";
+                                        else if (TryGetProp(sOrig, "AirportCode", out var sAc) && !string.IsNullOrWhiteSpace(sAc.GetString())) fromCity = sAc.GetString() ?? "";
+                                    }
                                 }
                             }
                             if (string.IsNullOrEmpty(toCity))
                             {
-                                var lastSeg = segArray[segArray.GetArrayLength() - 1];
                                 if (TryGetProp(lastSeg, "ToCity", out var sTo)) toCity = sTo.GetString() ?? "";
                                 else if (TryGetProp(lastSeg, "Destination", out var sDest))
                                 {
                                     if (sDest.ValueKind == JsonValueKind.String) toCity = sDest.GetString() ?? "";
-                                    else if (sDest.ValueKind == JsonValueKind.Object && TryGetProp(sDest, "CityCode", out var dCc)) toCity = dCc.GetString() ?? "";
-                                    else if (sDest.ValueKind == JsonValueKind.Object && TryGetProp(sDest, "AirportCode", out var dAc)) toCity = dAc.GetString() ?? "";
+                                    else if (sDest.ValueKind == JsonValueKind.Object)
+                                    {
+                                        if (TryGetProp(sDest, "CityCode", out var dCc) && !string.IsNullOrWhiteSpace(dCc.GetString())) toCity = dCc.GetString() ?? "";
+                                        else if (TryGetProp(sDest, "AirportCode", out var dAc) && !string.IsNullOrWhiteSpace(dAc.GetString())) toCity = dAc.GetString() ?? "";
+                                    }
                                 }
                             }
 
                             if (depTime == default || depTime <= DateTime.UtcNow)
                             {
-                                if (TryGetProp(firstSeg, "DepartureTime", out var segDep) && DateTime.TryParse(segDep.GetString(), out var parsedSegDep))
+                                if (TryGetProp(firstSeg, "DepTime", out var sDepTime) && DateTime.TryParse(sDepTime.GetString(), out var parsedDepTime))
+                                {
+                                    depTime = parsedDepTime;
+                                }
+                                else if (TryGetProp(firstSeg, "DepartureTime", out var segDep) && DateTime.TryParse(segDep.GetString(), out var parsedSegDep))
                                 {
                                     depTime = parsedSegDep;
                                 }
@@ -621,6 +656,24 @@ namespace PickNBook.Api.Controllers
                                 {
                                     depTime = parsedOrigDep;
                                 }
+                            }
+
+                            if (TryGetProp(firstSeg, "CabinClassName", out var ccn) && !string.IsNullOrWhiteSpace(ccn.GetString()))
+                            {
+                                travelClassStr = ccn.GetString()!;
+                            }
+                            else if (TryGetProp(firstSeg, "CabinClassCode", out var ccc) || TryGetProp(firstSeg, "CabinClass", out ccc))
+                            {
+                                int code = ccc.ValueKind == JsonValueKind.Number ? ccc.GetInt32() : (int.TryParse(ccc.GetString(), out var pc) ? pc : 2);
+                                travelClassStr = code switch
+                                {
+                                    2 => "Economy",
+                                    3 => "PremiumEconomy",
+                                    4 => "Business",
+                                    5 => "PremiumBusiness",
+                                    6 => "First",
+                                    _ => "Economy"
+                                };
                             }
                         }
 
