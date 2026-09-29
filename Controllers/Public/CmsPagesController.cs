@@ -256,12 +256,22 @@ public class CmsPagesController : BaseApiController
             page.ImageUrl = await SaveFileAsync(request.Image, "pages/images");
             DeleteStaticFile(oldPath);
         }
+        else if (request.RemoveImage)
+        {
+            DeleteStaticFile(page.ImageUrl);
+            page.ImageUrl = null;
+        }
 
         if (request.Banner != null)
         {
             var oldPath = page.BannerUrl;
             page.BannerUrl = await SaveFileAsync(request.Banner, "pages/banners");
             DeleteStaticFile(oldPath);
+        }
+        else if (request.RemoveBanner)
+        {
+            DeleteStaticFile(page.BannerUrl);
+            page.BannerUrl = null;
         }
 
         page.Title = request.Title.Trim();

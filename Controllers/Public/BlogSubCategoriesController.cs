@@ -127,6 +127,11 @@ public class BlogSubCategoriesController : BaseApiController
             subCategory.ImageUrl = await SaveImageAsync(request.Image, "blogs/subcategories");
             DeleteStaticFile(previousImage);
         }
+        else if (request.RemoveImage)
+        {
+            DeleteStaticFile(subCategory.ImageUrl);
+            subCategory.ImageUrl = null;
+        }
 
         var slugBase = BuildSlug(request.Name, request.Slug);
         subCategory.Slug = await EnsureUniqueSlugAsync(slugBase, id);

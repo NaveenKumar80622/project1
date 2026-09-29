@@ -13,5 +13,7 @@ public class UpsertCmsPageRequest
     public string? MetaDescription { get; set; }
     public string Description { get; set; } = string.Empty;
     public IFormFile? Image { get; set; }
+    public bool RemoveImage { get; set; } = false;
     public IFormFile? Banner { get; set; }
+    public bool RemoveBanner { get; set; } = false;
 }
