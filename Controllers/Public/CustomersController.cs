@@ -10,6 +10,7 @@ using PickNBook.Api.Services;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 
 namespace PickNBook.Api.Controllers;
 
@@ -21,14 +22,22 @@ public class CustomersController : AdminApiController
     private readonly IEmailService _emailService;
     private readonly IWalletService _walletService;
     private readonly IInAppNotificationService? _notificationService;
+    private readonly ILogger<CustomersController>? _logger;
 
-    public CustomersController(AppDbContext context, IPasswordHasher<User> passwordHasher, IEmailService emailService, IWalletService walletService, IInAppNotificationService? notificationService = null)
+    public CustomersController(
+        AppDbContext context,
+        IPasswordHasher<User> passwordHasher,
+        IEmailService emailService,
+        IWalletService walletService,
+        IInAppNotificationService? notificationService = null,
+        ILogger<CustomersController>? logger = null)
     {
         _context = context;
         _passwordHasher = passwordHasher;
         _emailService = emailService;
         _walletService = walletService;
         _notificationService = notificationService;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -251,7 +260,14 @@ public class CustomersController : AdminApiController
             ? $"Hello {customer.FirstName},<br><br>Welcome back! Your Pick&amp;book account has been activated."
             : $"Hello {customer.FirstName},<br><br>Notice: Your Pick&amp;book account has been temporarily suspended. Please contact support for more information.";
         
-        await _emailService.SendEmailAsync(customer.Email, subject, body);
+        try
+        {
+            await _emailService.SendEmailAsync(customer.Email, subject, body);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to send account status change email to {Email} for customer #{Id}. Non-fatal.", customer.Email, customer.Id);
+        }
 
         return Ok(new { message = "Customer status updated successfully.", status = customer.Status });
     }
@@ -273,7 +289,14 @@ public class CustomersController : AdminApiController
             ? $"Hello {customer.FirstName},<br><br>Your Pick&amp;book wallet has been activated."
             : $"Hello {customer.FirstName},<br><br>Notice: Your Pick&amp;book wallet has been temporarily suspended.";
         
-        await _emailService.SendEmailAsync(customer.Email, subject, body);
+        try
+        {
+            await _emailService.SendEmailAsync(customer.Email, subject, body);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to send wallet status change email to {Email} for customer #{Id}. Non-fatal.", customer.Email, customer.Id);
+        }
 
         return Ok(new { message = "Wallet status updated successfully.", walletStatus = customer.WalletStatus });
     }
@@ -325,10 +348,88 @@ public class CustomersController : AdminApiController
             }
         }
 
-        string subject = "Wallet Balance Added";
-        string body = $"Hello {customer.FirstName},<br><br>An amount of ₹{request.Amount} has been added to your Pick&amp;book wallet.<br>Your updated wallet balance is ₹{customer.WalletBalance}.";
-        
-        await _emailService.SendEmailAsync(customer.Email, subject, body);
+        string fullName = $"{customer.FirstName} {customer.LastName}".Trim();
+        if (string.IsNullOrWhiteSpace(fullName))
+        {
+            fullName = "Valued Customer";
+        }
+
+        string formattedAmount = $"+₹{request.Amount:N2}";
+        string formattedBalance = $"₹{customer.WalletBalance:N2}";
+        string formattedDate = DateTime.UtcNow.ToString("dd MMMM yyyy");
+        string subject = "Wallet Balance Added Successfully – Pick&book";
+
+        string body = $@"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; background-color: #f4f6f9; margin: 0; padding: 20px; }}
+        .container {{ max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }}
+        .header {{ background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); padding: 30px 24px; text-align: center; color: #ffffff; }}
+        .header h1 {{ margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; }}
+        .content {{ padding: 28px 24px; color: #334155; line-height: 1.6; }}
+        .greeting {{ font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #0f172a; }}
+        .card {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 20px; margin: 20px 0; }}
+        .table {{ width: 100%; border-collapse: collapse; }}
+        .table td {{ padding: 10px 0; border-bottom: 1px solid #edf2f7; font-size: 14px; }}
+        .table td:last-child {{ text-align: right; font-weight: 600; color: #0f172a; }}
+        .amount-highlight {{ color: #16a34a !important; font-size: 16px; }}
+        .footer {{ padding: 20px; text-align: center; font-size: 12px; color: #94a3b8; border-top: 1px solid #f1f5f9; }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='header'>
+            <h1>Pick&amp;book Wallet</h1>
+        </div>
+        <div class='content'>
+            <div class='greeting'>Dear {fullName},</div>
+            <p>Your wallet has been successfully credited by the administrator. Here are the details of this transaction:</p>
+            <div class='card'>
+                <table class='table'>
+                    <tr>
+                        <td style='color: #64748b;'>Amount Added</td>
+                        <td class='amount-highlight'>{formattedAmount}</td>
+                    </tr>
+                    <tr>
+                        <td style='color: #64748b;'>Updated Wallet Balance</td>
+                        <td>{formattedBalance}</td>
+                    </tr>
+                    <tr>
+                        <td style='color: #64748b;'>Date</td>
+                        <td>{formattedDate}</td>
+                    </tr>
+                    <tr>
+                        <td style='color: #64748b; border: none;'>Reference ID</td>
+                        <td style='border: none; font-family: monospace; font-size: 12px;'>{idempotentRef}</td>
+                    </tr>
+                </table>
+            </div>
+            <p style='margin-bottom: 0;'>You can now use your updated balance to book flights, hotels, and bus tickets seamlessly on <a href='https://picknbook.in' style='color: #2563eb; text-decoration: none;'>Pick&amp;book</a>.</p>
+        </div>
+        <div class='footer'>
+            &copy; {DateTime.UtcNow.Year} Pick&amp;book. All rights reserved.<br>
+            This is an automated transaction receipt. Please do not reply to this email.
+        </div>
+    </div>
+</body>
+</html>";
+
+        try
+        {
+            await _emailService.SendEmailAsync(customer.Email, subject, body);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(
+                ex,
+                "Failed to send wallet balance email to {Email} for user {UserId}. Non-fatal.",
+                customer.Email,
+                customer.Id);
+        }
 
         return Ok(new { message = "Wallet balance updated successfully.", walletBalance = customer.WalletBalance });
     }
