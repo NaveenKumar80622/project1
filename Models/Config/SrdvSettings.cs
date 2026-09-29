@@ -14,5 +14,6 @@ namespace PickNBook.Api.Models.Config
         public string BusUserName { get; set; } = string.Empty;
         public string BusPassword { get; set; } = string.Empty;
         public string BusApiToken { get; set; } = string.Empty;
+        public bool ForcePanOptional { get; set; } = true;
     }
 }

@@ -1418,7 +1418,14 @@ namespace PickNBook.Api.Services
                     rmDto.HotelSupplements = SafeGetString(rmElem, "HotelSupplements", "");
                     rmDto.LastCancellationDate = SafeGetString(rmElem, "LastCancellationDate", "");
                     if (rmElem.TryGetProperty("IsPassportMandatory", out var ipmProp) && (ipmProp.ValueKind == JsonValueKind.True || ipmProp.ValueKind == JsonValueKind.False)) rmDto.IsPassportMandatory = ipmProp.GetBoolean();
-                    if (rmElem.TryGetProperty("IsPANMandatory", out var ipanProp) && (ipanProp.ValueKind == JsonValueKind.True || ipanProp.ValueKind == JsonValueKind.False)) rmDto.IsPANMandatory = ipanProp.GetBoolean();
+                    if (_settings.ForcePanOptional)
+                    {
+                        rmDto.IsPANMandatory = false;
+                    }
+                    else if (rmElem.TryGetProperty("IsPANMandatory", out var ipanProp) && (ipanProp.ValueKind == JsonValueKind.True || ipanProp.ValueKind == JsonValueKind.False))
+                    {
+                        rmDto.IsPANMandatory = ipanProp.GetBoolean();
+                    }
                     if (rmElem.TryGetProperty("FullRefundAllowed", out var fraProp) && (fraProp.ValueKind == JsonValueKind.True || fraProp.ValueKind == JsonValueKind.False)) rmDto.FullRefundAllowed = fraProp.GetBoolean();
                     if (rmElem.TryGetProperty("OfferedPrice", out var rmOpProp))
                     {
@@ -1892,7 +1899,14 @@ namespace PickNBook.Api.Services
                         rmDto.BedTypeCode = SafeGetString(rmElem, "BedTypeCode", "");
                         rmDto.Supplements = SafeGetString(rmElem, "Supplements", "");
                         if (rmElem.TryGetProperty("IsPassportMandatory", out var ipmProp) && (ipmProp.ValueKind == JsonValueKind.True || ipmProp.ValueKind == JsonValueKind.False)) rmDto.IsPassportMandatory = ipmProp.GetBoolean();
-                        if (rmElem.TryGetProperty("IsPANMandatory", out var ipanProp) && (ipanProp.ValueKind == JsonValueKind.True || ipanProp.ValueKind == JsonValueKind.False)) rmDto.IsPANMandatory = ipanProp.GetBoolean();
+                        if (_settings.ForcePanOptional)
+                        {
+                            rmDto.IsPANMandatory = false;
+                        }
+                        else if (rmElem.TryGetProperty("IsPANMandatory", out var ipanProp) && (ipanProp.ValueKind == JsonValueKind.True || ipanProp.ValueKind == JsonValueKind.False))
+                        {
+                            rmDto.IsPANMandatory = ipanProp.GetBoolean();
+                        }
                         if (rmElem.TryGetProperty("FullRefundAllowed", out var fraProp) && (fraProp.ValueKind == JsonValueKind.True || fraProp.ValueKind == JsonValueKind.False)) rmDto.FullRefundAllowed = fraProp.GetBoolean();
                         rmDto.CancellationPolicy = SafeGetString(rmElem, "CancellationPolicy", "");
 
@@ -2074,7 +2088,7 @@ namespace PickNBook.Api.Services
                                 LastName = lName,
                                 Email = request.GuestEmail ?? "",
                                 Phoneno = request.GuestPhone ?? "",
-                                PAN = request.PAN ?? "",
+                                PAN = string.IsNullOrWhiteSpace(request.PAN) ? string.Empty : request.PAN.Trim().ToUpperInvariant(),
                                 LeadPassenger = true,
                                 PaxType = "1"
                             }
@@ -2112,7 +2126,7 @@ namespace PickNBook.Api.Services
                                 PaxType = Trunc(p.PaxType, 10),
                                 Age = p.Age,
                                 LeadPassenger = p.LeadPassenger,
-                                PAN = Trunc(p.PAN, 30),
+                                PAN = string.IsNullOrWhiteSpace(p.PAN) ? string.Empty : Trunc(p.PAN.Trim().ToUpperInvariant(), 30),
                                 PassportNo = Trunc(p.PassportNo, 50),
                                 PassportExpDate = Trunc(p.PassportExpDate, 20),
                                 PassportIssueCountry = Trunc(p.PassportIssueCountry, 100),
