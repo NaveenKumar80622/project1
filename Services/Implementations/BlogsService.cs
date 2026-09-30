@@ -325,12 +325,17 @@ public class BlogsService : IBlogsService
         var slugBase = BuildSlug(request.Title, request.Slug);
         var slug = await EnsureUniqueSlugAsync(slugBase, id);
 
-        // 4. Update image file attachments (delete previous physical file if replaced)
+        // 4. Update image file attachments (delete previous physical file if replaced or removed)
         if (request.Image != null)
         {
             var previous = blog.ImageUrl;
             blog.ImageUrl = await _fileStorageService.SaveFileAsync(request.Image, "blogs/images");
             _fileStorageService.DeleteFile(previous);
+        }
+        else if (request.RemoveImage)
+        {
+            _fileStorageService.DeleteFile(blog.ImageUrl);
+            blog.ImageUrl = null;
         }
 
         if (request.OgImage != null)
@@ -338,6 +343,11 @@ public class BlogsService : IBlogsService
             var previous = blog.OgImageUrl;
             blog.OgImageUrl = await _fileStorageService.SaveFileAsync(request.OgImage, "blogs/og-images");
             _fileStorageService.DeleteFile(previous);
+        }
+        else if (request.RemoveOgImage)
+        {
+            _fileStorageService.DeleteFile(blog.OgImageUrl);
+            blog.OgImageUrl = null;
         }
 
         // 5. Update database record properties

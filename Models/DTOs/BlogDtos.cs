@@ -15,5 +15,7 @@ public class UpsertBlogRequest
     public string? MetaDescription { get; set; }
     public bool IsPublished { get; set; } = true;
     public IFormFile? Image { get; set; }
+    public bool RemoveImage { get; set; } = false;
     public IFormFile? OgImage { get; set; }
+    public bool RemoveOgImage { get; set; } = false;
 }
