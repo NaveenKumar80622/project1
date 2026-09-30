@@ -1241,6 +1241,17 @@ namespace PickNBook.Api.Services
                         hd.StaySummary = ss;
                     }
 
+                    if (detailsProp.TryGetProperty("PricingSummary", out var psProp) && psProp.ValueKind == JsonValueKind.Object)
+                    {
+                        hd.PricingSummary = ParsePricingSummary(psProp);
+                        resDto.PricingSummary = hd.PricingSummary;
+                    }
+                    else if (target.TryGetProperty("PricingSummary", out var tpsProp) && tpsProp.ValueKind == JsonValueKind.Object)
+                    {
+                        hd.PricingSummary = ParsePricingSummary(tpsProp);
+                        resDto.PricingSummary = hd.PricingSummary;
+                    }
+
                     // Upsert to DB
                     if (!string.IsNullOrWhiteSpace(hd.HotelCode) && hd.HotelCode != "None")
                     {
@@ -1378,6 +1389,10 @@ namespace PickNBook.Api.Services
                     }
                     if (target.TryGetProperty("IsPolicyPerStay", out var ipProp) && (ipProp.ValueKind == JsonValueKind.True || ipProp.ValueKind == JsonValueKind.False)) resDto.IsPolicyPerStay = ipProp.GetBoolean();
                     if (target.TryGetProperty("IsUnderCancellationAllowed", out var icProp) && (icProp.ValueKind == JsonValueKind.True || icProp.ValueKind == JsonValueKind.False)) resDto.IsUnderCancellationAllowed = icProp.GetBoolean();
+                    if (target.TryGetProperty("PricingSummary", out var ghrPsProp) && ghrPsProp.ValueKind == JsonValueKind.Object)
+                    {
+                        resDto.PricingSummary = ParsePricingSummary(ghrPsProp);
+                    }
                 }
 
                 JsonElement roomsDetailsSource = target;
@@ -1399,6 +1414,14 @@ namespace PickNBook.Api.Services
                     if (rmElem.ValueKind != JsonValueKind.Object) return rmDto;
 
                     rmDto.OptionId = SafeGetString(rmElem, "OptionId", "");
+                    rmDto.OptionType = SafeGetString(rmElem, "OptionType", "");
+                    rmDto.MealBasis = SafeGetString(rmElem, "MealBasis", "");
+                    rmDto.BookingNotes = SafeGetString(rmElem, "BookingNotes", "");
+                    if (rmElem.TryGetProperty("AdultCount", out var acProp) && acProp.ValueKind == JsonValueKind.Number) rmDto.AdultCount = acProp.GetInt32();
+                    if (rmElem.TryGetProperty("OptionTotalPrice", out var otpProp) && otpProp.ValueKind == JsonValueKind.Number) rmDto.OptionTotalPrice = otpProp.GetDecimal();
+                    if (rmElem.TryGetProperty("SupplierPricing", out var spProp) && spProp.ValueKind == JsonValueKind.Object) rmDto.SupplierPricing = ParseSupplierPricing(spProp);
+                    if (rmElem.TryGetProperty("Commercial", out var commProp) && commProp.ValueKind == JsonValueKind.Object) rmDto.Commercial = ParseCommercial(commProp);
+                    if (rmElem.TryGetProperty("Cancellation", out var cancProp) && cancProp.ValueKind == JsonValueKind.Object) rmDto.Cancellation = ParseCancellation(cancProp);
                     if (rmElem.TryGetProperty("ChildCount", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number) rmDto.ChildCount = ccProp.GetInt32();
                     if (rmElem.TryGetProperty("RequireAllPaxDetails", out var rapProp) && (rapProp.ValueKind == JsonValueKind.True || rapProp.ValueKind == JsonValueKind.False)) rmDto.RequireAllPaxDetails = rapProp.GetBoolean();
                     rmDto.RoomId = SafeGetString(rmElem, "RoomId", "");
@@ -1855,6 +1878,14 @@ namespace PickNBook.Api.Services
                     resDto.PriceSummary = ps;
                 }
 
+                if (target.TryGetProperty("PricingSummary", out var brPsProp) && brPsProp.ValueKind == JsonValueKind.Object)
+                {
+                    resDto.PricingSummary = ParsePricingSummary(brPsProp);
+                }
+                if (target.TryGetProperty("SupplierHotelCode", out var supHotelCodeProp)) resDto.SupplierHotelCode = supHotelCodeProp.GetString() ?? "";
+                if (target.TryGetProperty("CanonicalHotelCode", out var chcProp)) resDto.CanonicalHotelCode = chcProp.ValueKind == JsonValueKind.String ? (chcProp.GetString() ?? "") : chcProp.GetRawText();
+                if (target.TryGetProperty("CanProceedToBook", out var cptbProp) && (cptbProp.ValueKind == JsonValueKind.True || cptbProp.ValueKind == JsonValueKind.False)) resDto.CanProceedToBook = cptbProp.GetBoolean();
+
                 if (target.TryGetProperty("IsCancellationPolicyChanged", out var cpcProp) && (cpcProp.ValueKind == JsonValueKind.True || cpcProp.ValueKind == JsonValueKind.False)) resDto.IsCancellationPolicyChanged = cpcProp.GetBoolean();
                 if (target.TryGetProperty("IsHotelPolicyChanged", out var hpcProp) && (hpcProp.ValueKind == JsonValueKind.True || hpcProp.ValueKind == JsonValueKind.False)) resDto.IsHotelPolicyChanged = hpcProp.GetBoolean();
 
@@ -1879,6 +1910,14 @@ namespace PickNBook.Api.Services
                     {
                         var rmDto = new BlockRoomDetailItemDto();
                         rmDto.OptionId = SafeGetString(rmElem, "OptionId", "");
+                        rmDto.OptionType = SafeGetString(rmElem, "OptionType", "");
+                        rmDto.MealBasis = SafeGetString(rmElem, "MealBasis", "");
+                        rmDto.BookingNotes = SafeGetString(rmElem, "BookingNotes", "");
+                        if (rmElem.TryGetProperty("AdultCount", out var acProp) && acProp.ValueKind == JsonValueKind.Number) rmDto.AdultCount = acProp.GetInt32();
+                        if (rmElem.TryGetProperty("OptionTotalPrice", out var otpProp) && otpProp.ValueKind == JsonValueKind.Number) rmDto.OptionTotalPrice = otpProp.GetDecimal();
+                        if (rmElem.TryGetProperty("SupplierPricing", out var spProp) && spProp.ValueKind == JsonValueKind.Object) rmDto.SupplierPricing = ParseSupplierPricing(spProp);
+                        if (rmElem.TryGetProperty("Commercial", out var commProp) && commProp.ValueKind == JsonValueKind.Object) rmDto.Commercial = ParseCommercial(commProp);
+                        if (rmElem.TryGetProperty("Cancellation", out var cancProp) && cancProp.ValueKind == JsonValueKind.Object) rmDto.Cancellation = ParseCancellation(cancProp);
                         if (rmElem.TryGetProperty("ChildCount", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number) rmDto.ChildCount = ccProp.GetInt32();
                         if (rmElem.TryGetProperty("RequireAllPaxDetails", out var rapProp) && (rapProp.ValueKind == JsonValueKind.True || rapProp.ValueKind == JsonValueKind.False)) rmDto.RequireAllPaxDetails = rapProp.GetBoolean();
                         rmDto.RoomId = SafeGetString(rmElem, "RoomId", "");
@@ -3090,6 +3129,147 @@ namespace PickNBook.Api.Services
                 if (p.ValueKind == JsonValueKind.False) return "false";
             }
             return defaultVal;
+        }
+
+        private static decimal SafeGetDecimal(JsonElement elem, string propName, decimal defaultVal = 0m)
+        {
+            if (elem.TryGetProperty(propName, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.Number) return p.GetDecimal();
+                if (p.ValueKind == JsonValueKind.String && decimal.TryParse(p.GetString(), out var v)) return v;
+            }
+            return defaultVal;
+        }
+
+        private static int SafeGetInt(JsonElement elem, string propName, int defaultVal = 0)
+        {
+            if (elem.TryGetProperty(propName, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.Number) return p.GetInt32();
+                if (p.ValueKind == JsonValueKind.String && int.TryParse(p.GetString(), out var v)) return v;
+            }
+            return defaultVal;
+        }
+
+        private static bool SafeGetBool(JsonElement elem, string propName, bool defaultVal = false)
+        {
+            if (elem.TryGetProperty(propName, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.True) return true;
+                if (p.ValueKind == JsonValueKind.False) return false;
+                if (p.ValueKind == JsonValueKind.String && bool.TryParse(p.GetString(), out var v)) return v;
+            }
+            return defaultVal;
+        }
+
+        private static SupplierPricingDto? ParseSupplierPricing(JsonElement sp)
+        {
+            if (sp.ValueKind != JsonValueKind.Object) return null;
+            var dto = new SupplierPricingDto();
+            dto.TotalPrice = SafeGetDecimal(sp, "TotalPrice");
+            dto.BasePrice = SafeGetDecimal(sp, "BasePrice");
+            dto.Discount = SafeGetDecimal(sp, "Discount");
+            dto.Taxes = SafeGetDecimal(sp, "Taxes");
+            dto.ManagementFee = SafeGetDecimal(sp, "ManagementFee");
+            dto.ManagementFeeTax = SafeGetDecimal(sp, "ManagementFeeTax");
+            dto.GSTClaimableAmount = SafeGetDecimal(sp, "GSTClaimableAmount");
+            dto.Currency = SafeGetString(sp, "Currency", "INR");
+            dto.Strikethrough = SafeGetDecimal(sp, "Strikethrough");
+            dto.StrikeThrough = SafeGetDecimal(sp, "StrikeThrough", dto.Strikethrough);
+            return dto;
+        }
+
+        private static CommercialDto? ParseCommercial(JsonElement comm)
+        {
+            if (comm.ValueKind != JsonValueKind.Object) return null;
+            var dto = new CommercialDto();
+            dto.Type = SafeGetString(comm, "Type", "NET");
+            dto.Commission = SafeGetDecimal(comm, "Commission");
+            return dto;
+        }
+
+        private static HotelCancellationDetailsDto? ParseCancellation(JsonElement canc)
+        {
+            if (canc.ValueKind != JsonValueKind.Object) return null;
+            var dto = new HotelCancellationDetailsDto();
+            dto.IsRefundable = SafeGetBool(canc, "IsRefundable");
+            dto.IsRefundabilityKnown = SafeGetBool(canc, "IsRefundabilityKnown");
+            dto.FreeCancellationUntil = SafeGetString(canc, "FreeCancellationUntil");
+            if (canc.TryGetProperty("Penalties", out var penProp) && penProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in penProp.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.Object)
+                    {
+                        dto.Penalties.Add(new HotelCancellationPenaltyDto
+                        {
+                            From = SafeGetString(item, "From"),
+                            To = SafeGetString(item, "To"),
+                            Amount = SafeGetDecimal(item, "Amount")
+                        });
+                    }
+                }
+            }
+            return dto;
+        }
+
+        private static HotelPricingSummaryDto? ParsePricingSummary(JsonElement ps)
+        {
+            if (ps.ValueKind != JsonValueKind.Object) return null;
+            var dto = new HotelPricingSummaryDto();
+            dto.IsAvailable = SafeGetBool(ps, "IsAvailable", true);
+            dto.AvailableOptionsCount = SafeGetInt(ps, "AvailableOptionsCount");
+            dto.MinimumPrice = SafeGetDecimal(ps, "MinimumPrice");
+            dto.MaximumPrice = SafeGetDecimal(ps, "MaximumPrice");
+            dto.MinimumBasePrice = SafeGetDecimal(ps, "MinimumBasePrice");
+            dto.MaximumBasePrice = SafeGetDecimal(ps, "MaximumBasePrice");
+            dto.MinimumTax = SafeGetDecimal(ps, "MinimumTax");
+            dto.MaximumTax = SafeGetDecimal(ps, "MaximumTax");
+            dto.MinimumDiscount = SafeGetDecimal(ps, "MinimumDiscount");
+            dto.MaximumDiscount = SafeGetDecimal(ps, "MaximumDiscount");
+            dto.MinimumManagementFee = SafeGetDecimal(ps, "MinimumManagementFee");
+            dto.MaximumManagementFee = SafeGetDecimal(ps, "MaximumManagementFee");
+            dto.MinimumManagementFeeTax = SafeGetDecimal(ps, "MinimumManagementFeeTax");
+            dto.MaximumManagementFeeTax = SafeGetDecimal(ps, "MaximumManagementFeeTax");
+            dto.MinimumStrikeThroughPrice = SafeGetDecimal(ps, "MinimumStrikeThroughPrice");
+            dto.MaximumStrikeThroughPrice = SafeGetDecimal(ps, "MaximumStrikeThroughPrice");
+            dto.MinimumGSTClaimableAmount = SafeGetDecimal(ps, "MinimumGSTClaimableAmount");
+            dto.MaximumGSTClaimableAmount = SafeGetDecimal(ps, "MaximumGSTClaimableAmount");
+            dto.RefundableOptionsCount = SafeGetInt(ps, "RefundableOptionsCount");
+            dto.NonRefundableOptionsCount = SafeGetInt(ps, "NonRefundableOptionsCount");
+            dto.RefundabilityUnknownOptionsCount = SafeGetInt(ps, "RefundabilityUnknownOptionsCount");
+            dto.PANRequiredOptionsCount = SafeGetInt(ps, "PANRequiredOptionsCount");
+            dto.PassportRequiredOptionsCount = SafeGetInt(ps, "PassportRequiredOptionsCount");
+            dto.Currency = SafeGetString(ps, "Currency", "INR");
+
+            if (ps.TryGetProperty("MealBasisOptions", out var mbProp) && mbProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var mb in mbProp.EnumerateArray())
+                {
+                    var s = mb.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) dto.MealBasisOptions.Add(s);
+                }
+            }
+
+            if (ps.TryGetProperty("OptionTypes", out var otProp) && otProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var ot in otProp.EnumerateArray())
+                {
+                    var s = ot.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) dto.OptionTypes.Add(s);
+                }
+            }
+
+            if (ps.TryGetProperty("GSTTypes", out var gstProp) && gstProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var gst in gstProp.EnumerateArray())
+                {
+                    var s = gst.GetString();
+                    if (!string.IsNullOrWhiteSpace(s)) dto.GSTTypes.Add(s);
+                }
+            }
+
+            return dto;
         }
     }
 }

@@ -449,6 +449,72 @@ namespace PickNBook.Api.Models.DTOs
         public BlockRoomResultDto BlockRoomResult { get; set; } = new();
     }
 
+    public class SupplierPricingDto
+    {
+        public decimal TotalPrice { get; set; }
+        public decimal BasePrice { get; set; }
+        public decimal Discount { get; set; }
+        public decimal Taxes { get; set; }
+        public decimal ManagementFee { get; set; }
+        public decimal ManagementFeeTax { get; set; }
+        public decimal GSTClaimableAmount { get; set; }
+        public string Currency { get; set; } = "INR";
+        public decimal Strikethrough { get; set; }
+        public decimal StrikeThrough { get; set; }
+    }
+
+    public class CommercialDto
+    {
+        public string Type { get; set; } = "NET";
+        public decimal Commission { get; set; }
+    }
+
+    public class HotelCancellationPenaltyDto
+    {
+        public string From { get; set; } = string.Empty;
+        public string To { get; set; } = string.Empty;
+        public decimal Amount { get; set; }
+    }
+
+    public class HotelCancellationDetailsDto
+    {
+        public bool IsRefundable { get; set; }
+        public bool IsRefundabilityKnown { get; set; }
+        public string FreeCancellationUntil { get; set; } = string.Empty;
+        public List<HotelCancellationPenaltyDto> Penalties { get; set; } = new();
+    }
+
+    public class HotelPricingSummaryDto
+    {
+        public bool IsAvailable { get; set; }
+        public int AvailableOptionsCount { get; set; }
+        public decimal MinimumPrice { get; set; }
+        public decimal MaximumPrice { get; set; }
+        public decimal MinimumBasePrice { get; set; }
+        public decimal MaximumBasePrice { get; set; }
+        public decimal MinimumTax { get; set; }
+        public decimal MaximumTax { get; set; }
+        public decimal MinimumDiscount { get; set; }
+        public decimal MaximumDiscount { get; set; }
+        public decimal MinimumManagementFee { get; set; }
+        public decimal MaximumManagementFee { get; set; }
+        public decimal MinimumManagementFeeTax { get; set; }
+        public decimal MaximumManagementFeeTax { get; set; }
+        public decimal MinimumStrikeThroughPrice { get; set; }
+        public decimal MaximumStrikeThroughPrice { get; set; }
+        public decimal MinimumGSTClaimableAmount { get; set; }
+        public decimal MaximumGSTClaimableAmount { get; set; }
+        public int RefundableOptionsCount { get; set; }
+        public int NonRefundableOptionsCount { get; set; }
+        public int RefundabilityUnknownOptionsCount { get; set; }
+        public List<string> MealBasisOptions { get; set; } = new();
+        public List<string> OptionTypes { get; set; } = new();
+        public List<string> GSTTypes { get; set; } = new();
+        public int PANRequiredOptionsCount { get; set; }
+        public int PassportRequiredOptionsCount { get; set; }
+        public string Currency { get; set; } = "INR";
+    }
+
     public class BlockRoomPriceSummaryDto
     {
         public decimal ServedPrice { get; set; }
@@ -470,6 +536,11 @@ namespace PickNBook.Api.Models.DTOs
         public bool IsPackageFare { get; set; }
         public bool IsPriceChanged { get; set; }
         public BlockRoomPriceSummaryDto? PriceSummary { get; set; }
+        public HotelPricingSummaryDto? PricingSummary { get; set; }
+        public HotelStaySummaryDto? StaySummary { get; set; }
+        public string SupplierHotelCode { get; set; } = string.Empty;
+        public string CanonicalHotelCode { get; set; } = string.Empty;
+        public bool CanProceedToBook { get; set; }
         public bool IsCancellationPolicyChanged { get; set; }
         public bool IsHotelPolicyChanged { get; set; }
         public string HotelNorms { get; set; } = string.Empty;
@@ -492,6 +563,11 @@ namespace PickNBook.Api.Models.DTOs
     public class BlockRoomDetailItemDto
     {
         public string OptionId { get; set; } = string.Empty;
+        public string OptionType { get; set; } = string.Empty;
+        public string MealBasis { get; set; } = string.Empty;
+        public string BookingNotes { get; set; } = string.Empty;
+        public int AdultCount { get; set; }
+        public decimal OptionTotalPrice { get; set; }
         public int ChildCount { get; set; }
         public bool RequireAllPaxDetails { get; set; }
         public string RoomId { get; set; } = string.Empty;
@@ -506,6 +582,9 @@ namespace PickNBook.Api.Models.DTOs
         public List<HotelRoomDayRateDto> DayRates { get; set; } = new();
         public string SupplierPrice { get; set; } = string.Empty;
         public HotelSearchPriceDto Price { get; set; } = new();
+        public SupplierPricingDto? SupplierPricing { get; set; }
+        public CommercialDto? Commercial { get; set; }
+        public HotelCancellationDetailsDto? Cancellation { get; set; }
         public string RoomPromotion { get; set; } = string.Empty;
         public List<HotelRoomAmenityDto> Amenities { get; set; } = new();
         public string SmokingPreference { get; set; } = string.Empty;
@@ -551,12 +630,13 @@ namespace PickNBook.Api.Models.DTOs
 
     public class HotelInfoResultDto
     {
-        public HotelInfoErrorDto Error { get; set; } = new();
+        public HotelSearchErrorDto Error { get; set; } = new();
         public string SrdvType { get; set; } = "MixAPI";
         public string ResultIndex { get; set; } = string.Empty;
         public string SrdvIndex { get; set; } = string.Empty;
         public string TraceId { get; set; } = string.Empty;
         public HotelDetailsExtendedDto HotelDetails { get; set; } = new();
+        public HotelPricingSummaryDto? PricingSummary { get; set; }
     }
 
     public class HotelInfoErrorDto
@@ -593,6 +673,7 @@ namespace PickNBook.Api.Models.DTOs
         public string RoomData { get; set; } = string.Empty;
         public string RoomFacilities { get; set; } = string.Empty;
         public string Services { get; set; } = string.Empty;
+        public HotelPricingSummaryDto? PricingSummary { get; set; }
         public HotelStaySummaryDto? StaySummary { get; set; }
     }
 
@@ -661,6 +742,7 @@ namespace PickNBook.Api.Models.DTOs
         public string TraceId { get; set; } = string.Empty;
         public bool IsPolicyPerStay { get; set; }
         public bool IsUnderCancellationAllowed { get; set; }
+        public HotelPricingSummaryDto? PricingSummary { get; set; }
         public List<HotelRoomCategoryDetailsDto> HotelRoomsDetails { get; set; } = new();
 
         [JsonPropertyName("HotelRoomDetails")]
@@ -679,6 +761,11 @@ namespace PickNBook.Api.Models.DTOs
     public class HotelRoomDetailItemDto
     {
         public string OptionId { get; set; } = string.Empty;
+        public string OptionType { get; set; } = string.Empty;
+        public string MealBasis { get; set; } = string.Empty;
+        public string BookingNotes { get; set; } = string.Empty;
+        public int AdultCount { get; set; }
+        public decimal OptionTotalPrice { get; set; }
         public int ChildCount { get; set; }
         public bool RequireAllPaxDetails { get; set; }
         public string RoomId { get; set; } = string.Empty;
@@ -696,6 +783,9 @@ namespace PickNBook.Api.Models.DTOs
         public List<HotelRoomDayRateDto> DayRates { get; set; } = new();
         public string SupplierPrice { get; set; } = string.Empty;
         public HotelSearchPriceDto Price { get; set; } = new();
+        public SupplierPricingDto? SupplierPricing { get; set; }
+        public CommercialDto? Commercial { get; set; }
+        public HotelCancellationDetailsDto? Cancellation { get; set; }
         public string RoomPromotion { get; set; } = string.Empty;
         public List<HotelRoomAmenityDto> Amenities { get; set; } = new();
         public string SmokingPreference { get; set; } = string.Empty;
