@@ -123,6 +123,31 @@ namespace PickNBook.Api.Controllers
                     DateOnly.TryParseExact(journeyDateStr, new[] { "dd/MM/yyyy", "yyyy-MM-dd" }, null, System.Globalization.DateTimeStyles.None, out journeyDate);
 
                     // ========================================
+                    // 0. SAME-DAY DEPARTURE CUTOFF GUARD
+                    // ========================================
+                    // Filter out already departed buses or buses departing within 15 minutes
+                    if (journeyDate == todayIst)
+                    {
+                        var cutoffIst = DateTime.UtcNow.Add(IndiaOffset).AddMinutes(15);
+                        for (int i = resultNode.Count - 1; i >= 0; i--)
+                        {
+                            var bNode = resultNode[i];
+                            var depTimeStr = bNode?["DepartureTime"]?.ToString();
+                            if (!string.IsNullOrWhiteSpace(depTimeStr) && DateTime.TryParse(depTimeStr, out var parsedDepTime))
+                            {
+                                var fullDep = parsedDepTime.Year > 2000
+                                    ? parsedDepTime
+                                    : new DateTime(journeyDate.Year, journeyDate.Month, journeyDate.Day, parsedDepTime.Hour, parsedDepTime.Minute, parsedDepTime.Second);
+
+                                if (fullDep < cutoffIst)
+                                {
+                                    resultNode.RemoveAt(i);
+                                }
+                            }
+                        }
+                    }
+
+                    // ========================================
                     // 1. LEGACY DB SYNC REMOVED
                     // ========================================
                     // We no longer sync every search result to the bus_bookings table.

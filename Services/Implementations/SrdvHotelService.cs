@@ -113,7 +113,7 @@ namespace PickNBook.Api.Services
             // Only cache in main search cache if finished and valid
             if (response != null && response.ResultStatus == "COMPLETED" && (response.Error == null || response.Error.ErrorCode == 0))
             {
-                _cache.Set(cacheKey, response, TimeSpan.FromMinutes(15));
+                _cache.Set(cacheKey, response, TimeSpan.FromMinutes(5));
             }
 
             return response ?? new PickNBookHotelSearchResponseDto();
@@ -355,7 +355,7 @@ namespace PickNBook.Api.Services
 
                 if (responseDto != null && responseDto.Error.ErrorCode == 0 && responseDto.Results != null && responseDto.Results.Count > 0)
                 {
-                    _cache.Set(cacheKey, responseDto, TimeSpan.FromMinutes(10));
+                    _cache.Set(cacheKey, responseDto, TimeSpan.FromMinutes(5));
                 }
 
                 return responseDto;

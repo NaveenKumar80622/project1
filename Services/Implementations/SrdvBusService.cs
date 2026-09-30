@@ -180,6 +180,11 @@ namespace PickNBook.Api.Services
                 return cachedResponse;
             }
 
+            var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            var todayIst = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone));
+            bool isSameDay = DateOnly.TryParseExact(request.DepartDate, new[] { "yyyy-MM-dd", "dd/MM/yyyy" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dDate) && dDate <= todayIst;
+            var busCacheTtl = isSameDay ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(5);
+
             var fromAliases = _cityCache != null ? _cityCache.GetCityAliases(request.FromCityCode) : new[] { request.FromCityCode };
             var toAliases = _cityCache != null ? _cityCache.GetCityAliases(request.ToCityCode) : new[] { request.ToCityCode };
 
@@ -195,7 +200,7 @@ namespace PickNBook.Api.Services
             {
                 if (!string.IsNullOrWhiteSpace(primaryResponse) && primaryResponse.Contains("\"ErrorCode\":0"))
                 {
-                    _cache.Set(cacheKey, primaryResponse, TimeSpan.FromMinutes(5));
+                    _cache.Set(cacheKey, primaryResponse, busCacheTtl);
                 }
                 return primaryResponse;
             }
@@ -222,7 +227,7 @@ namespace PickNBook.Api.Services
 
             if (!string.IsNullOrWhiteSpace(merged) && merged.Contains("\"ErrorCode\":0"))
             {
-                _cache.Set(cacheKey, merged, TimeSpan.FromMinutes(5));
+                _cache.Set(cacheKey, merged, busCacheTtl);
             }
 
             return merged;
@@ -317,17 +322,21 @@ namespace PickNBook.Api.Services
 
         public async Task<List<SrdvBusOfferDto>> SearchBusesAsync(string originId, string destinationId, string journeyDate)
         {
+            var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+            var todayIst = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone));
+            bool isSameDay = DateOnly.TryParseExact(journeyDate, new[] { "yyyy-MM-dd", "dd/MM/yyyy" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var jDate) && jDate <= todayIst;
+            var busSearchTtl = isSameDay ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(5);
+
             var cacheKey = $"Bus_Search_{originId}_{destinationId}_{journeyDate}";
             if (!_cache.TryGetValue(cacheKey, out List<SrdvBusOfferDto>? cachedBuses))
             {
                 var (_, buses) = await SearchBusesWithRawAsync(originId, destinationId, journeyDate);
                 cachedBuses = buses;
-                _cache.Set(cacheKey, cachedBuses, TimeSpan.FromMinutes(15));
+                _cache.Set(cacheKey, cachedBuses, busSearchTtl);
             }
             
-            // Dynamic Time Filtering for expired buses
-            var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
-            var cutoffTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone).AddMinutes(-5);
+            // Dynamic Time Filtering for expired buses (cutoff at 15 minutes before departure)
+            var cutoffTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone).AddMinutes(15);
             DateTime.TryParseExact(journeyDate, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out DateTime parsedJourneyDate);
 
             var validBuses = cachedBuses!.Where(bus => {
