@@ -1010,8 +1010,8 @@ namespace PickNBook.Api.Services.Implementations
                     var srdvRes = await hotelService.BookRoomAsync(request);
                     var result = srdvRes.BookResult;
                     
-                    bool isConfirmed = result != null && (result.ResponseStatus == 1 || result.Status?.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) == true);
-                    isPending = result != null && (result.ResponseStatus == 3 || result.Status?.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true);
+                    bool isConfirmed = result != null && (result.ResponseStatus == 1 || result.Status == 1 || string.Equals(result.HotelBookingStatus, "Confirmed", StringComparison.OrdinalIgnoreCase));
+                    isPending = result != null && (result.ResponseStatus == 3 || result.Status == 3 || string.Equals(result.HotelBookingStatus, "Pending", StringComparison.OrdinalIgnoreCase));
                     isSrdvSuccess = isConfirmed || isPending;
                     srdvErrorMessage = result?.Error?.ErrorMessage ?? "Unknown Error";
                     srdvProviderBookingId = result?.BookingId > 0 ? result.BookingId.ToString() : (!string.IsNullOrEmpty(result?.BookingRefNo) ? result.BookingRefNo : null);

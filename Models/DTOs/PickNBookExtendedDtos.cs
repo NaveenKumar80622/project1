@@ -157,23 +157,71 @@ namespace PickNBook.Api.Models.DTOs
 
     public class PickNBookBookRoomResponseDto
     {
+        [JsonPropertyName("BookResult")]
         public BookResultDto BookResult { get; set; } = new();
+
+        public static PickNBookBookRoomResponseDto CreateError(int errorCode, string errorMessage, long? traceId = null, int? bookingId = null)
+        {
+            return new PickNBookBookRoomResponseDto
+            {
+                BookResult = new BookResultDto
+                {
+                    Error = new HotelSearchErrorDto { ErrorCode = errorCode, ErrorMessage = errorMessage },
+                    TraceId = traceId,
+                    BookingId = bookingId,
+                    Status = 0,
+                    HotelBookingStatus = "BookFailed",
+                    ResponseStatus = 0,
+                    BookingRefNo = bookingId?.ToString() ?? string.Empty
+                }
+            };
+        }
     }
 
     public class BookResultDto
     {
+        [JsonPropertyName("Error")]
         public HotelSearchErrorDto Error { get; set; } = new();
+
+        [JsonPropertyName("TraceId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long? TraceId { get; set; }
+
+        [JsonPropertyName("BookingId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public int? BookingId { get; set; }
+
+        [JsonPropertyName("VoucherStatus")]
         public bool VoucherStatus { get; set; }
+
+        [JsonPropertyName("ResponseStatus")]
         public int ResponseStatus { get; set; }
-        public string TraceId { get; set; } = string.Empty;
-        public string Status { get; set; } = string.Empty;
+
+        [JsonPropertyName("Status")]
+        public int Status { get; set; }
+
+        [JsonPropertyName("HotelBookingStatus")]
         public string HotelBookingStatus { get; set; } = string.Empty;
+
+        [JsonPropertyName("InvoiceNumber")]
         public string InvoiceNumber { get; set; } = string.Empty;
+
+        [JsonPropertyName("ConfirmationNo")]
         public string ConfirmationNo { get; set; } = string.Empty;
+
+        [JsonPropertyName("BookingRefNo")]
         public string BookingRefNo { get; set; } = string.Empty;
-        public int BookingId { get; set; }
+
+        [JsonPropertyName("IsPriceChanged")]
         public bool IsPriceChanged { get; set; }
+
+        [JsonPropertyName("IsCancellationPolicyChanged")]
         public bool IsCancellationPolicyChanged { get; set; }
+
+        [JsonPropertyName("SupplierBookingStatus")]
+        public string SupplierBookingStatus { get; set; } = string.Empty;
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public FareBreakdownDto? FareBreakdown { get; set; }
     }
 
@@ -1393,6 +1441,16 @@ namespace PickNBook.Api.Models.DTOs
         [JsonPropertyName("ChangeRequestStatus")]
         [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
         public int? ChangeRequestStatus { get; set; }
+
+        public static HotelCancelResponseDto CreateError(int errorCode, string errorMessage, long? traceId = null)
+        {
+            return new HotelCancelResponseDto
+            {
+                ResponseStatus = 0,
+                TraceId = traceId,
+                Error = new HotelCancelErrorDto { ErrorCode = errorCode, ErrorMessage = errorMessage }
+            };
+        }
     }
 
     public class HotelCancelErrorDto

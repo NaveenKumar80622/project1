@@ -13,7 +13,7 @@ using System.Linq;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using PickNBook.Api.Models.Config;
-using PickNBook.Api.Models.DTOs;
+using PickNBook.Api.Filters;
 using PickNBook.Api.Helpers;
 using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
@@ -1009,12 +1009,29 @@ namespace PickNBook.Api.Controllers.Public
         }
 
 
-        [Authorize]
-        [HttpPost("TicketLCC")]
+        [AllowAnonymous]
+        [InjectClientIp]
         [HttpPost("/v8/TicketLCC")]
+        [HttpPost("TicketLCC")]
         [HttpPost("/api/flight/v8/TicketLCC")]
         public async Task<IActionResult> TicketLCC([FromBody] FlightTicketLCCProxyRequestDto proxyRequest)
         {
+            string? userIdStr = null;
+            bool isPartnerApiCall = false;
+            if (Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) && !string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                isPartnerApiCall = true;
+                userIdStr = "partner_api";
+            }
+            else if (User.Identity != null && User.Identity.IsAuthenticated)
+            {
+                userIdStr = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "0";
+            }
+            else
+            {
+                return Unauthorized(ValidationErrorDto.Create("Please login or provide a valid Api-Token header to book tickets.", "Authorization"));
+            }
+
             if (proxyRequest == null)
             {
                 return BadRequest(ValidationErrorDto.Create("Request body cannot be null.", "request"));
@@ -1025,14 +1042,20 @@ namespace PickNBook.Api.Controllers.Public
                 return BadRequest(ValidationErrorDto.Create("TraceId is required and must be a positive integer.", "TraceId"));
             }
 
-            if (string.IsNullOrWhiteSpace(proxyRequest.ResultIndex))
+            var trimmedResultIndex = proxyRequest.ResultIndex?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedResultIndex) || trimmedResultIndex.Length < 3 || trimmedResultIndex.Length > 500)
             {
-                return BadRequest(ValidationErrorDto.Create("ResultIndex is required.", "ResultIndex"));
+                return BadRequest(ValidationErrorDto.Create("ResultIndex is required and must be between 3 and 500 characters.", "ResultIndex"));
             }
 
-            if (proxyRequest.Passengers == null || proxyRequest.Passengers.Count < 1 || proxyRequest.Passengers.Count > 9)
+            if (!string.IsNullOrWhiteSpace(proxyRequest.RefID) && proxyRequest.RefID.Trim().Length > 200)
             {
-                return BadRequest(ValidationErrorDto.Create("Passengers count must be between 1 and 9.", "Passengers"));
+                return BadRequest(ValidationErrorDto.Create("RefID must not exceed 200 characters.", "RefID"));
+            }
+
+            if (proxyRequest.Passengers == null || proxyRequest.Passengers.Count < 1 || proxyRequest.Passengers.Count > 18)
+            {
+                return BadRequest(ValidationErrorDto.Create("Passengers count must be between 1 and 18.", "Passengers"));
             }
 
             // Check adult count
@@ -1294,20 +1317,51 @@ namespace PickNBook.Api.Controllers.Public
                 }
 
                 // Also detect pending from TicketStatus field
-                if (resp.TryGetProperty("TicketStatus", out var tStatus) && tStatus.ToString()?.Equals("Pending", StringComparison.OrdinalIgnoreCase) == true)
+                string ticketStatusStr = "";
+                if (resp.TryGetProperty("TicketStatus", out var tsProp))
+                {
+                    ticketStatusStr = tsProp.ToString() ?? "";
+                }
+
+                int ticketStatusCode = -1;
+                if (int.TryParse(ticketStatusStr, out var parsedTs))
+                {
+                    ticketStatusCode = parsedTs;
+                }
+
+                bool isPriceChanged = (resp.TryGetProperty("IsPriceChanged", out var ipc) && ipc.ValueKind == JsonValueKind.True) ||
+                                      ticketStatusStr == "8" ||
+                                      ticketStatusStr.Equals("Price changed", StringComparison.OrdinalIgnoreCase);
+
+                if (ticketStatusStr.Equals("Pending", StringComparison.OrdinalIgnoreCase) || actualErrCode == 10)
                 {
                     isPending = true;
                 }
 
-                bool isPriceChanged = resp.TryGetProperty("IsPriceChanged", out var ipc) && ipc.ValueKind == JsonValueKind.True;
-                int ticketStatusCode = resp.TryGetProperty("TicketStatus", out var tsCode) && tsCode.ValueKind == JsonValueKind.Number ? tsCode.GetInt32() : -1;
+                if (isPriceChanged)
+                {
+                    isSuccess = false;
+                }
+
+                // ReturnBookingStatus and ReturnBookingMessage checks (for round-trip / return flights)
+                string? returnBookingStatus = resp.TryGetProperty("ReturnBookingStatus", out var rbsProp) ? rbsProp.GetString() : null;
+                string? returnBookingMessage = resp.TryGetProperty("ReturnBookingMessage", out var rbmProp) ? rbmProp.GetString() : null;
+
+                bool returnFailed = string.Equals(returnBookingStatus, "Failed", StringComparison.OrdinalIgnoreCase);
+                bool returnPending = string.Equals(returnBookingStatus, "Pending", StringComparison.OrdinalIgnoreCase);
+
+                if (returnPending)
+                {
+                    isPending = true;
+                }
+
                 bool ssrDenied = resp.TryGetProperty("SSRDenied", out var ssrDenNode) && ssrDenNode.ValueKind == JsonValueKind.True;
                 string? ssrMessage = resp.TryGetProperty("SSRMessage", out var ssrMsgNode) && ssrMsgNode.ValueKind == JsonValueKind.String ? ssrMsgNode.GetString() : null;
 
                 string pnr = resp.TryGetProperty("PNR", out var pnrProp) ? (pnrProp.ToString() ?? "") : "";
                 string bookingId = resp.TryGetProperty("BookingId", out var bIdProp) ? (bIdProp.ToString() ?? "") : "";
 
-                if ((isSuccess || isPending) && (!string.IsNullOrEmpty(pnr) || !string.IsNullOrEmpty(bookingId)))
+                if ((isSuccess || isPending) && (!string.IsNullOrEmpty(pnr) || !string.IsNullOrEmpty(bookingId)) && !isPriceChanged)
                 {
                     decimal totalFare = 0, baseFare = 0, tax = 0, netFare = 0, customerFare = 0, ssrFromResponse = 0m;
                     string airline = "", airlineCode = "", flightNumber = "", fromCity = "", toCity = "";
@@ -1402,7 +1456,10 @@ namespace PickNBook.Api.Controllers.Public
                             }
                         }
                     }
-                    var userIdStr = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "0";
+                    if (string.IsNullOrWhiteSpace(userIdStr) || userIdStr == "partner_api")
+                    {
+                        userIdStr = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value ?? "0";
+                    }
                     
                     var firstPax = request.Passengers?.FirstOrDefault();
                     string paxName = firstPax != null ? $"{firstPax.FirstName} {firstPax.LastName}" : "";
@@ -1455,15 +1512,19 @@ namespace PickNBook.Api.Controllers.Public
                         }
                     }
 
+                    string reservationStatus = isPending ? "Pending" : (returnFailed ? "PartialSuccess_ReturnFailed" : "Booked");
+
                     var reservation = new FlightReservation
                     {
                         BookingReference = $"FL-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}",
                         Pnr = pnr,
                         UserId = userIdStr,
-                        Status = isPending ? "Pending" : "Booked",
+                        Status = reservationStatus,
                         BookedAtUtc = DateTime.UtcNow,
                         SSRDenied = ssrDenied,
-                        SSRMessage = ssrMessage,
+                        SSRMessage = !string.IsNullOrEmpty(returnBookingMessage)
+                            ? $"Return Status: {returnBookingStatus}. {returnBookingMessage}. {ssrMessage ?? ""}".Trim()
+                            : ssrMessage,
                         
                         TraceId = resp.TryGetProperty("TraceId", out var newTraceId) && newTraceId.ValueKind == JsonValueKind.String ? newTraceId.GetString() ?? request.TraceId : request.TraceId,
                         ResultIndex = request.ResultIndex,
@@ -1652,19 +1713,22 @@ namespace PickNBook.Api.Controllers.Public
                     if (int.TryParse(userIdStr, out var callerId) && callerId > 0)
                     {
                         var user = await _dbContext.Users.FindAsync(callerId);
-                        if (user != null && user.Role == AuthRoles.Agent)
+                        bool isTicketed = isSuccess && !isPending && !isPriceChanged && (ticketStatusCode == 1 || ticketStatusStr == "1" || ticketStatusStr.Equals("Ticketed", StringComparison.OrdinalIgnoreCase));
+
+                        if (isTicketed && !returnFailed)
                         {
-                            if (isSuccess && !isPending && !isPriceChanged && ticketStatusCode == 1)
+                            if (user != null && user.Role == AuthRoles.Agent)
                             {
                                 await _walletService.DebitWalletForBookingAsync(callerId, totalFare, reservation.BookingReference, "Flight", $"Flight Booking LCC PNR {pnr}");
                             }
-                        }
-                        else if (user != null && user.Role == AuthRoles.User)
-                        {
-                            if (isSuccess && !isPending && !isPriceChanged && ticketStatusCode == 1)
+                            else if (user != null && user.Role == AuthRoles.User)
                             {
                                 await _userWalletService.DebitAsync(callerId, reservation.TotalPriceInr, "FlightBooking", reservation.BookingReference, $"Flight Booking LCC PNR {pnr}");
                             }
+                        }
+                        else if (isTicketed && returnFailed)
+                        {
+                            _logger.LogWarning("Outbound flight ticketed with PNR {Pnr}, but return leg failed ({Message}). Skipping automatic full wallet debit.", pnr, returnBookingMessage);
                         }
                     }
 
@@ -1733,7 +1797,30 @@ namespace PickNBook.Api.Controllers.Public
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting TicketLCC.");
+                _logger.LogError(ex, "Error getting TicketLCC. Attempting recovery via BookingDetails for TraceId {TraceId}.", proxyRequest.TraceId);
+
+                if (proxyRequest.TraceId > 0)
+                {
+                    try
+                    {
+                        var recDetails = await _srdvFlightService.GetBookingDetailsRawAsync(proxyRequest.TraceId);
+                        if (!string.IsNullOrWhiteSpace(recDetails))
+                        {
+                            using var rDoc = JsonDocument.Parse(recDetails);
+                            var rRoot = rDoc.RootElement;
+                            var bStatus = rRoot.TryGetProperty("BookingStatus", out var bsProp) ? bsProp.GetString() : null;
+                            if (!string.IsNullOrEmpty(bStatus))
+                            {
+                                return Ok(JsonNode.Parse(recDetails));
+                            }
+                        }
+                    }
+                    catch (Exception recEx)
+                    {
+                        _logger.LogWarning(recEx, "Recovery query to BookingDetails failed for TraceId {TraceId}", proxyRequest.TraceId);
+                    }
+                }
+
                 return StatusCode(500, new { message = "Failed to get TicketLCC.", error = ex.Message });
             }
         }
@@ -2686,13 +2773,32 @@ namespace PickNBook.Api.Controllers.Public
         }
 
 
-        [Authorize]
+        [AllowAnonymous]
+        [InjectClientIp]
         [HttpPost("SendChangeRequest")]
         [HttpPost("/v8/SendChangeRequest")]
         [HttpPost("/api/flight/v8/SendChangeRequest")]
         [HttpPost("/api/flight/srdv/SendChangeRequest")]
         public async Task<IActionResult> SendChangeRequest([FromBody] FlightSendChangeProxyRequestDto proxyRequest)
         {
+            string? currentUserId = null;
+            bool isPartnerApi = false;
+            if (Request.Headers.TryGetValue("Api-Token", out var apiTok) && !string.IsNullOrWhiteSpace(apiTok))
+            {
+                isPartnerApi = true;
+                currentUserId = "partner_api";
+            }
+            else if (User.Identity != null && User.Identity.IsAuthenticated)
+            {
+                currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                    ?? User.FindFirst("sub")?.Value
+                    ?? User.FindFirst("id")?.Value;
+            }
+            else
+            {
+                return Unauthorized(new { ErrorCode = 1, ErrorMessage = "Please login or provide a valid Api-Token header." });
+            }
+
             if (proxyRequest == null)
             {
                 return BadRequest(new { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." });
@@ -2723,9 +2829,14 @@ namespace PickNBook.Api.Controllers.Public
                 return BadRequest(new { ErrorCode = 1, ErrorMessage = "Remarks is required and must be between 1 and 2000 characters." });
             }
 
-            if (proxyRequest.Sectors == null || !proxyRequest.Sectors.Any())
+            if (!string.IsNullOrWhiteSpace(proxyRequest.ClientRefId) && proxyRequest.ClientRefId.Trim().Length > 200)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "At least one sector is required." });
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "ClientRefId cannot exceed 200 characters." });
+            }
+
+            if (proxyRequest.Sectors == null || !proxyRequest.Sectors.Any() || proxyRequest.Sectors.Count > 6)
+            {
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Between 1 and 6 sectors are required." });
             }
 
             foreach (var s in proxyRequest.Sectors)
@@ -2737,9 +2848,9 @@ namespace PickNBook.Api.Controllers.Public
                 }
             }
 
-            if (proxyRequest.TicketData == null || !proxyRequest.TicketData.Any())
+            if (proxyRequest.TicketData == null || !proxyRequest.TicketData.Any() || proxyRequest.TicketData.Count > 9)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "At least one passenger ticket is required in TicketData." });
+                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Between 1 and 9 passenger tickets are required in TicketData." });
             }
 
             foreach (var t in proxyRequest.TicketData)
@@ -2749,13 +2860,14 @@ namespace PickNBook.Api.Controllers.Public
                 {
                     return BadRequest(new { ErrorCode = 1, ErrorMessage = "Passenger FirstName and LastName are required (1-100 characters)." });
                 }
+                if (!string.IsNullOrEmpty(t.TicketId) && t.TicketId.Trim().Length > 100)
+                {
+                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "TicketId cannot exceed 100 characters." });
+                }
             }
 
             try
             {
-                var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                    ?? User.FindFirst("sub")?.Value
-                    ?? User.FindFirst("id")?.Value;
                 bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
 
                 var bookingIdStr = proxyRequest.BookingId.ToString();
@@ -2770,8 +2882,8 @@ namespace PickNBook.Api.Controllers.Public
                     return NotFound(new { ErrorCode = 1, ErrorMessage = "Flight reservation not found for the provided BookingId or PNR." });
                 }
 
-                // Strict Tenant Isolation / IDOR Protection
-                if (!isAdmin && !string.Equals(reservation.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
+                // Strict Tenant Isolation / IDOR Protection (for portal users/agents)
+                if (!isPartnerApi && !isAdmin && !string.Equals(reservation.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
                 {
                     return StatusCode(StatusCodes.Status403Forbidden, new { ErrorCode = 1, ErrorMessage = "Unauthorized: You do not have permission to modify or cancel this booking." });
                 }
@@ -2838,87 +2950,102 @@ namespace PickNBook.Api.Controllers.Public
                     
                     if (isSuccess)
                     {
+                        bool anyAccepted = false;
                         string changeRequestId = "";
                         if (resp.TryGetProperty("TicketCRInfo", out var crInfo) && crInfo.ValueKind == JsonValueKind.Array && crInfo.GetArrayLength() > 0)
                         {
-                            var firstCR = crInfo[0];
-                            if (firstCR.TryGetProperty("ChangeRequestId", out var crIdNode))
-                                changeRequestId = crIdNode.ToString();
-                        }
-                        
-                        var isPartial = false;
-                        var reqSectors = request.Sectors != null && request.Sectors.Any() ? System.Text.Json.JsonSerializer.Serialize(request.Sectors) : null;
-                        var reqTickets = request.TicketData != null && request.TicketData.Any() ? System.Text.Json.JsonSerializer.Serialize(request.TicketData) : null;
-
-                        if (request.Sectors != null && request.Sectors.Any() && request.Sectors.Count < reservation.Segments.Count)
-                            isPartial = true;
-                        if (request.TicketData != null && request.TicketData.Any() && request.TicketData.Count < reservation.SeatsBooked) // or passengers count
-                            isPartial = true;
-
-                        var cancelReq = new FlightCancellationRequest
-                        {
-                            FlightReservationId = reservation.Id,
-                            RequestDateUtc = DateTime.UtcNow,
-                            CancellationStatus = "Pending",
-                            CustomerRefundStatus = "Pending",
-                            AdminRefundStatus = "Pending",
-                            SrdvChangeRequestId = changeRequestId,
-                            SrdvBookingId = bookingIdStr,
-                            CustomerRemark = request.Remarks,
-                            IsPartialCancellation = isPartial,
-                            CancelledSectorsJson = reqSectors,
-                            CancelledPassengersJson = reqTickets
-                        };
-                        
-                        reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
-                        
-                        _dbContext.FlightCancellationRequests.Add(cancelReq);
-                        
-                        // Create BookingCancellation as the single financial ledger
-                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
-                        var bookingCancellation = new BookingCancellation
-                        {
-                            BookingReference = reservation.BookingReference,
-                            BookingType = "Flight",
-                            PaymentId = payment?.Id ?? 0,
-                            UserId = reservation.UserId,
-                            OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
-                            SupplierAmount = reservation.NetFareInr,
-                            MarkupAmount = reservation.MarkupAmount,
-                            DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
-                            ConvenienceFee = payment?.ConvenienceFee ?? 0m,
-                            SrdvChangeRequestId = changeRequestId,
-                            Status = "Pending",
-                            SrdvStatus = "Pending",
-                            CreatedAtUtc = DateTime.UtcNow
-                        };
-                        _dbContext.BookingCancellations.Add(bookingCancellation);
-                        
-                        await _dbContext.SaveChangesAsync();
-
-                        // Additive In-App Notifications (Step 4: Flight Cancellation Requested)
-                        try
-                        {
-                            var inAppNotificationService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.IInAppNotificationService>();
-                            if (inAppNotificationService != null)
+                            foreach (var row in crInfo.EnumerateArray())
                             {
-                                await inAppNotificationService.CreateNotificationAsync(
-                                    type: "Cancellation",
-                                    category: "Customer",
-                                    title: "Flight Cancellation Requested",
-                                    message: $"Your cancellation request for flight booking ({reservation.BookingReference}) has been submitted and is processing.",
-                                    severity: "Info",
-                                    referenceType: "FlightReservation",
-                                    referenceId: reservation.BookingReference,
-                                    actionUrl: $"/bookings/{reservation.BookingReference}",
-                                    idempotencyKey: $"CANCEL_REQ_FLIGHT_{reservation.BookingReference}_{changeRequestId}",
-                                    targetUserId: reservation.UserId
-                                );
+                                var rowStatus = row.TryGetProperty("Status", out var stProp) && stProp.ValueKind == JsonValueKind.Number ? stProp.GetInt32() : 0;
+                                if (rowStatus == 1) // Pending / Accepted
+                                {
+                                    anyAccepted = true;
+                                    if (string.IsNullOrEmpty(changeRequestId) && row.TryGetProperty("ChangeRequestId", out var crIdNode))
+                                        changeRequestId = crIdNode.ToString();
+                                }
                             }
                         }
-                        catch (Exception inAppEx)
+
+                        if (anyAccepted)
                         {
-                            _logger.LogWarning(inAppEx, "Failed to create in-app notification for flight cancellation request {BookingReference}. Non-fatal.", reservation.BookingReference);
+                            var isPartial = false;
+                            var reqSectors = request.Sectors != null && request.Sectors.Any() ? System.Text.Json.JsonSerializer.Serialize(request.Sectors) : null;
+                            var reqTickets = request.TicketData != null && request.TicketData.Any() ? System.Text.Json.JsonSerializer.Serialize(request.TicketData) : null;
+
+                            if (request.Sectors != null && request.Sectors.Any() && request.Sectors.Count < reservation.Segments.Count)
+                                isPartial = true;
+                            if (request.TicketData != null && request.TicketData.Any() && request.TicketData.Count < reservation.SeatsBooked)
+                                isPartial = true;
+
+                            var cancelReq = new FlightCancellationRequest
+                            {
+                                FlightReservationId = reservation.Id,
+                                RequestDateUtc = DateTime.UtcNow,
+                                CancellationStatus = "Pending",
+                                CustomerRefundStatus = "Pending",
+                                AdminRefundStatus = "Pending",
+                                SrdvChangeRequestId = changeRequestId,
+                                SrdvBookingId = bookingIdStr,
+                                CustomerRemark = request.Remarks,
+                                IsPartialCancellation = isPartial,
+                                CancelledSectorsJson = reqSectors,
+                                CancelledPassengersJson = reqTickets
+                            };
+                            
+                            reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
+                            
+                            _dbContext.FlightCancellationRequests.Add(cancelReq);
+                            
+                            // Create BookingCancellation as the single financial ledger
+                            var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                            var bookingCancellation = new BookingCancellation
+                            {
+                                BookingReference = reservation.BookingReference,
+                                BookingType = "Flight",
+                                PaymentId = payment?.Id ?? 0,
+                                UserId = reservation.UserId,
+                                OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
+                                SupplierAmount = reservation.NetFareInr,
+                                MarkupAmount = reservation.MarkupAmount,
+                                DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
+                                ConvenienceFee = payment?.ConvenienceFee ?? 0m,
+                                SrdvChangeRequestId = changeRequestId,
+                                Status = "Pending",
+                                SrdvStatus = "Pending",
+                                CreatedAtUtc = DateTime.UtcNow
+                            };
+                            _dbContext.BookingCancellations.Add(bookingCancellation);
+                            
+                            await _dbContext.SaveChangesAsync();
+
+                            // Additive In-App Notifications
+                            try
+                            {
+                                var inAppNotificationService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.IInAppNotificationService>();
+                                if (inAppNotificationService != null)
+                                {
+                                    await inAppNotificationService.CreateNotificationAsync(
+                                        type: "Cancellation",
+                                        category: "Customer",
+                                        title: "Flight Cancellation Requested",
+                                        message: $"Your cancellation request for flight booking ({reservation.BookingReference}) has been submitted and is processing.",
+                                        severity: "Info",
+                                        referenceType: "FlightReservation",
+                                        referenceId: reservation.BookingReference,
+                                        actionUrl: $"/bookings/{reservation.BookingReference}",
+                                        idempotencyKey: $"CANCEL_REQ_FLIGHT_{reservation.BookingReference}_{changeRequestId}",
+                                        targetUserId: reservation.UserId
+                                    );
+                                }
+                            }
+                            catch (Exception inAppEx)
+                            {
+                                _logger.LogWarning(inAppEx, "Failed to create in-app notification for flight cancellation request {BookingReference}. Non-fatal.", reservation.BookingReference);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("SendChangeRequest returned 0 ErrorCode but all tickets were refused (Status 4) for BookingId {BookingId}", proxyRequest.BookingId);
                         }
                     }
                 }
@@ -2937,13 +3064,22 @@ namespace PickNBook.Api.Controllers.Public
             }
         }
 
-        [Authorize]
+        [AllowAnonymous]
+        [InjectClientIp]
         [HttpPost("GetCancelStatus")]
         [HttpPost("/v8/GetCancelStatus")]
         [HttpPost("/api/flight/v8/GetCancelStatus")]
         [HttpPost("/api/flight/srdv/GetCancelStatus")]
         public async Task<IActionResult> GetCancelStatus([FromBody] FlightGetCancelStatusProxyRequestDto proxyRequest)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTok) || string.IsNullOrWhiteSpace(apiTok))
+            {
+                if (User.Identity == null || !User.Identity.IsAuthenticated)
+                {
+                    return Unauthorized(new { ErrorCode = 1, ErrorMessage = "Please login or provide a valid Api-Token header." });
+                }
+            }
+
             if (proxyRequest == null || proxyRequest.ChangeRequestId <= 0)
             {
                 return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive ChangeRequestId is required." });
@@ -2957,6 +3093,51 @@ namespace PickNBook.Api.Controllers.Public
                 };
                 var responseRaw = await _srdvFlightService.GetCancelStatusRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
+                var root = doc.RootElement;
+
+                // Synchronize real-time DB state
+                var crIdStr = proxyRequest.ChangeRequestId.ToString();
+                var cancelReq = await _dbContext.FlightCancellationRequests
+                    .Include(c => c.FlightReservation)
+                    .FirstOrDefaultAsync(c => c.SrdvChangeRequestId == crIdStr);
+
+                if (cancelReq != null)
+                {
+                    var cStatus = root.TryGetProperty("CancellationStatus", out var csProp) ? csProp.GetString() : null;
+                    var rStatus = root.TryGetProperty("RefundStatus", out var rsProp) ? rsProp.GetString() : null;
+                    var isSettled = root.TryGetProperty("IsSettled", out var isProp) && isProp.ValueKind == JsonValueKind.True;
+                    decimal? refundAmt = root.TryGetProperty("RefundAmount", out var raProp) && raProp.ValueKind == JsonValueKind.Number ? raProp.GetDecimal() : null;
+                    decimal? cancelCharge = root.TryGetProperty("CancellationCharge", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number ? ccProp.GetDecimal() : null;
+
+                    if (!string.IsNullOrEmpty(cStatus)) cancelReq.CancellationStatus = cStatus;
+                    if (refundAmt.HasValue) cancelReq.AdminRefundAmountInr = refundAmt.Value;
+                    if (cancelCharge.HasValue) cancelReq.AdminCancellationChargeInr = cancelCharge.Value;
+
+                    if (cancelReq.FlightReservation != null)
+                    {
+                        if (cStatus == "CANCELLED")
+                        {
+                            cancelReq.FlightReservation.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
+                            cancelReq.FlightReservation.CancelledAtUtc ??= DateTime.UtcNow;
+                        }
+                        else if (cStatus == "FAILED")
+                        {
+                            cancelReq.FlightReservation.Status = "Booked";
+                        }
+                    }
+
+                    var bookingCanc = await _dbContext.BookingCancellations.FirstOrDefaultAsync(b => b.SrdvChangeRequestId == crIdStr);
+                    if (bookingCanc != null)
+                    {
+                        if (!string.IsNullOrEmpty(cStatus)) bookingCanc.SrdvStatus = cStatus;
+                        if (refundAmt.HasValue) bookingCanc.SupplierRefundAmount = refundAmt.Value;
+                        if (cancelCharge.HasValue) bookingCanc.SupplierCancellationCharge = cancelCharge.Value;
+                        if (isSettled) bookingCanc.Status = "Settled";
+                    }
+
+                    await _dbContext.SaveChangesAsync();
+                }
+
                 return Ok(doc.RootElement.Clone());
             }
             catch (HttpRequestException ex)
@@ -2971,10 +3152,22 @@ namespace PickNBook.Api.Controllers.Public
             }
         }
 
-        [Authorize]
+        [AllowAnonymous]
+        [InjectClientIp]
         [HttpPost("GetCancellationCharges")]
+        [HttpPost("/v8/GetCancellationCharges")]
+        [HttpPost("/api/flight/v8/GetCancellationCharges")]
+        [HttpPost("/api/flight/srdv/GetCancellationCharges")]
         public async Task<IActionResult> GetCancellationCharges([FromBody] FlightGetCancellationChargesProxyRequestDto proxyRequest)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTok) || string.IsNullOrWhiteSpace(apiTok))
+            {
+                if (User.Identity == null || !User.Identity.IsAuthenticated)
+                {
+                    return Unauthorized(new { ErrorCode = 1, ErrorMessage = "Please login or provide a valid Api-Token header." });
+                }
+            }
+
             try
             {
                 if (proxyRequest == null || proxyRequest.TraceId <= 0)
@@ -3053,10 +3246,41 @@ namespace PickNBook.Api.Controllers.Public
                 var tokenHeader = Request.Headers["X-SRDV-Token"].FirstOrDefault()
                                   ?? Request.Headers["Api-Token"].FirstOrDefault();
 
-                if (string.IsNullOrWhiteSpace(tokenHeader) || !string.Equals(tokenHeader, _srdvSettings.ApiToken, StringComparison.Ordinal))
+                bool isTokenValid = !string.IsNullOrWhiteSpace(tokenHeader) && string.Equals(tokenHeader, _srdvSettings.ApiToken, StringComparison.Ordinal);
+
+                // Per SRDV v8 Spec: "The header is left out when the token on file is no longer valid — treat such a call as unverified and read BookingDetails instead."
+                if (!isTokenValid)
                 {
-                    _logger.LogWarning("SRDV Booking Callback failed authentication for BookingId: {BookingId}. Missing or invalid token.", proxyRequest.BookingId);
-                    return Unauthorized(new { message = "Unauthorized: Invalid or missing X-SRDV-Token header." });
+                    _logger.LogWarning("SRDV Booking Callback unverified (missing or mismatched X-SRDV-Token) for BookingId: {BookingId}, TraceId: {TraceId}. Attempting verification via BookingDetails.", proxyRequest.BookingId, proxyRequest.TraceId);
+
+                    if (proxyRequest.TraceId > 0)
+                    {
+                        try
+                        {
+                            var verifiedDetails = await _srdvFlightService.GetBookingDetailsRawAsync(proxyRequest.TraceId);
+                            if (!string.IsNullOrWhiteSpace(verifiedDetails))
+                            {
+                                using var vDoc = JsonDocument.Parse(verifiedDetails);
+                                var vRoot = vDoc.RootElement;
+                                var vStatus = vRoot.TryGetProperty("BookingStatus", out var bsProp) ? bsProp.GetString() : null;
+                                if (!string.IsNullOrEmpty(vStatus))
+                                {
+                                    _logger.LogInformation("Successfully verified booking state via BookingDetails for TraceId {TraceId}: Status {Status}", proxyRequest.TraceId, vStatus);
+                                    isTokenValid = true;
+                                }
+                            }
+                        }
+                        catch (Exception recEx)
+                        {
+                            _logger.LogWarning(recEx, "BookingDetails verification query failed for TraceId {TraceId}", proxyRequest.TraceId);
+                        }
+                    }
+
+                    if (!isTokenValid)
+                    {
+                        _logger.LogWarning("SRDV Booking Callback failed verification for BookingId: {BookingId}.", proxyRequest.BookingId);
+                        return Unauthorized(new { message = "Unauthorized: Invalid or missing X-SRDV-Token header." });
+                    }
                 }
 
                 // 2. Event verification: branch on "BOOKING_STATUS"
@@ -3128,6 +3352,22 @@ namespace PickNBook.Api.Controllers.Public
                             var wasAlreadyBooked = string.Equals(reservation.Status, "Booked", StringComparison.OrdinalIgnoreCase);
                             reservation.Status = "Booked";
 
+                            // If reservation was pending and wallet was not debited yet, settle wallet now
+                            if (!wasAlreadyBooked && reservation.WalletPaidAmount == 0 && int.TryParse(reservation.UserId, out var callerId) && callerId > 0)
+                            {
+                                var user = await _dbContext.Users.FindAsync(callerId);
+                                if (user != null && user.Role == AuthRoles.Agent && reservation.SupplierTotalFare > 0)
+                                {
+                                    await _walletService.DebitWalletForBookingAsync(callerId, reservation.SupplierTotalFare, reservation.BookingReference, "Flight", $"Flight Booking LCC PNR {pnr}");
+                                    reservation.WalletPaidAmount = reservation.SupplierTotalFare;
+                                }
+                                else if (user != null && user.Role == AuthRoles.User && reservation.TotalPriceInr > 0)
+                                {
+                                    await _userWalletService.DebitAsync(callerId, reservation.TotalPriceInr, "FlightBooking", reservation.BookingReference, $"Flight Booking LCC PNR {pnr}");
+                                    reservation.WalletPaidAmount = reservation.TotalPriceInr;
+                                }
+                            }
+
                             // Dispatch final email only once if newly confirmed
                             if (!wasAlreadyBooked)
                             {
@@ -3192,11 +3432,11 @@ namespace PickNBook.Api.Controllers.Public
 
                         case "FAILED":
                         case "ABORTED":
-                            // Idempotency: only credit wallet if it wasn't already marked as Failed
+                            // Idempotency: only credit wallet if it was actually charged
                             var wasAlreadyFailed = string.Equals(reservation.Status, "Failed", StringComparison.OrdinalIgnoreCase);
                             reservation.Status = "Failed";
 
-                            if (!wasAlreadyFailed && reservation.SupplierTotalFare > 0)
+                            if (!wasAlreadyFailed && reservation.WalletPaidAmount > 0)
                             {
                                 if (int.TryParse(reservation.UserId, out var agentId) && agentId > 0)
                                 {
@@ -3204,10 +3444,11 @@ namespace PickNBook.Api.Controllers.Public
                                     if (user != null && user.Role == AuthRoles.Agent)
                                     {
                                         await _walletService.CreditWalletForRefundAsync(agentId,
-                                            reservation.SupplierTotalFare,
+                                            reservation.WalletPaidAmount,
                                             reservation.BookingReference,
                                             "Flight",
                                             $"Refund - Failed Flight Booking PNR {reservation.Pnr}");
+                                        reservation.WalletPaidAmount = 0m;
                                     }
                                 }
                             }
@@ -3238,19 +3479,36 @@ namespace PickNBook.Api.Controllers.Public
                             break;
                     }
 
-                    // Sync Passenger Ticket Numbers & Details
+                    // Handle CancellationStatus if sent in callback
+                    if (!string.IsNullOrEmpty(proxyRequest.CancellationStatus) && !string.Equals(proxyRequest.CancellationStatus, "NOT_CANCELLED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (string.Equals(proxyRequest.CancellationStatus, "FULLY_CANCELLED", StringComparison.OrdinalIgnoreCase))
+                        {
+                            reservation.Status = "Cancelled";
+                            reservation.CancelledAtUtc ??= DateTime.UtcNow;
+                        }
+                        else if (string.Equals(proxyRequest.CancellationStatus, "PARTIALLY_CANCELLED", StringComparison.OrdinalIgnoreCase))
+                        {
+                            reservation.Status = "Partially Cancelled";
+                        }
+                    }
+
+                    // Sync Passenger Ticket Numbers & Details in booking order
                     if (proxyRequest.Passengers != null && proxyRequest.Passengers.Any())
                     {
                         var reservationPassengers = await _dbContext.FlightReservationPassengers
                             .Where(p => p.FlightReservationId == reservation.Id)
                             .ToListAsync();
 
-                        foreach (var incPax in proxyRequest.Passengers)
+                        for (int i = 0; i < proxyRequest.Passengers.Count; i++)
                         {
-                            var dbPax = reservationPassengers.FirstOrDefault(p => 
-                                string.Equals(p.FirstName, incPax.FirstName, StringComparison.OrdinalIgnoreCase) && 
-                                string.Equals(p.LastName, incPax.LastName, StringComparison.OrdinalIgnoreCase));
-                            
+                            var incPax = proxyRequest.Passengers[i];
+                            var dbPax = (i < reservationPassengers.Count)
+                                ? reservationPassengers[i]
+                                : reservationPassengers.FirstOrDefault(p =>
+                                    string.Equals(p.FirstName, incPax.FirstName, StringComparison.OrdinalIgnoreCase) &&
+                                    string.Equals(p.LastName, incPax.LastName, StringComparison.OrdinalIgnoreCase));
+
                             if (dbPax != null)
                             {
                                 if (!string.IsNullOrEmpty(incPax.TicketNumber))

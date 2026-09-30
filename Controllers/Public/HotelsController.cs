@@ -572,26 +572,42 @@ namespace PickNBook.Api.Controllers
         // =====================================
         // BOOK ROOM (SRDV v8 INTEGRATION)
         // =====================================
+        [HttpPost("/v8/Book")]
         [HttpPost("BookRoom")]
         [HttpPost("book-room")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> PostBookRoom([FromBody] HotelBookRequestDto request)
         {
+            string? userId = null;
+            bool isPartnerApiCall = false;
+            if (Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) && !string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                isPartnerApiCall = true;
+            }
+            else if (_currentUserService.IsAuthenticated())
+            {
+                userId = _currentUserService.GetUserOrGuestId();
+            }
+            else
+            {
+                return Unauthorized(PickNBookBookRoomResponseDto.CreateError(401, "Please login or provide a valid Api-Token header to book hotel room."));
+            }
+
             if (request == null)
             {
-                return BadRequest(ValidationErrorDto.Create("Request body cannot be null.", "request"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, "Request body cannot be null."));
             }
 
             if (request.TraceId <= 0)
             {
-                return BadRequest(ValidationErrorDto.Create("TraceId is required and must be a positive integer.", "TraceId"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, "TraceId is required and must be a positive integer."));
             }
 
             var resultIndex = request.ResultIndex?.Trim();
             if (string.IsNullOrWhiteSpace(resultIndex) || resultIndex.Length < 3 || resultIndex.Length > 500)
             {
-                return BadRequest(ValidationErrorDto.Create("ResultIndex is required and must be between 3 and 500 characters.", "ResultIndex"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, "ResultIndex is required and must be between 3 and 500 characters.", request.TraceId));
             }
 
             // If flat passenger fields provided, auto-populate HotelRoomsDetails
@@ -626,13 +642,13 @@ namespace PickNBook.Api.Controllers
 
             if (request.HotelRoomsDetails == null || request.HotelRoomsDetails.Count == 0 || request.HotelRoomsDetails.Count > 9)
             {
-                return BadRequest(ValidationErrorDto.Create("HotelRoomsDetails is required and must contain between 1 and 9 rooms.", "HotelRoomsDetails"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, "HotelRoomsDetails is required and must contain between 1 and 9 rooms.", request.TraceId));
             }
 
             bool hasPassengers = request.HotelRoomsDetails.Any(r => r.HotelPassenger != null && r.HotelPassenger.Count > 0);
             if (!hasPassengers)
             {
-                return BadRequest(ValidationErrorDto.Create("At least one room must carry passengers.", "HotelRoomsDetails"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, "At least one room must carry passengers.", request.TraceId));
             }
 
             // Validate all passenger details across all rooms
@@ -641,7 +657,7 @@ namespace PickNBook.Api.Controllers
             {
                 if (r.HotelPassenger != null && r.HotelPassenger.Count > 12)
                 {
-                    return BadRequest(ValidationErrorDto.Create($"Room {roomIdx}: Maximum 12 passengers allowed per room.", $"HotelRoomsDetails[{roomIdx - 1}]"));
+                    return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, $"Room {roomIdx}: Maximum 12 passengers allowed per room.", request.TraceId));
                 }
 
                 if (r.HotelPassenger != null)
@@ -659,7 +675,7 @@ namespace PickNBook.Api.Controllers
                         var firstNameVal = TravelValidationHelper.ValidateName(pax.FirstName, isRequired: true, $"Room {roomIdx} Guest {pIdx + 1} first name");
                         if (!firstNameVal.IsValid)
                         {
-                            return BadRequest(ValidationErrorDto.Create(firstNameVal.ErrorMessage!, $"HotelRoomsDetails[{roomIdx - 1}].HotelPassenger[{pIdx}].FirstName"));
+                            return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, firstNameVal.ErrorMessage!, request.TraceId));
                         }
                         pax.FirstName = pax.FirstName.Trim();
 
@@ -669,7 +685,7 @@ namespace PickNBook.Api.Controllers
                             var lastNameVal = TravelValidationHelper.ValidateName(pax.LastName, isRequired: false, $"Room {roomIdx} Guest {pIdx + 1} last name");
                             if (!lastNameVal.IsValid)
                             {
-                                return BadRequest(ValidationErrorDto.Create(lastNameVal.ErrorMessage!, $"HotelRoomsDetails[{roomIdx - 1}].HotelPassenger[{pIdx}].LastName"));
+                                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, lastNameVal.ErrorMessage!, request.TraceId));
                             }
                             pax.LastName = pax.LastName.Trim();
                         }
@@ -684,7 +700,7 @@ namespace PickNBook.Api.Controllers
                             var panVal = TravelValidationHelper.ValidatePan(pax.PAN);
                             if (!panVal.IsValid)
                             {
-                                return BadRequest(ValidationErrorDto.Create(panVal.ErrorMessage!, $"HotelRoomsDetails[{roomIdx - 1}].HotelPassenger[{pIdx}].PAN"));
+                                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, panVal.ErrorMessage!, request.TraceId));
                             }
                         }
                     }
@@ -703,13 +719,13 @@ namespace PickNBook.Api.Controllers
             var emailVal = TravelValidationHelper.ValidateEmail(rawEmail, isRequired: true, "Primary guest email");
             if (!emailVal.IsValid)
             {
-                return BadRequest(ValidationErrorDto.Create(emailVal.ErrorMessage!, "GuestEmail", "INVALID_EMAIL"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, emailVal.ErrorMessage!, request.TraceId));
             }
 
             var phoneVal = TravelValidationHelper.ValidateMobileNumber(rawPhone, isRequired: true, "Primary guest mobile number");
             if (!phoneVal.IsValid)
             {
-                return BadRequest(ValidationErrorDto.Create(phoneVal.ErrorMessage!, "GuestPhone", "INVALID_PHONE"));
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, phoneVal.ErrorMessage!, request.TraceId));
             }
 
             string guestEmail = emailVal.CleanedEmail;
@@ -726,13 +742,17 @@ namespace PickNBook.Api.Controllers
 
             _logger.LogInformation("Book room POST request received: TraceId: {TraceId}, ResultIndex: {ResultIndex}, Guest: {GuestName}", request.TraceId, resultIndex, guestName);
 
-            string userId = _currentUserService.GetUserOrGuestId();
             if (string.IsNullOrWhiteSpace(userId)) userId = "guest_user";
 
             // Lookup locked pre-blocked price from HotelBlockedPrices table established by BlockRoom
             var traceIdStr = request.TraceId.ToString();
             var blockedPrice = await _dbContext.HotelBlockedPrices
                 .FirstOrDefaultAsync(h => h.ResultIndex == resultIndex && h.TraceId == traceIdStr);
+
+            if (blockedPrice == null && isPartnerApiCall)
+            {
+                return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, "No active room block found for this TraceId and ResultIndex. Rooms must be blocked via BlockRoom before booking.", request.TraceId));
+            }
 
             decimal quotedPrice = blockedPrice?.OfferedPrice ?? request.Price;
             decimal publishedPrice = blockedPrice?.OfferedPrice ?? request.Price;
@@ -765,7 +785,7 @@ namespace PickNBook.Api.Controllers
                 var validationResult = await ValidateCouponInternalAsync(request.CouponCode, markedUpPrice, userId, cinDate);
                 if (!validationResult.IsValid)
                 {
-                    return BadRequest(ValidationErrorDto.Create($"Coupon error: {validationResult.Message}", "CouponCode"));
+                    return BadRequest(PickNBookBookRoomResponseDto.CreateError(400, $"Coupon error: {validationResult.Message}", request.TraceId));
                 }
                 couponDiscount = validationResult.DiscountAmount;
                 couponApplied = validationResult.Coupon;
@@ -778,9 +798,9 @@ namespace PickNBook.Api.Controllers
                 var bRes = bookRes?.BookResult;
 
                 bool isConfirmed = bRes != null && bRes.Error.ErrorCode == 0 &&
-                                   (bRes.ResponseStatus == 1 || bRes.Status.Equals("Confirmed", StringComparison.OrdinalIgnoreCase));
+                                   (bRes.ResponseStatus == 1 || bRes.Status == 1 || string.Equals(bRes.HotelBookingStatus, "Confirmed", StringComparison.OrdinalIgnoreCase));
                 bool isPending = bRes != null && bRes.Error.ErrorCode == 0 &&
-                                 (bRes.ResponseStatus == 3 || bRes.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase));
+                                 (bRes.ResponseStatus == 3 || bRes.Status == 3 || string.Equals(bRes.HotelBookingStatus, "Pending", StringComparison.OrdinalIgnoreCase));
                 bool isSuccess = isConfirmed || isPending;
 
                 // If booking succeeded or is pending with SRDV supplier, save DB reservation record
@@ -796,8 +816,8 @@ namespace PickNBook.Api.Controllers
                         var reservation = new HotelReservation
                         {
                             BookingReference = bookingRef.Length > 40 ? bookingRef.Substring(0, 40) : bookingRef,
-                            ProviderBookingId = bRes.BookingId > 0 ? bRes.BookingId.ToString() : (!string.IsNullOrWhiteSpace(bRes.BookingRefNo) ? bRes.BookingRefNo : null),
-                            SrdvBookingId = bRes.BookingId > 0 ? bRes.BookingId.ToString() : (!string.IsNullOrWhiteSpace(bRes.BookingRefNo) ? bRes.BookingRefNo : null),
+                            ProviderBookingId = bRes.BookingId.HasValue && bRes.BookingId.Value > 0 ? bRes.BookingId.Value.ToString() : (!string.IsNullOrWhiteSpace(bRes.BookingRefNo) ? bRes.BookingRefNo : null),
+                            SrdvBookingId = bRes.BookingId.HasValue && bRes.BookingId.Value > 0 ? bRes.BookingId.Value.ToString() : (!string.IsNullOrWhiteSpace(bRes.BookingRefNo) ? bRes.BookingRefNo : null),
                             ConfirmationNo = bRes.ConfirmationNo,
                             InvoiceNumber = bRes.InvoiceNumber,
                             UserId = userId,
@@ -1037,15 +1057,29 @@ namespace PickNBook.Api.Controllers
         // =====================================
         // HOTEL CANCEL (SRDV v8 INTEGRATION)
         // =====================================
+        [HttpPost("/v8/Cancel")]
         [HttpPost("Cancel")]
         [HttpPost("cancel-booking")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> PostCancel([FromBody] HotelCancelBookingRequestDto request)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) || string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                if (!_currentUserService.IsAuthenticated())
+                {
+                    return Unauthorized(HotelCancelResponseDto.CreateError(401, "Please login or provide a valid Api-Token header to cancel booking."));
+                }
+            }
+
             if (request == null || request.TraceId <= 0)
             {
-                return BadRequest(new { message = "TraceId is required and must be a positive integer." });
+                return BadRequest(HotelCancelResponseDto.CreateError(400, "TraceId is required and must be a positive integer.", request?.TraceId));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Remarks) || request.Remarks.Trim().Length > 2000)
+            {
+                return BadRequest(HotelCancelResponseDto.CreateError(400, "Remarks is required and must be between 1 and 2000 characters.", request.TraceId));
             }
 
             _logger.LogInformation("Hotel cancel POST request received for TraceId {TraceId}", request.TraceId);
@@ -1100,7 +1134,7 @@ namespace PickNBook.Api.Controllers
 
                 if (cancelRes.Error != null && cancelRes.Error.ErrorCode != 0)
                 {
-                    return StatusCode(502, cancelRes);
+                    return Ok(cancelRes);
                 }
 
                 return Ok(cancelRes);
@@ -1108,7 +1142,7 @@ namespace PickNBook.Api.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Provider failure during hotel cancel for TraceId {TraceId}", request.TraceId);
-                return StatusCode(500, new { message = ex.Message });
+                return Ok(HotelCancelResponseDto.CreateError(500, $"Provider failure during hotel cancel: {ex.Message}", request.TraceId));
             }
         }
 

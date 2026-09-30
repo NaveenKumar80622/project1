@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PickNBook.Api.Models.Config;
 using PickNBook.Api.Models.DTOs;
@@ -17,6 +18,7 @@ namespace PickNBook.Api.Services
         private readonly HttpClient _httpClient;
         private readonly SrdvSettings _settings;
         private readonly IMemoryCache _cache;
+        private readonly ILogger<SrdvFlightService>? _logger;
         
         private string? _tokenId;
         private DateTime _tokenExpiry;
@@ -26,13 +28,14 @@ namespace PickNBook.Api.Services
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         };
 
-        public SrdvFlightService(HttpClient httpClient, IOptions<SrdvSettings> settings, IMemoryCache cache)
+        public SrdvFlightService(HttpClient httpClient, IOptions<SrdvSettings> settings, IMemoryCache cache, ILogger<SrdvFlightService>? logger = null)
         {
             _httpClient = httpClient;
             _httpClient.Timeout = TimeSpan.FromSeconds(180); // Increased from 60s to handle long GDS searches and seat map queries
             _httpClient.DefaultRequestHeaders.ExpectContinue = false;
             _settings = settings.Value;
             _cache = cache;
+            _logger = logger;
 
             if (!string.IsNullOrEmpty(_settings.ApiToken))
             {
@@ -578,16 +581,17 @@ namespace PickNBook.Api.Services
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
+            var cleanRefId = (request.RefID ?? string.Empty).Trim();
+            if (cleanRefId.Length > 100)
+            {
+                cleanRefId = cleanRefId.Substring(0, 100);
+            }
+
             var requestBody = new
             {
                 TraceId = long.TryParse(request.TraceId, out var tid) ? tid : 0L,
                 ResultIndex = request.ResultIndex?.Trim() ?? string.Empty,
-                RefID = request.RefID ?? string.Empty,
-                Module = string.IsNullOrWhiteSpace(request.Module) ? "b2c" : request.Module,
-                BookedById = request.BookedById,
-                BookedByName = request.BookedByName ?? string.Empty,
-                CustomerFare = request.CustomerFare,
-                ReturnCustomerFare = request.ReturnCustomerFare,
+                RefID = cleanRefId,
                 Passengers = request.Passengers?.Select(p => {
                     string gender = string.IsNullOrWhiteSpace(p.Gender) ? "" : p.Gender.ToString();
                     string title = (p.Title ?? "").Trim();
@@ -655,10 +659,61 @@ namespace PickNBook.Api.Services
                 requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
             }
 
-            var response = await _httpClient.SendAsync(requestMessage);
-            response.EnsureSuccessStatusCode();
+            try
+            {
+                var response = await _httpClient.SendAsync(requestMessage);
+                response.EnsureSuccessStatusCode();
+                return await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "HTTP exception during TicketLCC for TraceId {TraceId}. Attempting recovery via BookingDetails.", request.TraceId);
 
-            return await response.Content.ReadAsStringAsync();
+                // Money committed rule: balance is checked and held; verify authoritative state before failing
+                if (long.TryParse(request.TraceId, out var recTid) && recTid > 0)
+                {
+                    try
+                    {
+                        var recoveryDetails = await GetBookingDetailsRawAsync(recTid);
+                        if (!string.IsNullOrWhiteSpace(recoveryDetails))
+                        {
+                            using var rDoc = JsonDocument.Parse(recoveryDetails);
+                            var rRoot = rDoc.RootElement;
+                            var bStatus = rRoot.TryGetProperty("BookingStatus", out var bsProp) ? bsProp.GetString() : null;
+                            if (!string.IsNullOrEmpty(bStatus))
+                            {
+                                _logger?.LogInformation("Successfully recovered flight booking state for TraceId {TraceId}: Status {Status}", recTid, bStatus);
+                                return recoveryDetails;
+                            }
+                        }
+                    }
+                    catch (Exception recEx)
+                    {
+                        _logger?.LogWarning(recEx, "BookingDetails recovery query failed for TraceId {TraceId}.", request.TraceId);
+                    }
+                }
+
+                // If completely uncontactable, return structured pending response per Money Committed rule
+                var fallbackPending = new
+                {
+                    Error = new
+                    {
+                        ErrorCode = 10,
+                        ErrorMessage = "Booking request submitted to airline but confirmation is pending. Authoritative state will be settled via BookingDetails."
+                    },
+                    TraceId = long.TryParse(request.TraceId, out var fTid) ? fTid : 0L,
+                    ResponseStatus = "1",
+                    SrdvType = "MixAPI",
+                    Response = new
+                    {
+                        Status = "1",
+                        TicketStatus = "Pending",
+                        BookingId = 0,
+                        PNR = ""
+                    }
+                };
+                return JsonSerializer.Serialize(fallbackPending);
+            }
         }
 
         public async Task<string> HoldGDSRawAsync(HoldGDSRequestDto request)
