@@ -3174,8 +3174,7 @@ namespace PickNBook.Api.Services
             dto.ManagementFeeTax = SafeGetDecimal(sp, "ManagementFeeTax");
             dto.GSTClaimableAmount = SafeGetDecimal(sp, "GSTClaimableAmount");
             dto.Currency = SafeGetString(sp, "Currency", "INR");
-            dto.Strikethrough = SafeGetDecimal(sp, "Strikethrough");
-            dto.StrikeThrough = SafeGetDecimal(sp, "StrikeThrough", dto.Strikethrough);
+            dto.Strikethrough = SafeGetDecimal(sp, "Strikethrough", SafeGetDecimal(sp, "StrikeThrough"));
             return dto;
         }
 

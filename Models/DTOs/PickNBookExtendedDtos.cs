@@ -460,7 +460,6 @@ namespace PickNBook.Api.Models.DTOs
         public decimal GSTClaimableAmount { get; set; }
         public string Currency { get; set; } = "INR";
         public decimal Strikethrough { get; set; }
-        public decimal StrikeThrough { get; set; }
     }
 
     public class CommercialDto
