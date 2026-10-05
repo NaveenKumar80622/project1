@@ -36,7 +36,13 @@ public class FeaturedOffersController : BaseApiController
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email))
         {
-            return BadRequest("Email is required.");
+            return BadRequest(new { isSuccess = false, message = "Email is required." });
+        }
+
+        var email = request.Email.Trim();
+        if (!System.Text.RegularExpressions.Regex.IsMatch(email, @"^[^@\s]+@[^@\s]+\.[^@\s]+$"))
+        {
+            return BadRequest(new { isSuccess = false, message = "Please enter a valid email address." });
         }
 
         var response = await _subscriptionService.SubscribeAsync(request);
