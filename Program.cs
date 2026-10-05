@@ -466,12 +466,14 @@ using (var scope = app.Services.CreateScope())
     var alterStatements = new[]
     {
         "ALTER TABLE `place_search_stats` ADD COLUMN `CityCode` varchar(50) NULL;",
-        "ALTER TABLE `place_search_stats` ADD COLUMN `LastSelectedAtUtc` datetime(6) NULL;"
+        "ALTER TABLE `place_search_stats` ADD COLUMN `LastSelectedAtUtc` datetime(6) NULL;",
+        "CREATE TABLE IF NOT EXISTS `user_passkeys` (`Id` INT NOT NULL AUTO_INCREMENT, `UserId` INT NOT NULL, `CredentialId` VARBINARY(255) NOT NULL, `PublicKey` LONGBLOB NOT NULL, `UserHandle` VARBINARY(64) NULL, `SignatureCounter` INT UNSIGNED NOT NULL DEFAULT 0, `CredType` VARCHAR(50) NOT NULL DEFAULT 'public-key', `AaGuid` CHAR(36) NULL, `DeviceName` VARCHAR(100) NULL, `CreatedAtUtc` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6), `LastUsedAtUtc` DATETIME(6) NULL, PRIMARY KEY (`Id`), UNIQUE KEY `IX_user_passkeys_CredentialId` (`CredentialId`), KEY `IX_user_passkeys_UserId` (`UserId`), CONSTRAINT `FK_user_passkeys_Users_UserId` FOREIGN KEY (`UserId`) REFERENCES `Users` (`Id`) ON DELETE CASCADE) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;",
+        "CREATE OR REPLACE VIEW `UserPasskeys` AS SELECT * FROM `user_passkeys`;"
     };
     foreach (var sql in alterStatements)
     {
         try { dbCtx.Database.ExecuteSqlRaw(sql); }
-        catch { /* column already exists - ignore */ }
+        catch { /* column/view already exists or handled - ignore */ }
     }
 }
 

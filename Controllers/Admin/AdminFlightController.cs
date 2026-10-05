@@ -10,6 +10,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PickNBook.Api.Helpers;
 using PickNBook.Api.Models.Entities;
+using PickNBook.Api.Extensions;
 
 namespace PickNBook.Api.Controllers
 {
@@ -1612,13 +1613,37 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPost("ApiBalanceCheck")]
-        public async Task<IActionResult> ApiBalanceCheck([FromBody] ApiBalanceRequestDto request)
+        public async Task<IActionResult> ApiBalanceCheck([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] ApiBalanceRequestDto? request = null)
         {
             try
             {
-                var responseRaw = await srdvFlightService.GetApiBalanceCheckRawAsync(request);
-                using var doc = JsonDocument.Parse(responseRaw);
-                return Ok(doc.RootElement.Clone());
+                request ??= new ApiBalanceRequestDto();
+                if (string.IsNullOrWhiteSpace(request.EndUserIp) || request.EndUserIp == "127.0.0.1")
+                {
+                    request.EndUserIp = HttpContext.GetClientIpAddress();
+                }
+
+                var res = await srdvFlightService.GetApiBalanceCheckAsync(request);
+
+                if (res.Error != null && res.Error.ErrorCode == 6000)
+                {
+                    return StatusCode(StatusCodes.Status401Unauthorized, new
+                    {
+                        message = "SRDV master account does not exist or Api-Token is invalid.",
+                        error = res.Error
+                    });
+                }
+
+                if (res.Error != null && res.Error.ErrorCode != 0)
+                {
+                    return StatusCode(StatusCodes.Status502BadGateway, new
+                    {
+                        message = "Failed to fetch SRDV Flight API balance check from upstream supplier.",
+                        error = res.Error
+                    });
+                }
+
+                return Ok(res);
             }
             catch (Exception ex)
             {
@@ -1628,13 +1653,37 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPost("ApiBalanceLog")]
-        public async Task<IActionResult> ApiBalanceLog([FromBody] ApiBalanceRequestDto request)
+        public async Task<IActionResult> ApiBalanceLog([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] ApiBalanceRequestDto? request = null)
         {
             try
             {
-                var responseRaw = await srdvFlightService.GetApiBalanceLogRawAsync(request);
-                using var doc = JsonDocument.Parse(responseRaw);
-                return Ok(doc.RootElement.Clone());
+                request ??= new ApiBalanceRequestDto();
+                if (string.IsNullOrWhiteSpace(request.EndUserIp) || request.EndUserIp == "127.0.0.1")
+                {
+                    request.EndUserIp = HttpContext.GetClientIpAddress();
+                }
+
+                var res = await srdvFlightService.GetApiBalanceLogAsync(request);
+
+                if (res.Error != null && res.Error.ErrorCode == 6000)
+                {
+                    return StatusCode(StatusCodes.Status401Unauthorized, new
+                    {
+                        message = "SRDV master account does not exist or Api-Token is invalid.",
+                        error = res.Error
+                    });
+                }
+
+                if (res.Error != null && res.Error.ErrorCode != 0)
+                {
+                    return StatusCode(StatusCodes.Status502BadGateway, new
+                    {
+                        message = "Failed to fetch SRDV Flight API balance log from upstream supplier.",
+                        error = res.Error
+                    });
+                }
+
+                return Ok(res);
             }
             catch (Exception ex)
             {

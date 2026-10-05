@@ -11,6 +11,7 @@ public class UpsertBlogCategoryRequest
     public string? MetaKeyword { get; set; }
     public string? MetaDescription { get; set; }
     public IFormFile? Image { get; set; }
+    public bool RemoveImage { get; set; } = false;
 }
 
 public class UpsertBlogSubCategoryRequest
@@ -23,4 +24,5 @@ public class UpsertBlogSubCategoryRequest
     public string? MetaKeyword { get; set; }
     public string? MetaDescription { get; set; }
     public IFormFile? Image { get; set; }
+    public bool RemoveImage { get; set; } = false;
 }

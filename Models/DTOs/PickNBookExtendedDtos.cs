@@ -1188,13 +1188,13 @@ namespace PickNBook.Api.Models.DTOs
     public class BalanceRequestDto
     {
         [JsonPropertyName("endUserIp")]
-        public string EndUserIp { get; set; } = "127.0.0.1";
+        public string? EndUserIp { get; set; } = "127.0.0.1";
         [JsonPropertyName("clientId")]
-        public string ClientId { get; set; } = string.Empty;
+        public string? ClientId { get; set; } = string.Empty;
         [JsonPropertyName("userName")]
-        public string UserName { get; set; } = string.Empty;
+        public string? UserName { get; set; } = string.Empty;
         [JsonPropertyName("password")]
-        public string Password { get; set; } = string.Empty;
+        public string? Password { get; set; } = string.Empty;
     }
 
     public class BalanceResponseDto
@@ -1202,50 +1202,90 @@ namespace PickNBook.Api.Models.DTOs
         [JsonPropertyName("Error")]
         public HotelSearchErrorDto Error { get; set; } = new();
 
+        [JsonPropertyName("CurrencyCode")]
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string? CurrencyCode { get; set; }
+
         [JsonPropertyName("Balance")]
-        public double Balance { get; set; }
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal Balance { get; set; }
 
         [JsonPropertyName("CreditLimit")]
-        public double CreditLimit { get; set; }
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal CreditLimit { get; set; }
+
+        [JsonPropertyName("HeldAmount")]
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal HeldAmount { get; set; }
+
+        [JsonPropertyName("AvailableBalance")]
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal AvailableBalance { get; set; }
+
+        [JsonIgnore]
+        public bool IsSuccess => Error == null || Error.ErrorCode == 0;
     }
 
     public class BalanceLogRequestDto
     {
         [JsonPropertyName("endUserIp")]
-        public string EndUserIp { get; set; } = "127.0.0.1";
+        public string? EndUserIp { get; set; } = "127.0.0.1";
         [JsonPropertyName("clientId")]
-        public string ClientId { get; set; } = string.Empty;
+        public string? ClientId { get; set; } = string.Empty;
         [JsonPropertyName("userName")]
-        public string UserName { get; set; } = string.Empty;
+        public string? UserName { get; set; } = string.Empty;
         [JsonPropertyName("password")]
-        public string Password { get; set; } = string.Empty;
+        public string? Password { get; set; } = string.Empty;
     }
 
     public class BalanceLogItemDto
     {
         [JsonPropertyName("ID")]
+        [JsonConverter(typeof(SafeIntConverter))]
         public int ID { get; set; }
+
         [JsonPropertyName("Date")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string Date { get; set; } = string.Empty;
+
         [JsonPropertyName("ClientID")]
-        public string ClientID { get; set; } = string.Empty;
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int ClientID { get; set; }
+
         [JsonPropertyName("ClientName")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string ClientName { get; set; } = string.Empty;
+
         [JsonPropertyName("Detail")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string Detail { get; set; } = string.Empty;
+
         [JsonPropertyName("Debit")]
-        public double Debit { get; set; }
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal Debit { get; set; }
+
         [JsonPropertyName("Credit")]
-        public double Credit { get; set; }
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal Credit { get; set; }
+
         [JsonPropertyName("Balance")]
-        public double Balance { get; set; }
+        [JsonConverter(typeof(SafeDecimalConverter))]
+        public decimal Balance { get; set; }
+
         [JsonPropertyName("Module")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string Module { get; set; } = string.Empty;
+
         [JsonPropertyName("TraceID")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string TraceID { get; set; } = string.Empty;
+
         [JsonPropertyName("RefID")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string RefID { get; set; } = string.Empty;
+
         [JsonPropertyName("UpdatedBy")]
+        [JsonConverter(typeof(SafeStringConverter))]
         public string UpdatedBy { get; set; } = string.Empty;
     }
 
@@ -1255,7 +1295,11 @@ namespace PickNBook.Api.Models.DTOs
         public HotelSearchErrorDto Error { get; set; } = new();
 
         [JsonPropertyName("Result")]
-        public System.Collections.Generic.List<BalanceLogItemDto> Result { get; set; } = new();
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public System.Collections.Generic.List<BalanceLogItemDto>? Result { get; set; }
+
+        [JsonIgnore]
+        public bool IsSuccess => Error == null || Error.ErrorCode == 0;
     }
     public class HotelPricingPreviewRequestDto
     {

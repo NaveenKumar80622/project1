@@ -15,6 +15,7 @@ namespace PickNBook.Api.Services.Implementations
         private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
         private readonly IInAppNotificationService? _inAppNotificationService;
         private readonly IWalletReservationService _walletReservationService;
+        private readonly IBackgroundJobQueue? _backgroundJobQueue;
         private static readonly ConcurrentDictionary<int, SemaphoreSlim> _paymentLocks = new();
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> _orderLocks = new();
 
@@ -25,7 +26,7 @@ namespace PickNBook.Api.Services.Implementations
             IServiceScopeFactory scopeFactory,
             PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
             IWalletReservationService walletReservationService)
-            : this(dbContext, cashfreeService, logger, scopeFactory, notificationService, null, walletReservationService)
+            : this(dbContext, cashfreeService, logger, scopeFactory, notificationService, null, walletReservationService, null)
         {
         }
 
@@ -37,6 +38,19 @@ namespace PickNBook.Api.Services.Implementations
             PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
             IInAppNotificationService? inAppNotificationService,
             IWalletReservationService walletReservationService)
+            : this(dbContext, cashfreeService, logger, scopeFactory, notificationService, inAppNotificationService, walletReservationService, null)
+        {
+        }
+
+        public PaymentService(
+            AppDbContext dbContext,
+            ICashfreeService cashfreeService,
+            ILogger<PaymentService> logger,
+            IServiceScopeFactory scopeFactory,
+            PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
+            IInAppNotificationService? inAppNotificationService,
+            IWalletReservationService walletReservationService,
+            IBackgroundJobQueue? backgroundJobQueue)
         {
             _dbContext = dbContext;
             _cashfreeService = cashfreeService;
@@ -45,6 +59,7 @@ namespace PickNBook.Api.Services.Implementations
             _notificationService = notificationService;
             _inAppNotificationService = inAppNotificationService;
             _walletReservationService = walletReservationService;
+            _backgroundJobQueue = backgroundJobQueue;
         }
 
         public async Task<Payment> CreatePaymentAsync(
@@ -638,8 +653,7 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (newStatus == PaymentStatus.Success)
                 {
-                    // Fulfillment will be picked up durably by FulfillmentRecoveryWorker 
-                    _logger.LogInformation("Payment {PaymentId} marked for durable fulfillment queue.", payment.Id);
+                    EnqueueImmediateFulfillment(payment.Id);
                 }
 
                 return true;
@@ -678,6 +692,11 @@ namespace PickNBook.Api.Services.Implementations
 
             if (payment.Status == PaymentStatus.Success)
             {
+                if (payment.FulfillmentStatus == "Pending" || string.IsNullOrEmpty(payment.FulfillmentStatus))
+                {
+                    EnqueueImmediateFulfillment(payment.Id);
+                }
+
                 return new PaymentVerificationResponse
                 {
                     PaymentReference = payment.PaymentReference,
@@ -688,7 +707,9 @@ namespace PickNBook.Api.Services.Implementations
                     Currency = payment.Currency,
                     PaymentMethod = payment.PaymentMethod,
                     PaidAt = payment.PaidAt,
-                    FailureReason = payment.FailureReason
+                    FailureReason = payment.FailureReason,
+                    FulfillmentStatus = payment.FulfillmentStatus,
+                    BookingReferenceId = payment.BookingReferenceId
                 };
             }
 
@@ -756,8 +777,7 @@ namespace PickNBook.Api.Services.Implementations
                 await UpdatePaymentStatusAsync(payment.Id, PaymentStatus.Success, cfPaymentId, paymentMethod);
                 payment = await _dbContext.Payments.FindAsync(payment.Id) ?? payment;
                 
-                // Fulfillment will be picked up durably by FulfillmentRecoveryWorker
-                _logger.LogInformation("Payment {PaymentId} marked for durable fulfillment queue via Verify API.", payment.Id);
+                EnqueueImmediateFulfillment(payment.Id);
             }
             else if (!isSuccess && hasFailedAttempt && payment.Status != PaymentStatus.Success && payment.Status != PaymentStatus.Failed)
             {
@@ -775,7 +795,9 @@ namespace PickNBook.Api.Services.Implementations
                 Currency = payment.Currency,
                 PaymentMethod = payment.PaymentMethod,
                 PaidAt = payment.PaidAt,
-                FailureReason = payment.FailureReason
+                FailureReason = payment.FailureReason,
+                FulfillmentStatus = payment.FulfillmentStatus,
+                BookingReferenceId = payment.BookingReferenceId
             };
         }
 
@@ -1102,6 +1124,43 @@ namespace PickNBook.Api.Services.Implementations
 
             _logger.LogWarning("Received refund webhook for unknown CashfreeRefundId {RefundId}", cashfreeRefundId);
             return false;
+        }
+
+        private void EnqueueImmediateFulfillment(int paymentId)
+        {
+            if (_backgroundJobQueue != null)
+            {
+                _backgroundJobQueue.QueueBackgroundWorkItem(async (sp, token) =>
+                {
+                    var orchestrator = sp.GetRequiredService<IBookingOrchestratorService>();
+                    try
+                    {
+                        await orchestrator.ProcessFulfillmentAsync(paymentId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Immediate background fulfillment failed for payment {PaymentId}", paymentId);
+                    }
+                });
+                _logger.LogInformation("Payment {PaymentId} queued for immediate background fulfillment.", paymentId);
+            }
+            else
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        using var scope = _scopeFactory.CreateScope();
+                        var orchestrator = scope.ServiceProvider.GetRequiredService<IBookingOrchestratorService>();
+                        await orchestrator.ProcessFulfillmentAsync(paymentId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Direct Task.Run fulfillment failed for payment {PaymentId}", paymentId);
+                    }
+                });
+                _logger.LogInformation("Payment {PaymentId} dispatched via Task.Run fallback for immediate fulfillment.", paymentId);
+            }
         }
     }
 }

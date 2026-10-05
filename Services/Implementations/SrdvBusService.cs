@@ -34,6 +34,10 @@ namespace PickNBook.Api.Services
         private DateTime _tokenExpiry;
         private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = null };
 
+        private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
+        private static DateTime GetNowIst() => DateTime.UtcNow.Add(IndiaOffset);
+        private static DateOnly GetTodayIst() => DateOnly.FromDateTime(GetNowIst());
+
         private static Dictionary<string, string>? _cityMapping;
         private static List<BusCityDto>? _busCitiesList;
         private static readonly object _lock = new object();
@@ -180,8 +184,7 @@ namespace PickNBook.Api.Services
                 return cachedResponse;
             }
 
-            var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
-            var todayIst = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone));
+            var todayIst = GetTodayIst();
             bool isSameDay = DateOnly.TryParseExact(request.DepartDate, new[] { "yyyy-MM-dd", "dd/MM/yyyy" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dDate) && dDate <= todayIst;
             var busCacheTtl = isSameDay ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(5);
 
@@ -322,8 +325,7 @@ namespace PickNBook.Api.Services
 
         public async Task<List<SrdvBusOfferDto>> SearchBusesAsync(string originId, string destinationId, string journeyDate)
         {
-            var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
-            var todayIst = DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone));
+            var todayIst = GetTodayIst();
             bool isSameDay = DateOnly.TryParseExact(journeyDate, new[] { "yyyy-MM-dd", "dd/MM/yyyy" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var jDate) && jDate <= todayIst;
             var busSearchTtl = isSameDay ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(5);
 
@@ -336,7 +338,7 @@ namespace PickNBook.Api.Services
             }
             
             // Dynamic Time Filtering for expired buses (cutoff at 15 minutes before departure)
-            var cutoffTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone).AddMinutes(15);
+            var cutoffTime = GetNowIst().AddMinutes(15);
             DateTime.TryParseExact(journeyDate, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out DateTime parsedJourneyDate);
 
             var validBuses = cachedBuses!.Where(bus => {
@@ -394,8 +396,7 @@ namespace PickNBook.Api.Services
 
                 if (json.TryGetProperty("Result", out var results) && results.ValueKind == JsonValueKind.Array)
                 {
-                    var istZone = TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
-                    var cutoffTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, istZone).AddMinutes(-5);
+                    var cutoffTime = GetNowIst().AddMinutes(-5);
                     DateTime.TryParseExact(journeyDate, "yyyy-MM-dd", null, System.Globalization.DateTimeStyles.None, out DateTime parsedJourneyDate);
 
                     foreach (var bus in results.EnumerateArray())
@@ -1273,17 +1274,65 @@ namespace PickNBook.Api.Services
             var v9Res = await CancelTicketV9Async(parsedTraceId, seats, remarks);
             return (v9Res.Success, v9Res.ErrorMessage ?? string.Empty, v9Res.CancellationCharge, v9Res.RefundAmount);
         }
-        public async Task<string> GetSrdvMasterWalletBalanceAsync(string endUserIp)
+        public async Task<SrdvMasterWalletBalanceResponseDto> GetSrdvMasterWalletBalanceAsync(string? endUserIp = null)
         {
-            var requestBody = new
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/Balance";
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
             {
-                EndUserIp = endUserIp,
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password
+                Content = new StringContent(string.Empty, System.Text.Encoding.UTF8, "application/json")
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Balance", requestBody, _jsonOptions);
+            if (!string.IsNullOrEmpty(ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
+            var rawJson = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return new SrdvMasterWalletBalanceResponseDto
+                {
+                    Error = new SrdvWalletErrorDto
+                    {
+                        ErrorCode = (int)response.StatusCode,
+                        ErrorMessage = $"HTTP {(int)response.StatusCode} from upstream SRDV: {rawJson}"
+                    }
+                };
+            }
+
+            try
+            {
+                var dto = JsonSerializer.Deserialize<SrdvMasterWalletBalanceResponseDto>(rawJson, _jsonOptions);
+                return dto ?? new SrdvMasterWalletBalanceResponseDto
+                {
+                    Error = new SrdvWalletErrorDto { ErrorCode = -1, ErrorMessage = "Null deserialization response from SRDV." }
+                };
+            }
+            catch (Exception ex)
+            {
+                return new SrdvMasterWalletBalanceResponseDto
+                {
+                    Error = new SrdvWalletErrorDto { ErrorCode = -1, ErrorMessage = $"Deserialization error: {ex.Message}. Raw: {rawJson}" }
+                };
+            }
+        }
+
+        public async Task<string> GetSrdvMasterWalletBalanceRawAsync(string? endUserIp = null)
+        {
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/Balance";
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(string.Empty, System.Text.Encoding.UTF8, "application/json")
+            };
+
+            if (!string.IsNullOrEmpty(ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
             return await response.Content.ReadAsStringAsync();
         }
 
@@ -1297,7 +1346,18 @@ namespace PickNBook.Api.Services
                 Password = Password
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/BalanceLog", requestBody, _jsonOptions);
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/BalanceLog";
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(requestBody, options: _jsonOptions)
+            };
+
+            if (!string.IsNullOrEmpty(ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
             return await response.Content.ReadAsStringAsync();
         }
 
