@@ -629,31 +629,6 @@ namespace PickNBook.Api.Services.Implementations
                         _logger.LogWarning("Cannot enqueue BusBookingFailed SMS for Payment {PaymentId}: No phone number available.", payment.Id);
                     }
 
-                    // 2. Enqueue Email notification if customer email is available
-                    var emailRecipient = !string.IsNullOrWhiteSpace(reservation.PassengerEmail) ? reservation.PassengerEmail.Trim() : (payment.UserId.Contains('@') ? payment.UserId : null);
-                    if (!string.IsNullOrWhiteSpace(emailRecipient))
-                    {
-                        await _notificationService.EnqueueAsync(
-                            eventType: "BusBookingFailed",
-                            channel: "Email",
-                            recipient: emailRecipient,
-                            templateKey: "BUS_BOOKING_FAILED",
-                            payload: new
-                            {
-                                Reason = cleanReason,
-                                Amount = payment.FinalPayableAmount,
-                                Reference = bookingRef,
-                                Var1 = bookingRef,
-                                Var2 = cleanReason
-                            },
-                            bookingId: bookingRef,
-                            userId: payment.UserId
-                        );
-                    }
-                    else
-                    {
-                        _logger.LogWarning("Cannot enqueue BusBookingFailed Email for Payment {PaymentId}: No valid email recipient available.", payment.Id);
-                    }
 
                     await _dbContext.SaveChangesAsync();
 
@@ -1088,13 +1063,6 @@ namespace PickNBook.Api.Services.Implementations
                         );
                     }
 
-                    await _notificationService.EnqueueAsync(
-                        eventType: "HotelBookingFailed",
-                        channel: "Email",
-                        recipient: reservation.GuestEmail ?? payment.UserId,
-                        templateKey: "HOTEL_BOOKING_FAILED",
-                        payload: new { Reason = cleanReason, Amount = payment.FinalPayableAmount, Reference = reservation.BookingReference }
-                    );
 
                     await _dbContext.SaveChangesAsync();
 
@@ -1496,13 +1464,6 @@ namespace PickNBook.Api.Services.Implementations
                     }
                 }
 
-                await _notificationService.EnqueueAsync(
-                    eventType: "FlightBookingFailed",
-                    channel: "Email",
-                    recipient: requestPassengers?.FirstOrDefault()?.Email ?? payment.UserId,
-                    templateKey: "FLIGHT_BOOKING_FAILED",
-                    payload: new { Reason = payment.FailureReason, Amount = payment.FinalPayableAmount }
-                );
 
                 var failedPhone = requestPassengers?.FirstOrDefault()?.ContactNo ?? "";
                 if (!string.IsNullOrWhiteSpace(failedPhone))
