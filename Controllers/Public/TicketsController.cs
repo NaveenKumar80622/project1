@@ -10,11 +10,13 @@ public class TicketsController : BaseApiController
 {
     private readonly ITicketEmailService _ticketEmailService;
     private readonly AppDbContext _context;
+    private readonly ILogger<TicketsController> _logger;
 
-    public TicketsController(ITicketEmailService ticketEmailService, AppDbContext context)
+    public TicketsController(ITicketEmailService ticketEmailService, AppDbContext context, ILogger<TicketsController> logger)
     {
         _ticketEmailService = ticketEmailService;
         _context = context;
+        _logger = logger;
     }
 
     // ================= SEND EMAIL =================
@@ -40,85 +42,167 @@ public class TicketsController : BaseApiController
     [HttpPost("fetch")]
     public async Task<IActionResult> FetchTicket([FromBody] FetchTicketRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request.Mobile) ||
-            string.IsNullOrWhiteSpace(request.Email) ||
-            string.IsNullOrWhiteSpace(request.BookingType))
+        var mobile = (request.Mobile ?? "").Trim();
+        var email = (request.Email ?? "").Trim().ToLower();
+        var type = (request.BookingType ?? "").Trim().ToLower();
+        var bookingRef = (request.BookingReference ?? "").Trim();
+
+        _logger.LogInformation("[TicketsController.Fetch] Request received: Mobile='{Mobile}', Email='{Email}', BookingType='{BookingType}' (normalized: '{Normalized}'), BookingRef='{BookingRef}', ActiveOnly={ActiveOnly}",
+            mobile, email, request.BookingType, type, bookingRef, request.ActiveOnly);
+
+        var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value 
+                     ?? User.FindFirst("sub")?.Value;
+
+        if (string.IsNullOrWhiteSpace(mobile) &&
+            string.IsNullOrWhiteSpace(email) &&
+            string.IsNullOrWhiteSpace(bookingRef) &&
+            string.IsNullOrWhiteSpace(userId))
         {
             return BadRequest(new
             {
                 success = false,
-                message = "Mobile, Email and bookingType are required"
+                message = "Mobile, Email, or BookingReference is required"
             });
         }
 
-        var now = DateTime.Now;
+        // IST Reference (UTC + 5:30)
+        var nowIst = DateTime.UtcNow.AddHours(5.5);
 
-        var mobile = request.Mobile?.Trim() ?? "";
-        var email = request.Email?.Trim().ToLower() ?? "";
-        var type = request.BookingType?.Trim().ToLower() ?? "";
+        // Precompute phone candidates in memory for EF Core index-friendly translation
+        var phoneCandidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(mobile))
+        {
+            phoneCandidates.Add(mobile);
+            var digits = new string(mobile.Where(char.IsDigit).ToArray());
+            if (!string.IsNullOrWhiteSpace(digits))
+            {
+                phoneCandidates.Add(digits);
+                var last10 = digits.Length >= 10 ? digits.Substring(digits.Length - 10) : digits;
+                phoneCandidates.Add(last10);
+                phoneCandidates.Add("+91" + last10);
+                phoneCandidates.Add("91" + last10);
+                phoneCandidates.Add("0" + last10);
+            }
+            phoneCandidates = phoneCandidates.Distinct().ToList();
+        }
+
+        bool hasPhone = phoneCandidates.Count > 0;
+        bool hasEmail = !string.IsNullOrWhiteSpace(email);
+        bool hasRef = !string.IsNullOrWhiteSpace(bookingRef);
+        bool hasUser = !string.IsNullOrWhiteSpace(userId);
+
+        // Standardized confirmed statuses
+        var busConfirmedStatuses = new[] { "SUCCESS", "Success", "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED" };
+        var flightConfirmedStatuses = new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Ticketed", "TICKETED", "Success", "SUCCESS", "Completed", "COMPLETED" };
+        var hotelConfirmedStatuses = new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED", "Success", "SUCCESS" };
 
         // ================= BUS TICKETS =================
         async Task<List<object>> GetBusTickets()
         {
-            var bookings = await _context.BusReservations
+            var query = _context.BusReservations
                 .Include(x => x.BusBooking)
-                .Where(x =>
-                    ((x.PassengerPhone ?? "").Trim() == mobile) &&
-                    ((x.PassengerEmail ?? "").Trim().ToLower() == email) &&
-                    x.Status != "Cancelled" &&
-                    x.Status != "Completed" &&
-                    x.Status != "Expired" &&
-                    x.Status != "Failed" &&
-                    x.BusBooking != null &&
-                    x.BusBooking.DepartureTime > now
-                )
-                .OrderByDescending(x => x.Id)
+                .Where(x => busConfirmedStatuses.Contains(x.Status) && x.BusBooking != null);
+
+            if (request.ActiveOnly)
+            {
+                query = query.Where(x => x.BusBooking!.DepartureTime >= nowIst);
+            }
+
+            if (hasRef)
+            {
+                query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef);
+            }
+            else if (hasUser)
+            {
+                query = query.Where(x => x.UserId == userId);
+            }
+            else if (hasPhone && hasEmail)
+            {
+                query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone) && 
+                    (string.IsNullOrEmpty(x.PassengerEmail) || x.PassengerEmail.ToLower() == email));
+            }
+            else if (hasPhone)
+            {
+                query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone));
+            }
+            else if (hasEmail)
+            {
+                query = query.Where(x => x.PassengerEmail != null && x.PassengerEmail.ToLower() == email);
+            }
+
+            var bookings = await query
+                .OrderByDescending(x => x.BusBooking!.DepartureTime)
                 .ToListAsync();
 
-            var result = new List<object>();
+            _logger.LogInformation("[TicketsController.Fetch] Table: BusReservations. Matched {Count} records.", bookings.Count);
 
+            if (!bookings.Any()) return new List<object>();
+
+            // Batch load passengers (Avoid N+1)
+            var bookingIds = bookings.Select(b => b.Id).ToList();
+            var allPassengers = await _context.BusReservationPassengers
+                .Where(p => bookingIds.Contains(p.BusReservationId) && !p.IsCancelled)
+                .ToListAsync();
+            var passengersByBooking = allPassengers.ToLookup(p => p.BusReservationId);
+
+            var result = new List<object>();
             foreach (var booking in bookings)
             {
-                var passengers = await _context.BusReservationPassengers
-                    .Where(p => p.BusReservationId == booking.Id)
-                    .ToListAsync();
+                var dep = booking.BusBooking!.DepartureTime;
+                var arr = booking.BusBooking.ArrivalTime;
+                var totalMinutes = (int)Math.Max(0, (arr - dep).TotalMinutes);
+                var durationStr = $"{totalMinutes / 60}h {totalMinutes % 60:D2}m";
+
+                var boardingName = !string.IsNullOrWhiteSpace(booking.BoardingPointName) 
+                    ? booking.BoardingPointName 
+                    : booking.BusBooking.BoardingPoint;
+
+                var boardingTimeStr = booking.BoardingPointTime.HasValue 
+                    ? booking.BoardingPointTime.Value.ToString("HH:mm") 
+                    : dep.ToString("HH:mm");
+
+                var droppingName = !string.IsNullOrWhiteSpace(booking.DroppingPointName) 
+                    ? booking.DroppingPointName 
+                    : booking.BusBooking.DroppingPoint;
+
+                var droppingTimeStr = booking.DroppingPointTime.HasValue 
+                    ? booking.DroppingPointTime.Value.ToString("HH:mm") 
+                    : arr.ToString("HH:mm");
+
+                var paxList = passengersByBooking[booking.Id].ToList();
 
                 result.Add(new
                 {
                     bookingReference = booking.BookingReference,
                     ticketType = "bus",
-
-                    providerName = booking.BusBooking!.OperatorName,
+                    pnr = booking.Pnr,
+                    ticketNumber = booking.SrdvTicketNo ?? "",
+                    providerName = booking.BusBooking.OperatorName,
                     tripNumber = booking.BusBooking.BusNumber,
                     busType = booking.BusBooking.BusType,
-
                     fromCity = booking.BusBooking.FromCity,
                     toCity = booking.BusBooking.ToCity,
-
-                    departureTime = booking.BusBooking.DepartureTime,
-                    arrivalTime = booking.BusBooking.ArrivalTime,
-
-                    duration = $"{(booking.BusBooking.ArrivalTime - booking.BusBooking.DepartureTime).Hours}h {((booking.BusBooking.ArrivalTime - booking.BusBooking.DepartureTime).Minutes):D2}m",
-
+                    departureTime = dep,
+                    arrivalTime = arr,
+                    duration = durationStr,
                     boardingPoint = new
                     {
-                        name = booking.BusBooking.BoardingPoint,
-                        time = booking.BusBooking.DepartureTime.ToString("HH:mm")
+                        name = boardingName,
+                        time = boardingTimeStr
                     },
-
                     droppingPoint = new
                     {
-                        name = booking.BusBooking.DroppingPoint,
-                        time = booking.BusBooking.ArrivalTime.ToString("HH:mm")
+                        name = droppingName,
+                        time = droppingTimeStr
                     },
-
-                    passengers = passengers.Select(p => new
+                    passengers = paxList.Select(p => new
                     {
                         fullName = p.FullName,
                         seatNumber = p.SeatNumber,
+                        gender = p.Gender,
                         age = p.Age
                     }),
-
+                    seatsBooked = booking.SeatsBooked > 0 ? booking.SeatsBooked : paxList.Count,
                     status = booking.Status,
                     totalFare = booking.TotalPriceInr
                 });
@@ -130,39 +214,95 @@ public class TicketsController : BaseApiController
         // ================= FLIGHT TICKETS =================
         async Task<List<object>> GetFlightTickets()
         {
-            var bookings = await _context.FlightReservations
-                .Where(x =>
-                    ((x.PassengerPhone ?? "").Trim() == mobile) &&
-                    ((x.PassengerEmail ?? "").Trim().ToLower() == email) &&
-                    x.Status != "Cancelled" &&
-                    x.Status != "Completed" &&
-                    x.Status != "Expired" &&
-                    x.Status != "Failed" &&
-                    true &&
-                    x.DepartureTime > now
-                )
-                .OrderByDescending(x => x.Id)
+            var query = _context.FlightReservations
+                .Include(x => x.Segments)
+                .Where(x => flightConfirmedStatuses.Contains(x.Status));
+
+            if (request.ActiveOnly)
+            {
+                query = query.Where(x => x.DepartureTime >= nowIst);
+            }
+
+            if (hasRef)
+            {
+                query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef || x.GdsPnr == bookingRef);
+            }
+            else if (hasUser)
+            {
+                query = query.Where(x => x.UserId == userId);
+            }
+            else if (hasPhone && hasEmail)
+            {
+                query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone) && 
+                    (string.IsNullOrEmpty(x.PassengerEmail) || x.PassengerEmail.ToLower() == email));
+            }
+            else if (hasPhone)
+            {
+                query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone));
+            }
+            else if (hasEmail)
+            {
+                query = query.Where(x => x.PassengerEmail != null && x.PassengerEmail.ToLower() == email);
+            }
+
+            var bookings = await query
+                .OrderByDescending(x => x.DepartureTime)
                 .ToListAsync();
 
-            var result = new List<object>();
+            _logger.LogInformation("[TicketsController.Fetch] Table: FlightReservations. Matched {Count} records.", bookings.Count);
 
+            if (!bookings.Any()) return new List<object>();
+
+            // Batch load passengers (Avoid N+1)
+            var bookingIds = bookings.Select(b => b.Id).ToList();
+            var allPassengers = await _context.FlightReservationPassengers
+                .Where(p => bookingIds.Contains(p.FlightReservationId) && !p.IsCancelled)
+                .ToListAsync();
+            var passengersByBooking = allPassengers.ToLookup(p => p.FlightReservationId);
+
+            var result = new List<object>();
             foreach (var booking in bookings)
             {
-                var passengers = await _context.FlightReservationPassengers
-                    .Where(p => p.FlightReservationId == booking.Id)
-                    .ToListAsync();
+                var dep = booking.DepartureTime;
+                var arr = booking.ArrivalTime;
+                var totalMinutes = (int)Math.Max(0, (arr - dep).TotalMinutes);
+                var durationStr = $"{totalMinutes / 60}h {totalMinutes % 60:D2}m";
+
+                var paxList = passengersByBooking[booking.Id].ToList();
 
                 result.Add(new
                 {
-                    booking.BookingReference,
+                    bookingReference = booking.BookingReference,
                     ticketType = "flight",
+                    pnr = !string.IsNullOrWhiteSpace(booking.Pnr) ? booking.Pnr : booking.GdsPnr ?? "",
+                    gdsPnr = booking.GdsPnr ?? "",
+                    airline = booking.Airline,
+                    flightNumber = booking.FlightNumber,
+                    travelClass = booking.TravelClass,
                     fromCity = booking.FromCity,
                     toCity = booking.ToCity,
-                    departureTime = booking.DepartureTime,
-                    passengers = passengers.Select(p => new
+                    departureTime = dep,
+                    arrivalTime = arr,
+                    duration = durationStr,
+                    segments = booking.Segments.OrderBy(s => s.SegmentIndicator).Select(s => new
                     {
-                        p.FullName,
-                        p.SeatNumber
+                        segmentId = s.Id,
+                        airline = s.Airline,
+                        flightNumber = s.FlightNumber,
+                        fromCity = s.FromCity,
+                        toCity = s.ToCity,
+                        departureTime = s.DepartureTime,
+                        arrivalTime = s.ArrivalTime,
+                        duration = $"{s.Duration / 60}h {s.Duration % 60:D2}m",
+                        pnr = s.Pnr
+                    }),
+                    passengers = paxList.Select(p => new
+                    {
+                        fullName = p.FullName,
+                        seatNumber = p.SeatNumber,
+                        ticketNumber = p.TicketNumber ?? "",
+                        passengerType = p.PassengerType,
+                        gender = p.Gender
                     }),
                     status = booking.Status,
                     totalFare = booking.TotalPriceInr
@@ -172,46 +312,122 @@ public class TicketsController : BaseApiController
             return result;
         }
 
-        List<object> tickets = new();
+        // ================= HOTEL TICKETS =================
+        async Task<List<object>> GetHotelTickets()
+        {
+            var query = _context.HotelReservations
+                .Where(x => hotelConfirmedStatuses.Contains(x.Status));
+
+            if (request.ActiveOnly)
+            {
+                query = query.Where(x => x.CheckOutDate >= nowIst.Date);
+            }
+
+            if (hasRef)
+            {
+                query = query.Where(x => x.BookingReference == bookingRef || x.ProviderBookingId == bookingRef || x.ConfirmationNo == bookingRef);
+            }
+            else if (hasUser)
+            {
+                query = query.Where(x => x.UserId == userId);
+            }
+            else if (hasPhone && hasEmail)
+            {
+                query = query.Where(x => phoneCandidates.Contains(x.GuestPhone) && 
+                    (string.IsNullOrEmpty(x.GuestEmail) || x.GuestEmail.ToLower() == email));
+            }
+            else if (hasPhone)
+            {
+                query = query.Where(x => phoneCandidates.Contains(x.GuestPhone));
+            }
+            else if (hasEmail)
+            {
+                query = query.Where(x => x.GuestEmail.ToLower() == email);
+            }
+
+            var bookings = await query
+                .OrderByDescending(x => x.CheckInDate)
+                .ToListAsync();
+
+            _logger.LogInformation("[TicketsController.Fetch] Table: HotelReservations. Matched {Count} records.", bookings.Count);
+
+            if (!bookings.Any()) return new List<object>();
+
+            var result = new List<object>();
+            foreach (var booking in bookings)
+            {
+                result.Add(new
+                {
+                    bookingReference = booking.BookingReference,
+                    ticketType = "hotel",
+                    confirmationNo = booking.ConfirmationNo ?? booking.ProviderBookingId ?? "",
+                    hotelName = booking.HotelName,
+                    city = !string.IsNullOrWhiteSpace(booking.CityCode) ? booking.CityCode : "Hotel Stay",
+                    checkInDate = booking.CheckInDate,
+                    checkOutDate = booking.CheckOutDate,
+                    roomType = !string.IsNullOrWhiteSpace(booking.RoomTypeName) ? booking.RoomTypeName : "Standard Room",
+                    rooms = booking.Rooms,
+                    adults = booking.Adults,
+                    children = booking.Children,
+                    guestName = booking.GuestName,
+                    guestEmail = booking.GuestEmail,
+                    guestPhone = booking.GuestPhone,
+                    status = booking.Status,
+                    totalFare = booking.TotalPrice > 0 ? booking.TotalPrice : (booking.B2CFinalFare > 0 ? booking.B2CFinalFare : booking.Price)
+                });
+            }
+
+            return result;
+        }
+
+        var tickets = new List<object>();
 
         if (type == "bus")
         {
-            tickets = await GetBusTickets();
+            tickets.AddRange(await GetBusTickets());
         }
         else if (type == "flight")
         {
-            tickets = await GetFlightTickets();
+            tickets.AddRange(await GetFlightTickets());
+        }
+        else if (type == "hotel")
+        {
+            tickets.AddRange(await GetHotelTickets());
+        }
+        else if (string.IsNullOrEmpty(type) || type == "all")
+        {
+            tickets.AddRange(await GetBusTickets());
+            tickets.AddRange(await GetFlightTickets());
+            tickets.AddRange(await GetHotelTickets());
         }
         else
         {
             return BadRequest(new
             {
                 success = false,
-                message = "Invalid bookingType"
+                message = "Invalid bookingType. Valid types are: bus, flight, hotel, all."
             });
         }
 
-        // 🔁 fallback (if no tickets found in selected type)
-        if (!tickets.Any())
-        {
-            tickets = type == "bus"
-                ? await GetFlightTickets()
-                : await GetBusTickets();
-        }
+        _logger.LogInformation("[TicketsController.Fetch] Execution complete. TotalTickets={Count}, FinalTicketTypes=[{Types}]",
+            tickets.Count, string.Join(", ", tickets.Select(t => ((dynamic)t).ticketType?.ToString() ?? "unknown")));
 
         if (!tickets.Any())
         {
             return Ok(new
             {
                 success = false,
-                message = "No active booking found"
+                message = "No active booking found",
+                tickets = new List<object>(),
+                totalCount = 0
             });
         }
 
         return Ok(new
         {
             success = true,
-            tickets = tickets
+            tickets = tickets,
+            totalCount = tickets.Count
         });
     }
 }
