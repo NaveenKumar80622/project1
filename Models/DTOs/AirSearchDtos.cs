@@ -760,16 +760,16 @@ namespace PickNBook.Api.Models.DTOs
     public class ApiBalanceRequestDto
     {
         [JsonPropertyName("EndUserIp")]
-        public string EndUserIp { get; set; } = string.Empty;
+        public string? EndUserIp { get; set; } = string.Empty;
 
         [JsonPropertyName("ClientId")]
-        public string ClientId { get; set; } = string.Empty;
+        public string? ClientId { get; set; } = string.Empty;
 
         [JsonPropertyName("UserName")]
-        public string UserName { get; set; } = string.Empty;
+        public string? UserName { get; set; } = string.Empty;
 
         [JsonPropertyName("Password")]
-        public string Password { get; set; } = string.Empty;
+        public string? Password { get; set; } = string.Empty;
 
         [JsonPropertyName("ApiToken")]
         public string? ApiToken { get; set; }

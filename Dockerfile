@@ -11,7 +11,8 @@ FROM mcr.microsoft.com/dotnet/aspnet:8.0-alpine AS runtime
  
 RUN apk add --no-cache \
     fontconfig \
-    ttf-dejavu
+    ttf-dejavu \
+    tzdata
  
 RUN adduser -D appuser
  

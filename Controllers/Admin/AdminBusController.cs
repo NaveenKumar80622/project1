@@ -2029,8 +2029,27 @@ namespace PickNBook.Api.Controllers
             try
             {
                 var ip = HttpContext.GetClientIpAddress();
-                var rawJson = await srdvBusService.GetSrdvMasterWalletBalanceAsync(ip);
-                return Content(rawJson, "application/json");
+                var balance = await srdvBusService.GetSrdvMasterWalletBalanceAsync(ip);
+
+                if (!balance.IsSuccess)
+                {
+                    if (balance.Error?.ErrorCode == 6000)
+                    {
+                        return StatusCode(StatusCodes.Status401Unauthorized, new
+                        {
+                            message = "SRDV master account does not exist or Api-Token is invalid.",
+                            error = balance.Error
+                        });
+                    }
+
+                    return StatusCode(StatusCodes.Status502BadGateway, new
+                    {
+                        message = "Failed to fetch SRDV master wallet balance from upstream supplier.",
+                        error = balance.Error
+                    });
+                }
+
+                return Ok(balance);
             }
             catch (Exception ex)
             {

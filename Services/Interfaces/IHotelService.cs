@@ -44,8 +44,8 @@ namespace PickNBook.Api.Services
         Task<PickNBookBlockRoomResponseDto> BlockRoomAsync(BlockRoomRequestDto request);
         Task<PickNBookBookRoomResponseDto> BookRoomAsync(HotelBookRequestDto request);
         Task<SendChangeResponseDto> CancelRoomAsync(HotelCancelRequestDto request);
-        Task<BalanceResponseDto> GetBalanceAsync(BalanceRequestDto request);
-        Task<BalanceLogResponseDto> GetBalanceLogAsync(BalanceLogRequestDto request);
+        Task<BalanceResponseDto> GetBalanceAsync(BalanceRequestDto? request = null);
+        Task<BalanceLogResponseDto> GetBalanceLogAsync(BalanceLogRequestDto? request = null);
         Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(long traceId);
         Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(HotelBookingDetailsRequestDto request);
         Task<HotelCancelResponseDto> CancelBookingAsync(long traceId, string remarks);

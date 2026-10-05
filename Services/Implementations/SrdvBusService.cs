@@ -1274,17 +1274,65 @@ namespace PickNBook.Api.Services
             var v9Res = await CancelTicketV9Async(parsedTraceId, seats, remarks);
             return (v9Res.Success, v9Res.ErrorMessage ?? string.Empty, v9Res.CancellationCharge, v9Res.RefundAmount);
         }
-        public async Task<string> GetSrdvMasterWalletBalanceAsync(string endUserIp)
+        public async Task<SrdvMasterWalletBalanceResponseDto> GetSrdvMasterWalletBalanceAsync(string? endUserIp = null)
         {
-            var requestBody = new
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/Balance";
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
             {
-                EndUserIp = endUserIp,
-                ClientId = ClientId,
-                UserName = UserName,
-                Password = Password
+                Content = new StringContent(string.Empty, System.Text.Encoding.UTF8, "application/json")
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/Balance", requestBody, _jsonOptions);
+            if (!string.IsNullOrEmpty(ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
+            var rawJson = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                return new SrdvMasterWalletBalanceResponseDto
+                {
+                    Error = new SrdvWalletErrorDto
+                    {
+                        ErrorCode = (int)response.StatusCode,
+                        ErrorMessage = $"HTTP {(int)response.StatusCode} from upstream SRDV: {rawJson}"
+                    }
+                };
+            }
+
+            try
+            {
+                var dto = JsonSerializer.Deserialize<SrdvMasterWalletBalanceResponseDto>(rawJson, _jsonOptions);
+                return dto ?? new SrdvMasterWalletBalanceResponseDto
+                {
+                    Error = new SrdvWalletErrorDto { ErrorCode = -1, ErrorMessage = "Null deserialization response from SRDV." }
+                };
+            }
+            catch (Exception ex)
+            {
+                return new SrdvMasterWalletBalanceResponseDto
+                {
+                    Error = new SrdvWalletErrorDto { ErrorCode = -1, ErrorMessage = $"Deserialization error: {ex.Message}. Raw: {rawJson}" }
+                };
+            }
+        }
+
+        public async Task<string> GetSrdvMasterWalletBalanceRawAsync(string? endUserIp = null)
+        {
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/Balance";
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = new StringContent(string.Empty, System.Text.Encoding.UTF8, "application/json")
+            };
+
+            if (!string.IsNullOrEmpty(ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
             return await response.Content.ReadAsStringAsync();
         }
 
@@ -1298,7 +1346,18 @@ namespace PickNBook.Api.Services
                 Password = Password
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.BusBaseUrl}/BalanceLog", requestBody, _jsonOptions);
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/BalanceLog";
+            using var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+            {
+                Content = JsonContent.Create(requestBody, options: _jsonOptions)
+            };
+
+            if (!string.IsNullOrEmpty(ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
             return await response.Content.ReadAsStringAsync();
         }
 

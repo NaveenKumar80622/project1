@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 
 using PickNBook.Api.Helpers;
 using PickNBook.Api.Models.Entities;
+using PickNBook.Api.Extensions;
 
 namespace PickNBook.Api.Controllers;
 
@@ -599,18 +600,68 @@ public class AdminHotelController : AdminApiController
         return Ok(new { message = $"Hotel markup rule {id} deleted successfully." });
     }
     [HttpPost("Balance")]
-    public async Task<IActionResult> GetBalance([FromBody] BalanceRequestDto request)
+    public async Task<IActionResult> GetBalance([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] BalanceRequestDto? request = null)
     {
-        _logger.LogInformation("Admin Balance POST request received");
+        _logger.LogInformation("Admin Hotel Balance POST request received");
+        request ??= new BalanceRequestDto();
+        if (string.IsNullOrWhiteSpace(request.EndUserIp) || request.EndUserIp == "127.0.0.1")
+        {
+            request.EndUserIp = HttpContext.GetClientIpAddress();
+        }
+
         var res = await _hotelService.GetBalanceAsync(request);
+
+        if (res.Error != null && res.Error.ErrorCode == 6000)
+        {
+            return StatusCode(StatusCodes.Status401Unauthorized, new
+            {
+                message = "SRDV master account does not exist or Api-Token is invalid.",
+                error = res.Error
+            });
+        }
+
+        if (res.Error != null && res.Error.ErrorCode != 0)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                message = "Failed to fetch SRDV Hotel Balance from upstream supplier.",
+                error = res.Error
+            });
+        }
+
         return Ok(res);
     }
 
     [HttpPost("BalanceLog")]
-    public async Task<IActionResult> GetBalanceLog([FromBody] BalanceLogRequestDto request)
+    public async Task<IActionResult> GetBalanceLog([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] BalanceLogRequestDto? request = null)
     {
-        _logger.LogInformation("Admin BalanceLog POST request received");
+        _logger.LogInformation("Admin Hotel BalanceLog POST request received");
+        request ??= new BalanceLogRequestDto();
+        if (string.IsNullOrWhiteSpace(request.EndUserIp) || request.EndUserIp == "127.0.0.1")
+        {
+            request.EndUserIp = HttpContext.GetClientIpAddress();
+        }
+
         var res = await _hotelService.GetBalanceLogAsync(request);
+
+        if (res.Error != null && res.Error.ErrorCode == 6000)
+        {
+            return StatusCode(StatusCodes.Status401Unauthorized, new
+            {
+                message = "SRDV master account does not exist or Api-Token is invalid.",
+                error = res.Error
+            });
+        }
+
+        if (res.Error != null && res.Error.ErrorCode != 0)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new
+            {
+                message = "Failed to fetch SRDV Hotel BalanceLog from upstream supplier.",
+                error = res.Error
+            });
+        }
+
         return Ok(res);
     }
 

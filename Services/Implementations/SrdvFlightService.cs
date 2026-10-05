@@ -1044,25 +1044,25 @@ namespace PickNBook.Api.Services
 
             return await response.Content.ReadAsStringAsync();
         }
-        public async Task<string> GetApiBalanceCheckRawAsync(ApiBalanceRequestDto request)
+        public async Task<string> GetApiBalanceCheckRawAsync(ApiBalanceRequestDto? request = null)
         {
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
+            var endUserIp = string.IsNullOrWhiteSpace(request?.EndUserIp)
                 ? "127.0.0.1"
                 : request.EndUserIp.Trim();
 
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
+            var clientId = string.IsNullOrWhiteSpace(request?.ClientId)
                 ? _settings.ClientId
                 : request.ClientId.Trim();
 
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
+            var userName = string.IsNullOrWhiteSpace(request?.UserName)
                 ? _settings.UserName
                 : request.UserName.Trim();
 
-            var password = string.IsNullOrWhiteSpace(request.Password)
+            var password = string.IsNullOrWhiteSpace(request?.Password)
                 ? _settings.Password
                 : request.Password.Trim();
 
-            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+            var apiToken = string.IsNullOrWhiteSpace(request?.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
@@ -1074,7 +1074,8 @@ namespace PickNBook.Api.Services
                 Password = password
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/Balance")
+            var url = $"{_settings.FlightBaseUrl.TrimEnd('/')}/Balance";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
@@ -1090,25 +1091,25 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
-        public async Task<string> GetApiBalanceLogRawAsync(ApiBalanceRequestDto request)
+        public async Task<string> GetApiBalanceLogRawAsync(ApiBalanceRequestDto? request = null)
         {
-            var endUserIp = string.IsNullOrWhiteSpace(request.EndUserIp)
+            var endUserIp = string.IsNullOrWhiteSpace(request?.EndUserIp)
                 ? "127.0.0.1"
                 : request.EndUserIp.Trim();
 
-            var clientId = string.IsNullOrWhiteSpace(request.ClientId)
+            var clientId = string.IsNullOrWhiteSpace(request?.ClientId)
                 ? _settings.ClientId
                 : request.ClientId.Trim();
 
-            var userName = string.IsNullOrWhiteSpace(request.UserName)
+            var userName = string.IsNullOrWhiteSpace(request?.UserName)
                 ? _settings.UserName
                 : request.UserName.Trim();
 
-            var password = string.IsNullOrWhiteSpace(request.Password)
+            var password = string.IsNullOrWhiteSpace(request?.Password)
                 ? _settings.Password
                 : request.Password.Trim();
 
-            var apiToken = string.IsNullOrWhiteSpace(request.ApiToken)
+            var apiToken = string.IsNullOrWhiteSpace(request?.ApiToken)
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
@@ -1120,7 +1121,8 @@ namespace PickNBook.Api.Services
                 Password = password
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/BalanceLog")
+            var url = $"{_settings.FlightBaseUrl.TrimEnd('/')}/BalanceLog";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
@@ -1134,6 +1136,122 @@ namespace PickNBook.Api.Services
             response.EnsureSuccessStatusCode();
 
             return await response.Content.ReadAsStringAsync();
+        }
+
+        public async Task<BalanceResponseDto> GetApiBalanceCheckAsync(ApiBalanceRequestDto? request = null)
+        {
+            try
+            {
+                var endUserIp = string.IsNullOrWhiteSpace(request?.EndUserIp) ? "127.0.0.1" : request.EndUserIp.Trim();
+                var clientId = string.IsNullOrWhiteSpace(request?.ClientId) ? _settings.ClientId : request.ClientId.Trim();
+                var userName = string.IsNullOrWhiteSpace(request?.UserName) ? _settings.UserName : request.UserName.Trim();
+                var password = string.IsNullOrWhiteSpace(request?.Password) ? _settings.Password : request.Password.Trim();
+                var apiToken = string.IsNullOrWhiteSpace(request?.ApiToken) ? _settings.ApiToken : request.ApiToken.Trim();
+
+                var requestBody = new
+                {
+                    EndUserIp = endUserIp,
+                    ClientId = clientId,
+                    UserName = userName,
+                    Password = password
+                };
+
+                var url = $"{_settings.FlightBaseUrl.TrimEnd('/')}/Balance";
+                var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = JsonContent.Create(requestBody, options: _jsonOptions)
+                };
+
+                if (!string.IsNullOrEmpty(apiToken))
+                {
+                    requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
+                }
+
+                var response = await _httpClient.SendAsync(requestMessage);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new BalanceResponseDto
+                    {
+                        Error = new HotelSearchErrorDto
+                        {
+                            ErrorCode = (int)response.StatusCode,
+                            ErrorMessage = $"HTTP Request Failed: {response.ReasonPhrase}"
+                        }
+                    };
+                }
+
+                var resStr = await response.Content.ReadAsStringAsync();
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
+                };
+                var result = JsonSerializer.Deserialize<BalanceResponseDto>(resStr, options);
+                return result ?? new BalanceResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 1, ErrorMessage = "Deserialization Failed" } };
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Error getting Flight API balance check.");
+                return new BalanceResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 500, ErrorMessage = ex.Message } };
+            }
+        }
+
+        public async Task<BalanceLogResponseDto> GetApiBalanceLogAsync(ApiBalanceRequestDto? request = null)
+        {
+            try
+            {
+                var endUserIp = string.IsNullOrWhiteSpace(request?.EndUserIp) ? "127.0.0.1" : request.EndUserIp.Trim();
+                var clientId = string.IsNullOrWhiteSpace(request?.ClientId) ? _settings.ClientId : request.ClientId.Trim();
+                var userName = string.IsNullOrWhiteSpace(request?.UserName) ? _settings.UserName : request.UserName.Trim();
+                var password = string.IsNullOrWhiteSpace(request?.Password) ? _settings.Password : request.Password.Trim();
+                var apiToken = string.IsNullOrWhiteSpace(request?.ApiToken) ? _settings.ApiToken : request.ApiToken.Trim();
+
+                var requestBody = new
+                {
+                    EndUserIp = endUserIp,
+                    ClientId = clientId,
+                    UserName = userName,
+                    Password = password
+                };
+
+                var url = $"{_settings.FlightBaseUrl.TrimEnd('/')}/BalanceLog";
+                var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = JsonContent.Create(requestBody, options: _jsonOptions)
+                };
+
+                if (!string.IsNullOrEmpty(apiToken))
+                {
+                    requestMessage.Headers.TryAddWithoutValidation("Api-Token", apiToken);
+                }
+
+                var response = await _httpClient.SendAsync(requestMessage);
+                if (!response.IsSuccessStatusCode)
+                {
+                    return new BalanceLogResponseDto
+                    {
+                        Error = new HotelSearchErrorDto
+                        {
+                            ErrorCode = (int)response.StatusCode,
+                            ErrorMessage = $"HTTP Request Failed: {response.ReasonPhrase}"
+                        }
+                    };
+                }
+
+                var resStr = await response.Content.ReadAsStringAsync();
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
+                };
+                var result = JsonSerializer.Deserialize<BalanceLogResponseDto>(resStr, options);
+                return result ?? new BalanceLogResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 1, ErrorMessage = "Deserialization Failed" } };
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Error getting Flight API balance log.");
+                return new BalanceLogResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 500, ErrorMessage = ex.Message } };
+            }
         }
     }
 }

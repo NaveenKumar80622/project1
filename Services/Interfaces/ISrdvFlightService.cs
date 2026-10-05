@@ -35,7 +35,9 @@ namespace PickNBook.Api.Services
         Task<string> SendChangeRequestRawAsync(SendChangeRequestDto request);
         Task<string> GetCancelStatusRawAsync(GetCancelStatusRequestDto request);
         Task<string> GetCancellationChargesRawAsync(GetCancellationChargesRequestDto request);
-        Task<string> GetApiBalanceCheckRawAsync(ApiBalanceRequestDto request);
-        Task<string> GetApiBalanceLogRawAsync(ApiBalanceRequestDto request);
+        Task<string> GetApiBalanceCheckRawAsync(ApiBalanceRequestDto? request = null);
+        Task<string> GetApiBalanceLogRawAsync(ApiBalanceRequestDto? request = null);
+        Task<BalanceResponseDto> GetApiBalanceCheckAsync(ApiBalanceRequestDto? request = null);
+        Task<BalanceLogResponseDto> GetApiBalanceLogAsync(ApiBalanceRequestDto? request = null);
     }
 }
