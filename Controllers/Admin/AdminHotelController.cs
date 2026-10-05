@@ -330,6 +330,44 @@ public class AdminHotelController : AdminApiController
         booking.RefundAmount = finalRefund;
         booking.UpdatedAt = DateTime.UtcNow;
 
+        // Synchronize Payment and BookingCancellation lifecycle
+        var payment = await _context.Payments.FirstOrDefaultAsync(p => p.BookingType == "Hotel" && p.BookingId == bookingId);
+        if (payment != null)
+        {
+            payment.RefundStatus = finalRefund > 0 ? "Pending" : "NotRequired";
+            payment.RefundReason = booking.CancellationReason;
+            payment.UpdatedAt = DateTime.UtcNow;
+
+            var existingCancel = await _context.BookingCancellations.FirstOrDefaultAsync(c => c.PaymentId == payment.Id);
+            if (existingCancel == null)
+            {
+                var newCancel = new PickNBook.Api.Models.Entities.BookingCancellation
+                {
+                    BookingReference = booking.BookingReference,
+                    BookingType = "Hotel",
+                    PaymentId = payment.Id,
+                    UserId = booking.UserId,
+                    OriginalCustomerPaid = payment.FinalPayableAmount,
+                    SupplierAmount = booking.NetPrice > 0 ? booking.NetPrice : booking.TotalPrice,
+                    SupplierCancellationCharge = finalCharges,
+                    SupplierRefundAmount = Math.Max(0m, (booking.NetPrice > 0 ? booking.NetPrice : booking.TotalPrice) - finalCharges),
+                    CustomerRefundAmount = finalRefund,
+                    SrdvStatus = providerCancelled ? "Success" : "Failed",
+                    Status = finalRefund > 0 ? "Pending" : "Completed",
+                    RefundStatus = finalRefund > 0 ? "PENDING" : "NOT_REQUIRED",
+                    CreatedAtUtc = DateTime.UtcNow
+                };
+                _context.BookingCancellations.Add(newCancel);
+            }
+            else
+            {
+                existingCancel.SupplierCancellationCharge = finalCharges;
+                existingCancel.CustomerRefundAmount = finalRefund;
+                existingCancel.SrdvStatus = providerCancelled ? "Success" : "Failed";
+                existingCancel.RefundStatus = finalRefund > 0 ? "PENDING" : "NOT_REQUIRED";
+            }
+        }
+
         await _context.SaveChangesAsync();
 
         return Ok(new

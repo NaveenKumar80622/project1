@@ -286,6 +286,45 @@ namespace PickNBook.Api.Controllers
                 reservation.CancelledAtUtc = DateTime.UtcNow;
             }
 
+            // Sync Payment and BookingCancellation lifecycle
+            var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.BookingType == "Bus" && p.BookingId == bookingId);
+            if (payment != null)
+            {
+                var busRefund = reservation.RefundAmountInr ?? 0m;
+                payment.RefundStatus = busRefund > 0 ? "Pending" : "NotRequired";
+                payment.RefundReason = string.IsNullOrWhiteSpace(request.Reason) ? "Cancelled by admin" : request.Reason.Trim();
+                payment.UpdatedAt = DateTime.UtcNow;
+
+                var existingCancel = await dbContext.BookingCancellations.FirstOrDefaultAsync(c => c.PaymentId == payment.Id);
+                if (existingCancel == null)
+                {
+                    var newCancel = new PickNBook.Api.Models.Entities.BookingCancellation
+                    {
+                        BookingReference = reservation.BookingReference,
+                        BookingType = "Bus",
+                        PaymentId = payment.Id,
+                        UserId = reservation.UserId,
+                        OriginalCustomerPaid = payment.FinalPayableAmount,
+                        SupplierAmount = reservation.NetFareInr > 0 ? reservation.NetFareInr : reservation.TotalPriceInr,
+                        SupplierCancellationCharge = reservation.CancellationChargeInr ?? 0m,
+                        SupplierRefundAmount = Math.Max(0m, (reservation.NetFareInr > 0 ? reservation.NetFareInr : reservation.TotalPriceInr) - (reservation.CancellationChargeInr ?? 0m)),
+                        CustomerRefundAmount = busRefund,
+                        SrdvStatus = providerCancelled ? "Success" : "Failed",
+                        Status = busRefund > 0 ? "Pending" : "Completed",
+                        RefundStatus = busRefund > 0 ? "PENDING" : "NOT_REQUIRED",
+                        CreatedAtUtc = DateTime.UtcNow
+                    };
+                    dbContext.BookingCancellations.Add(newCancel);
+                }
+                else
+                {
+                    existingCancel.SupplierCancellationCharge = reservation.CancellationChargeInr ?? 0m;
+                    existingCancel.CustomerRefundAmount = busRefund;
+                    existingCancel.SrdvStatus = providerCancelled ? "Success" : "Failed";
+                    existingCancel.RefundStatus = busRefund > 0 ? "PENDING" : "NOT_REQUIRED";
+                }
+            }
+
             await dbContext.SaveChangesAsync();
 
             return Ok(new
