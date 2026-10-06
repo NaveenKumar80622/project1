@@ -32,7 +32,34 @@ namespace PickNBook.Api.Middleware
                 {
                     var now = DateTime.UtcNow;
 
-                    // 1. Check Account Lock Status
+                    // 1. Verify User Exists and is Active (Invalidates tokens of deleted/inactive accounts)
+                    if (int.TryParse(userId, out var parsedUserId))
+                    {
+                        var user = await db.Users
+                            .AsNoTracking()
+                            .Where(u => u.Id == parsedUserId)
+                            .Select(u => new { u.Id, u.Status })
+                            .FirstOrDefaultAsync();
+
+                        if (user == null || string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
+                        {
+                            context.Response.StatusCode = 401;
+                            context.Response.ContentType = "application/json";
+                            var errorPayload = new
+                            {
+                                success = false,
+                                statusCode = 401,
+                                code = user == null ? "USER_NOT_FOUND" : "ACCOUNT_INACTIVE",
+                                message = user == null 
+                                    ? "User account does not exist or has been deleted." 
+                                    : "Your account is inactive. Please contact support."
+                            };
+                            await context.Response.WriteAsync(JsonSerializer.Serialize(errorPayload));
+                            return;
+                        }
+                    }
+
+                    // 2. Check Account Lock Status
                     var lockout = await db.UserLockouts
                         .AsNoTracking()
                         .Where(l => l.UserId == userId && l.Status == "Locked")

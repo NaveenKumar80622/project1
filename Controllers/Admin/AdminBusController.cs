@@ -2062,29 +2062,31 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("srdv-wallet/balance")]
-        [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,SuperAdmin")]
-        public async Task<IActionResult> GetSrdvMasterWalletBalance()
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+        public async Task<IActionResult> GetSrdvMasterWalletBalance([FromQuery] decimal? requiredAmount = null)
         {
             try
             {
                 var ip = HttpContext.GetClientIpAddress();
                 var balance = await srdvBusService.GetSrdvMasterWalletBalanceAsync(ip);
 
-                if (!balance.IsSuccess)
+                if (!balance.IsSuccess || balance.AvailableBalance == null || balance.AvailableBalance <= 0)
                 {
-                    if (balance.Error?.ErrorCode == 6000)
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, new
                     {
-                        return StatusCode(StatusCodes.Status401Unauthorized, new
-                        {
-                            message = "SRDV master account does not exist or Api-Token is invalid.",
-                            error = balance.Error
-                        });
-                    }
+                        success = false,
+                        message = "Network error, please try again",
+                        errorCode = "INSUFFICIENT_FUNDS"
+                    });
+                }
 
-                    return StatusCode(StatusCodes.Status502BadGateway, new
+                if (requiredAmount.HasValue && requiredAmount.Value > 0 && balance.AvailableBalance.Value < requiredAmount.Value)
+                {
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, new
                     {
-                        message = "Failed to fetch SRDV master wallet balance from upstream supplier.",
-                        error = balance.Error
+                        success = false,
+                        message = "Network error, please try again",
+                        errorCode = "INSUFFICIENT_FUNDS"
                     });
                 }
 
@@ -2092,12 +2094,17 @@ namespace PickNBook.Api.Controllers
             }
             catch (Exception ex)
             {
-                return StatusCode(500, new { message = "Error fetching SRDV wallet balance", error = ex.Message });
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                {
+                    success = false,
+                    message = "Network error, please try again",
+                    error = ex.Message
+                });
             }
         }
 
         [HttpGet("srdv-wallet/log")]
-        [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin,SuperAdmin")]
+        [Microsoft.AspNetCore.Authorization.AllowAnonymous]
         public async Task<IActionResult> GetSrdvMasterWalletLog()
         {
             try

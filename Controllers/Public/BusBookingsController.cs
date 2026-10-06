@@ -15,6 +15,7 @@ using PickNBook.Api.Services.SeatLayouts;
 using Microsoft.Extensions.Caching.Memory;
 using PickNBook.Api.Filters;
 using PickNBook.Api.Services.Notifications.Interfaces;
+using PickNBook.Api.Extensions;
 
 namespace PickNBook.Api.Controllers
 {
@@ -639,6 +640,48 @@ namespace PickNBook.Api.Controllers
             {
                 logger.LogError(ex, "Failed to fetch boarding points from SRDV proxy.");
                 return StatusCode(500, new { message = "Error fetching boarding points from provider." });
+            }
+        }
+
+        [HttpGet("srdv-wallet/balance")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetPublicSrdvMasterWalletBalance([FromQuery] decimal? requiredAmount = null)
+        {
+            try
+            {
+                var ip = HttpContext.GetClientIpAddress();
+                var balance = await _srdvBusService.GetSrdvMasterWalletBalanceAsync(ip);
+
+                if (!balance.IsSuccess || balance.AvailableBalance == null || balance.AvailableBalance <= 0)
+                {
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                    {
+                        success = false,
+                        message = "Network error, please try again",
+                        errorCode = "INSUFFICIENT_FUNDS"
+                    });
+                }
+
+                if (requiredAmount.HasValue && requiredAmount.Value > 0 && balance.AvailableBalance.Value < requiredAmount.Value)
+                {
+                    return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                    {
+                        success = false,
+                        message = "Network error, please try again",
+                        errorCode = "INSUFFICIENT_FUNDS"
+                    });
+                }
+
+                return Ok(balance);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                {
+                    success = false,
+                    message = "Network error, please try again",
+                    error = ex.Message
+                });
             }
         }
 

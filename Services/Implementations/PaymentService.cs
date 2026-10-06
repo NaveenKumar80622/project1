@@ -574,6 +574,38 @@ namespace PickNBook.Api.Services.Implementations
                                 targetRole: "Admin"
                             );
                         }
+
+                        if (status == PaymentStatus.Failed || status == PaymentStatus.Expired)
+                        {
+                            if (payment.BookingType == BookingType.Bus)
+                            {
+                                try
+                                {
+                                    var pendingBooking = await _dbContext.PendingPaymentBookings.FirstOrDefaultAsync(p => p.PaymentId == payment.Id);
+                                    if (pendingBooking != null && !string.IsNullOrEmpty(pendingBooking.BookingPayloadJson))
+                                    {
+                                        using var doc = System.Text.Json.JsonDocument.Parse(pendingBooking.BookingPayloadJson);
+                                        var root = doc.RootElement;
+                                        string? traceId = root.TryGetProperty("TraceId", out var tProp) ? tProp.GetString() : null;
+                                        string? resultIndex = root.TryGetProperty("ResultIndex", out var rProp) ? rProp.GetString() : null;
+                                        if (!string.IsNullOrEmpty(traceId) && !string.IsNullOrEmpty(resultIndex))
+                                        {
+                                            using var scope = _scopeFactory.CreateScope();
+                                            var cache = scope.ServiceProvider.GetService<Microsoft.Extensions.Caching.Memory.IMemoryCache>();
+                                            if (cache != null)
+                                            {
+                                                cache.Remove($"bus_blockkey_{traceId}_{resultIndex}");
+                                                _logger.LogInformation("Released SRDV seat block cache for failed bus booking: TraceId={TraceId}, ResultIndex={ResultIndex}", traceId, resultIndex);
+                                            }
+                                        }
+                                    }
+                                }
+                                catch (Exception cEx)
+                                {
+                                    _logger.LogWarning(cEx, "Failed to release bus block key from cache for Payment {PaymentId}", payment.Id);
+                                }
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)

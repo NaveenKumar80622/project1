@@ -12,6 +12,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using PickNBook.Api.Services.Implementations;
+using PickNBook.Api.Extensions;
 
 namespace PickNBook.Api.Controllers
 {
@@ -34,6 +35,7 @@ namespace PickNBook.Api.Controllers
         private readonly IWalletService _walletService;
         private readonly IBackgroundJobQueue _backgroundJobQueue;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly ISrdvBusService _srdvBusService;
 
         public CashfreePaymentController(
             IOptions<CashfreeSettings> settings,
@@ -50,7 +52,8 @@ namespace PickNBook.Api.Controllers
             IWalletReservationService walletReservationService,
             IWalletService walletService,
             IBackgroundJobQueue backgroundJobQueue,
-            IServiceScopeFactory scopeFactory)
+            IServiceScopeFactory scopeFactory,
+            ISrdvBusService srdvBusService)
         {
             _settings = settings.Value;
             _cashfreeService = cashfreeService;
@@ -67,6 +70,7 @@ namespace PickNBook.Api.Controllers
             _walletService = walletService;
             _backgroundJobQueue = backgroundJobQueue;
             _scopeFactory = scopeFactory;
+            _srdvBusService = srdvBusService;
         }
 
         [HttpPost("create-order")]
@@ -247,6 +251,23 @@ namespace PickNBook.Api.Controllers
                         markupAmount = pricing.Seats.Sum(s => s.MarkupAmount);
                         discountAmount = pricing.TotalDiscount;
                         convenienceFee = pricing.ConvenienceFee;
+
+                        // Pre-payment Strict Sufficient Funds Gate (SRDV /Balance)
+                        var clientIp = HttpContext.GetClientIpAddress();
+                        var walletBalance = await _srdvBusService.GetSrdvMasterWalletBalanceAsync(clientIp);
+                        decimal availableFunds = walletBalance?.AvailableBalance ?? 0m;
+
+                        if (walletBalance == null || !walletBalance.IsSuccess || availableFunds < providerAmount)
+                        {
+                            _logger.LogCritical("SRDV WALLET INSUFFICIENT FUNDS: Required={Required}, Available={Available}. Aborting payment.",
+                                providerAmount, availableFunds);
+
+                            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                            {
+                                success = false,
+                                message = "Network error, please try again"
+                            });
+                        }
 
                         if (payload.Passengers != null && payload.Passengers.Any())
                         {

@@ -334,6 +334,11 @@ namespace PickNBook.Api.Controllers
                     });
                 }
 
+                if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Unauthorized(new { success = false, message = "Your account is inactive. Please contact support." });
+                }
+
                 var oldOtps = _context.OTPs.Where(x => x.Email == normalizedEmail && x.Purpose == OtpPurposes.PasswordReset && !x.IsUsed);
                 _context.OTPs.RemoveRange(oldOtps);
                 await _context.SaveChangesAsync();

@@ -4,7 +4,9 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
+using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
+using PickNBook.Api.Models.Entities;
 using System;
 using System.IO;
 using System.Linq;
@@ -224,5 +226,101 @@ public class ProfileController : BaseApiController
                        ?? User.FindFirst("sub")?.Value;
 
         return int.TryParse(userIdValue, out userId);
+    }
+
+    [HttpPost("delete")]
+    public async Task<IActionResult> DeleteAccount([FromBody] DeleteAccountRequest request)
+    {
+        if (!TryGetCurrentUserId(out var userId))
+            return Unauthorized(new { success = false, message = "Invalid token." });
+
+        if (!ModelState.IsValid)
+            return BadRequest(new { success = false, message = "Invalid request payload." });
+
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId);
+        if (user == null)
+            return NotFound(new { success = false, message = "User not found." });
+
+        if (!string.Equals(user.Email.Trim(), request.Email.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { success = false, message = "The provided email does not match the authenticated account." });
+        }
+
+        if (user.WalletBalance > 0)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                message = "You cannot delete your account while having active wallet balance."
+            });
+        }
+
+        var feedbackSummary = string.IsNullOrWhiteSpace(request.Reason)
+            ? request.AdditionalDetails
+            : $"{request.Reason}{(string.IsNullOrWhiteSpace(request.AdditionalDetails) ? "" : $" - {request.AdditionalDetails}")}";
+
+        var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
+
+        // 1. Audit trail before deletion
+        _context.SecurityAuditLogs.Add(new SecurityAuditLog
+        {
+            EventType = "ACCOUNT_DELETED",
+            UserOrAdminId = user.Id.ToString(),
+            Scope = "USER",
+            AccountId = user.Id,
+            AccountEmail = user.Email,
+            Email = user.Email,
+            IpAddress = ipAddress,
+            Action = "USER_HARD_DELETE",
+            Status = "SUCCESS",
+            ReasonDetails = feedbackSummary ?? "User requested permanent account deletion",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var userIdStr = user.Id.ToString();
+
+        // 2. Cascade cleanup of user sessions & security rules
+        var sessions = await _context.UserSessions.Where(s => s.UserId == userIdStr).ToListAsync();
+        _context.UserSessions.RemoveRange(sessions);
+
+        var securityRules = await _context.SecurityUserRules.Where(r => r.UserId == userIdStr).ToListAsync();
+        _context.SecurityUserRules.RemoveRange(securityRules);
+
+        var lockouts = await _context.UserLockouts.Where(l => l.UserId == userIdStr).ToListAsync();
+        _context.UserLockouts.RemoveRange(lockouts);
+
+        // 3. Clean up OTPs
+        var otps = await _context.OTPs.Where(o => o.UserId == user.Id || o.Email == user.Email).ToListAsync();
+        _context.OTPs.RemoveRange(otps);
+
+        // 4. Clean up Passkeys
+        var passkeys = await _context.UserPasskeys.Where(p => p.UserId == user.Id).ToListAsync();
+        _context.UserPasskeys.RemoveRange(passkeys);
+
+        // 5. Clean up Saved Travelers
+        var travelers = await _context.Travelers.Where(t => t.UserId == userIdStr).ToListAsync();
+        _context.Travelers.RemoveRange(travelers);
+
+        // 6. Clean up In-App Notifications recipients
+        var notificationRecipients = await _context.NotificationRecipients.Where(nr => nr.UserId == user.Id).ToListAsync();
+        _context.NotificationRecipients.RemoveRange(notificationRecipients);
+
+        // 7. Clean up Deposit Requests & Wallet Transactions
+        var depositRequests = await _context.DepositRequests.Where(d => d.UserId == user.Id).ToListAsync();
+        _context.DepositRequests.RemoveRange(depositRequests);
+
+        var walletTx = await _context.WalletTransactions.Where(w => w.UserId == user.Id).ToListAsync();
+        _context.WalletTransactions.RemoveRange(walletTx);
+
+        // 8. Delete user from Users table
+        _context.Users.Remove(user);
+
+        await _context.SaveChangesAsync();
+
+        return Ok(new
+        {
+            success = true,
+            message = "Account successfully deleted."
+        });
     }
 }
