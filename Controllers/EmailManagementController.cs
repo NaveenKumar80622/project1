@@ -1,11 +1,13 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models.Entities;
-using PickNBook.Api.Services;
 using PickNBook.Api.Services.Interfaces;
-using System.Text.Json;
+using System;
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace PickNBook.Api.Controllers
 {
@@ -16,16 +18,16 @@ namespace PickNBook.Api.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IEmailTemplateService _templateService;
-        private readonly ISecurityService _securityService;
+        private readonly ILogger<EmailManagementController> _logger;
 
         public EmailManagementController(
             AppDbContext context,
             IEmailTemplateService templateService,
-            ISecurityService securityService)
+            ILogger<EmailManagementController> logger)
         {
             _context = context;
             _templateService = templateService;
-            _securityService = securityService;
+            _logger = logger;
         }
 
         // ================= TEMPLATES =================
@@ -57,7 +59,7 @@ namespace PickNBook.Api.Controllers
             _context.EmailTemplates.Add(req);
             await _context.SaveChangesAsync();
 
-            await _securityService.LogAuditAsync("EMAIL_TEMPLATE_CREATED", "Create Email Template", "Success", "", reason: $"Template ID: {req.Id}");
+            _logger.LogInformation("EMAIL_TEMPLATE_CREATED: Created email template ID {TemplateId} ({TemplateKey})", req.Id, req.TemplateKey);
 
             return Ok(new { success = true, data = req });
         }
@@ -81,7 +83,7 @@ namespace PickNBook.Api.Controllers
 
             await _context.SaveChangesAsync();
 
-            await _securityService.LogAuditAsync("EMAIL_TEMPLATE_UPDATED", "Update Email Template", "Success", "", reason: $"Template ID: {template.Id}");
+            _logger.LogInformation("EMAIL_TEMPLATE_UPDATED: Updated email template ID {TemplateId}", template.Id);
 
             return Ok(new { success = true, data = template });
         }
@@ -99,7 +101,7 @@ namespace PickNBook.Api.Controllers
 
             await _context.SaveChangesAsync();
 
-            await _securityService.LogAuditAsync("EMAIL_TEMPLATE_DEACTIVATED", "Deactivate Email Template", "Success", "", reason: $"Template ID: {template.Id}");
+            _logger.LogInformation("EMAIL_TEMPLATE_DEACTIVATED: Deactivated email template ID {TemplateId}", template.Id);
 
             return Ok(new { success = true, message = "Template deactivated successfully." });
         }
@@ -120,7 +122,7 @@ namespace PickNBook.Api.Controllers
         {
             await _templateService.SendManualEmailAsync(req.RecipientEmail, req.TemplateId, req.Subject, req.Message, req.IncludeLoginLink);
             
-            await _securityService.LogAuditAsync("MANUAL_EMAIL_SENT", "Send Manual Email", "Success", "", email: req.RecipientEmail, reason: $"Template ID: {req.TemplateId}");
+            _logger.LogInformation("MANUAL_EMAIL_SENT: Sent manual email to {RecipientEmail}, template ID {TemplateId}", req.RecipientEmail, req.TemplateId);
 
             return Ok(new { success = true, message = "Email queued for sending." });
         }
@@ -148,7 +150,7 @@ namespace PickNBook.Api.Controllers
 
             await _templateService.SendTemplatedEmailAsync(req.RecipientEmail, req.TemplateKey, testData);
 
-            await _securityService.LogAuditAsync("TEST_EMAIL_SENT", "Send Test Email", "Success", "", email: req.RecipientEmail, reason: $"Template Key: {req.TemplateKey}");
+            _logger.LogInformation("TEST_EMAIL_SENT: Sent test email to {RecipientEmail}, template key {TemplateKey}", req.RecipientEmail, req.TemplateKey);
 
             return Ok(new { success = true, message = "Test email sent." });
         }
@@ -180,7 +182,7 @@ namespace PickNBook.Api.Controllers
             _context.EmailReminders.Add(req);
             await _context.SaveChangesAsync();
 
-            await _securityService.LogAuditAsync("REMINDER_CREATED", "Create Email Reminder", "Success", "", email: req.RecipientEmail, reason: $"Reminder ID: {req.Id}");
+            _logger.LogInformation("REMINDER_CREATED: Created email reminder ID {ReminderId} for {RecipientEmail}", req.Id, req.RecipientEmail);
 
             return Ok(new { success = true, data = req });
         }
@@ -203,7 +205,7 @@ namespace PickNBook.Api.Controllers
 
             await _context.SaveChangesAsync();
 
-            await _securityService.LogAuditAsync("REMINDER_UPDATED", "Update Email Reminder", "Success", "", reason: $"Reminder ID: {reminder.Id}");
+            _logger.LogInformation("REMINDER_UPDATED: Updated email reminder ID {ReminderId}", reminder.Id);
 
             return Ok(new { success = true, data = reminder });
         }
@@ -218,7 +220,7 @@ namespace PickNBook.Api.Controllers
             reminder.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
-            await _securityService.LogAuditAsync("REMINDER_CANCELLED", "Cancel Email Reminder", "Success", "", reason: $"Reminder ID: {reminder.Id}");
+            _logger.LogInformation("REMINDER_CANCELLED: Cancelled email reminder ID {ReminderId}", reminder.Id);
 
             return Ok(new { success = true, message = "Reminder cancelled successfully." });
         }

@@ -50,6 +50,16 @@ public class AdminHotelController : AdminApiController
                 query = query.Where(b => b.GuestPhone.Contains(passengerPhone.Trim()));
             }
 
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var normalizedStatus = status.Trim();
+                query = query.Where(b => b.Status == normalizedStatus);
+            }
+            else
+            {
+                query = query.Where(b => b.Status == "Booked");
+            }
+
 
             var queryResult = await query
                 .OrderByDescending(b => b.CreatedAt)
@@ -136,7 +146,7 @@ public class AdminHotelController : AdminApiController
             })
             .Where(b => !string.IsNullOrWhiteSpace(status)
                 ? b.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
-                : (b.Status == "Booked" || b.Status == "Cancelled"))
+                : b.Status == "Booked")
             .ToList();
 
             return Ok(list);

@@ -224,10 +224,6 @@ builder.Services.AddScoped<IBlogsService, BlogsService>();
 builder.Services.AddScoped<Microsoft.AspNetCore.Identity.IPasswordHasher<User>, Microsoft.AspNetCore.Identity.PasswordHasher<User>>();
 builder.Services.AddSingleton<IBackgroundJobQueue, BackgroundJobQueue>();
 builder.Services.AddHostedService<BackgroundJobExecutor>();
-builder.Services.AddScoped<ISecurityService, SecurityService>();
-builder.Services.AddHostedService<SecurityNotificationHostedService>();
-builder.Services.AddScoped<ISecurityCounterService, SecurityCounterService>();
-builder.Services.AddHostedService<SecurityBackgroundService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.HotelCacheWarmerHostedService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.FulfillmentRecoveryWorker>();
 
@@ -453,7 +449,6 @@ app.UseMiddleware<SuperAdminEmergencyRecoveryMiddleware>();
 app.UseAuthentication();
 
 app.UseMiddleware<AccountSessionStatusMiddleware>();
-app.UseMiddleware<CentralSecurityMiddleware>();
 
 app.UseAuthorization();
 

@@ -49,6 +49,16 @@ namespace PickNBook.Api.Controllers
                 queryable = queryable.Where(x => EF.Functions.Like(x.Pnr, normalized) || EF.Functions.Like(x.BookingReference, normalized));
             }
 
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                var normalized = status.Trim();
+                queryable = queryable.Where(x => EF.Functions.Like(x.Status, normalized));
+            }
+            else
+            {
+                queryable = queryable.Where(x => x.Status == "Booked");
+            }
+
             if (journeyDate.HasValue)
             {
                 var (startUtc, endUtc) = GetUtcRangeForIstDate(journeyDate.Value);
@@ -203,7 +213,7 @@ namespace PickNBook.Api.Controllers
             })
             .Where(x => !string.IsNullOrWhiteSpace(status)
                 ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
-                : (x.Status == "Booked" || x.Status == "Cancelled"))
+                : x.Status == "Booked")
             .ToList();
 
             return Ok(response);

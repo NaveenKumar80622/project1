@@ -103,24 +103,9 @@ namespace PickNBook.Api.Data
         public DbSet<AgentLedgerEntry> AgentLedgerEntries => Set<AgentLedgerEntry>();
         public DbSet<B2BCommissionRule> B2BCommissionRules => Set<B2BCommissionRule>();
 
-        // Security Management Module DbSets
-        public DbSet<SecuritySettings> SecuritySettings => Set<SecuritySettings>();
-        public DbSet<IpAccessRule> IpAccessRules => Set<IpAccessRule>();
-        public DbSet<SecurityAuditLog> SecurityAuditLogs => Set<SecurityAuditLog>();
-        public DbSet<SystemAppLock> SystemAppLocks => Set<SystemAppLock>();
+        // User & Admin Sessions (used by session middleware)
         public DbSet<UserSession> UserSessions => Set<UserSession>();
         public DbSet<AdminSession> AdminSessions => Set<AdminSession>();
-        public DbSet<SecurityNotificationMapping> SecurityNotificationMappings => Set<SecurityNotificationMapping>();
-        public DbSet<SecurityNotification> SecurityNotifications => Set<SecurityNotification>();
-
-        public DbSet<SecurityIpRule> SecurityIpRules => Set<SecurityIpRule>();
-        public DbSet<SecurityLimit> SecurityLimits => Set<SecurityLimit>();
-        public DbSet<SecurityAuthSetting> SecurityAuthSettings => Set<SecurityAuthSetting>();
-        public DbSet<SecurityCounter> SecurityCounters => Set<SecurityCounter>();
-        public DbSet<SecurityAccountLock> SecurityAccountLocks => Set<SecurityAccountLock>();
-        public DbSet<SecurityApiRule> SecurityApiRules => Set<SecurityApiRule>();
-        public DbSet<SecurityB2bWalletConfig> SecurityB2bWalletConfigs => Set<SecurityB2bWalletConfig>();
-        public DbSet<SecurityUserRule> SecurityUserRules => Set<SecurityUserRule>();
 
         // Email Management System DbSets
         public DbSet<EmailTemplate> EmailTemplates => Set<EmailTemplate>();
@@ -224,52 +209,7 @@ namespace PickNBook.Api.Data
                       .OnDelete(DeleteBehavior.Restrict);
             });
 
-            // =============================
-            // SECURITY SEED DATA
-            // =============================
-            var ruleKeys = new[] {
-                "LOGIN_FAILURE", "INVALID_PASSWORD", "PASSWORD_MISMATCH",
-                "OTP_GENERATION", "OTP_RESEND", "OTP_MISMATCH", "OTP_VERIFICATION",
-                "REGISTRATION_ATTEMPT", "CREATED_ACCOUNT_PER_IP",
-                "FORGOT_PASSWORD_REQUEST", "PASSWORD_RESET_ATTEMPT",
-                "DAILY_LOGIN", "API_RATE_LIMIT", "OTP_EXPIRY", "OTP_COOLDOWN"
-            };
-            var scopes = new[] { "ADMIN", "USER", "B2B" };
-            var limits = new System.Collections.Generic.List<SecurityLimit>();
-            long idCounter = 1;
-            foreach(var scope in scopes)
-            {
-                foreach(var rule in ruleKeys)
-                {
-                    limits.Add(new SecurityLimit {
-                        Id = idCounter++,
-                        Scope = scope,
-                        RuleKey = rule,
-                        RuleName = $"{rule.Replace("_", " ")} Limit",
-                        IsEnabled = true,
-                        LimitValue = 5,
-                        TimePeriodValue = 10,
-                        TimePeriodUnit = "MINUTES",
-                        AccountAction = "NONE",
-                        IpAction = "NONE",
-                        BlockDurationValue = 60,
-                        BlockDurationUnit = "MINUTES",
-                        EmailEnabled = true,
-                        ResetPeriodValue = 10,
-                        ResetPeriodUnit = "MINUTES",
-                        CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-                    });
-                }
-            }
-            modelBuilder.Entity<SecurityLimit>().HasData(limits);
 
-            modelBuilder.Entity<SecurityLimit>()
-                .HasIndex(s => new { s.Scope, s.RuleKey })
-                .IsUnique();
-
-            modelBuilder.Entity<SecurityAuthSetting>()
-                .HasIndex(s => new { s.Scope, s.Category })
-                .IsUnique();
 
 
 
@@ -1345,15 +1285,8 @@ namespace PickNBook.Api.Data
             });
 
             // =============================
-            // Security Module Configurations
+            // Session & Auth Configurations
             // =============================
-            modelBuilder.Entity<IpAccessRule>(entity =>
-            {
-                entity.HasIndex(x => new { x.IpAddress, x.Status }).HasDatabaseName("idx_ip_status");
-                entity.HasIndex(x => new { x.ExpiresAt, x.Status }).HasDatabaseName("idx_expires");
-                entity.HasIndex(x => x.IpAddress).IsUnique();
-            });
-
             modelBuilder.Entity<UserSession>(entity =>
             {
                 entity.HasIndex(x => new { x.UserId, x.Status }).HasDatabaseName("idx_user_status");
@@ -1369,23 +1302,6 @@ namespace PickNBook.Api.Data
             modelBuilder.Entity<OtpRecord>(entity =>
             {
                 entity.HasIndex(x => new { x.Identifier, x.Purpose, x.IsVerified }).HasDatabaseName("idx_identifier_purpose");
-            });
-
-            modelBuilder.Entity<SecurityNotificationMapping>(entity =>
-            {
-                entity.HasIndex(x => x.EventType).IsUnique();
-            });
-
-            modelBuilder.Entity<SecurityNotification>(entity =>
-            {
-                entity.HasIndex(x => new { x.Status, x.CreatedAt }).HasDatabaseName("idx_notif_status");
-                entity.HasIndex(x => new { x.CooldownKey, x.CreatedAt }).HasDatabaseName("idx_cooldown");
-            });
-
-            modelBuilder.Entity<SecurityAuditLog>(entity =>
-            {
-                entity.HasIndex(x => new { x.EventType, x.CreatedAt }).HasDatabaseName("idx_audit_event");
-                entity.HasIndex(x => new { x.IpAddress, x.CreatedAt }).HasDatabaseName("idx_audit_ip");
             });
 
             // =============================

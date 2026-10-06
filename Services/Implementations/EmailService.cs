@@ -62,7 +62,7 @@ namespace PickNBook.Api.Services
 
                 using var smtp = new SmtpClient(_settings.SmtpServer, _settings.Port)
                 {
-                    Credentials = new NetworkCredential(_settings.Username, _settings.Password),
+                    Credentials = new NetworkCredential(_settings.Username, _settings.Password?.Replace(" ", "")),
                     EnableSsl = true
                 };
 
