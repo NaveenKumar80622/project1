@@ -800,6 +800,17 @@ namespace PickNBook.Api.Models.DTOs
 
         public List<MyFlightPassengerDto> Passengers { get; set; } = new();
 
+        // Payment & Contact Identifiers
+        public int? PaymentId { get; set; }
+        public string? CashfreePaymentId { get; set; }
+        public string? CashfreeOrderId { get; set; }
+        public string? PaymentReference { get; set; }
+        public string? PassengerName { get; set; }
+        public string? PassengerPhone { get; set; }
+        public string? PhoneNumber { get; set; }
+        public string? Phone { get; set; }
+        public string? PassengerEmail { get; set; }
+
         public string? CanonicalStatus { get; set; }
         public string? CanonicalStatusLabel { get; set; }
         public PickNBook.Api.Helpers.UserLifecycleHierarchyDto? LifecycleHierarchy { get; set; }

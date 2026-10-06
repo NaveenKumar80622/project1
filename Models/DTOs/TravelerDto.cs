@@ -14,6 +14,11 @@ public class UpsertTravelerRequestDto
     public string? Country { get; set; }
 }
 
+public class UpdateTravelerItemDto : UpsertTravelerRequestDto
+{
+    public int? Id { get; set; }
+}
+
 public class TravelerResponseDto
 {
     public int Id { get; set; }

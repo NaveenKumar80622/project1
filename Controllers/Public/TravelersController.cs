@@ -9,6 +9,7 @@ using PickNBook.Api.Models.DTOs;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace PickNBook.Api.Controllers
 {
@@ -16,6 +17,7 @@ namespace PickNBook.Api.Controllers
     public class TravelersController(AppDbContext dbContext) : BaseApiController
     {
         private const string UserIdHeaderName = "X-User-Id";
+        private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
         private static readonly string[] AllowedTypes = ["Adult", "Child", "Infant"];
         private static readonly string[] AllowedTitles = ["Mr", "Mrs", "Ms"];
         private static readonly string[] AllowedGenders = ["Male", "Female", "Other"];
@@ -26,6 +28,7 @@ namespace PickNBook.Api.Controllers
 
         [HttpGet]
         public async Task<IActionResult> GetTravelers(
+            [FromQuery] string? ids,
             [FromQuery] string? type,
             [FromQuery] string? phoneNo,
             [FromQuery] string? email,
@@ -54,6 +57,12 @@ namespace PickNBook.Api.Controllers
                 .AsNoTracking()
                 .Where(x => x.UserId == userId)
                 .AsQueryable();
+
+            var idList = ParseIds(ids);
+            if (idList.Count > 0)
+            {
+                travelersQuery = travelersQuery.Where(x => idList.Contains(x.Id));
+            }
 
             if (normalizedType is not null)
             {
@@ -92,136 +101,295 @@ namespace PickNBook.Api.Controllers
             return Ok(travelers.Select(MapTraveler));
         }
 
-        [HttpGet("{travelerId:int}")]
-        public async Task<IActionResult> GetTravelerById(int travelerId)
+        [HttpGet("{travelerId}")]
+        public async Task<IActionResult> GetTravelerById(string travelerId)
         {
             if (!TryGetCurrentUserId(out var userId, out var userIdError))
             {
                 return BadRequest(userIdError);
             }
 
-            var traveler = await dbContext.Travelers
-                .AsNoTracking()
-                .FirstOrDefaultAsync(x => x.Id == travelerId && x.UserId == userId);
-
-            if (traveler is null)
+            var idList = ParseIds(travelerId);
+            if (idList.Count == 0)
             {
-                return NotFound("Traveler not found.");
+                return BadRequest("Invalid traveler ID.");
             }
 
-            return Ok(MapTraveler(traveler));
+            var travelers = await dbContext.Travelers
+                .AsNoTracking()
+                .Where(x => idList.Contains(x.Id) && x.UserId == userId)
+                .ToListAsync();
+
+            if (travelers.Count == 0)
+            {
+                return NotFound("Traveler(s) not found.");
+            }
+
+            if (idList.Count == 1)
+            {
+                return Ok(MapTraveler(travelers[0]));
+            }
+
+            return Ok(travelers.Select(MapTraveler));
         }
 
         [HttpPost]
-        public async Task<IActionResult> CreateTraveler([FromBody] UpsertTravelerRequestDto request)
+        public async Task<IActionResult> CreateTraveler([FromBody] JsonElement payload)
         {
             if (!TryGetCurrentUserId(out var userId, out var userIdError))
             {
                 return BadRequest(userIdError);
             }
 
-            //var validationError = ValidateTraveler(request, out var normalizedType, out var normalizedTitle, out var normalizedGender);
-            var validationError = ValidateTraveler(
-    request,
-    out var normalizedType,
-    out var normalizedTitle,
-    out var normalizedGender
-   );
+            var requests = new List<UpsertTravelerRequestDto>();
+            bool isArray = payload.ValueKind == JsonValueKind.Array;
 
-
-            if (validationError is not null)
+            if (isArray)
             {
-                return BadRequest(validationError);
+                requests = JsonSerializer.Deserialize<List<UpsertTravelerRequestDto>>(payload.GetRawText(), JsonOptions) ?? [];
+            }
+            else if (payload.ValueKind == JsonValueKind.Object)
+            {
+                var single = JsonSerializer.Deserialize<UpsertTravelerRequestDto>(payload.GetRawText(), JsonOptions);
+                if (single is not null)
+                {
+                    requests.Add(single);
+                }
+            }
+            else
+            {
+                return BadRequest("Payload must be a traveler object or an array of traveler objects.");
             }
 
+            if (requests.Count == 0)
+            {
+                return BadRequest("At least one traveler must be provided.");
+            }
+
+            var validationErrors = new List<string>();
+            var entitiesToInsert = new List<Traveler>();
             var utcNow = DateTime.UtcNow;
 
-            var traveler = new Traveler
+            for (int i = 0; i < requests.Count; i++)
             {
-                UserId = userId!,
-                Type = normalizedType!,
-                Title = normalizedTitle!,
-                FirstName = (request.FirstName ?? string.Empty).Trim(),
-                LastName = (request.LastName ?? string.Empty).Trim(),
-                Gender = normalizedGender!,
-                Age = request.Age,
-                Email = (request.Email ?? string.Empty).Trim(),
-                PhoneNo = (request.PhoneNo ?? string.Empty).Trim(),
-                PassportNo = string.IsNullOrWhiteSpace(request.PassportNo) ? null : request.PassportNo.Trim().ToUpperInvariant(),
-                Country = (request.Country ?? string.Empty).Trim(),
-                CreatedAtUtc = utcNow,
-                UpdatedAtUtc = utcNow
-            };
+                var req = requests[i];
+                var validationError = ValidateTraveler(
+                    req,
+                    out var normalizedType,
+                    out var normalizedTitle,
+                    out var normalizedGender);
 
-            dbContext.Travelers.Add(traveler);
+                if (validationError is not null)
+                {
+                    validationErrors.Add(isArray ? $"Item [{i}]: {validationError}" : validationError);
+                    continue;
+                }
+
+                entitiesToInsert.Add(new Traveler
+                {
+                    UserId = userId!,
+                    Type = normalizedType!,
+                    Title = normalizedTitle!,
+                    FirstName = (req.FirstName ?? string.Empty).Trim(),
+                    LastName = (req.LastName ?? string.Empty).Trim(),
+                    Gender = normalizedGender!,
+                    Age = req.Age,
+                    Email = (req.Email ?? string.Empty).Trim(),
+                    PhoneNo = (req.PhoneNo ?? string.Empty).Trim(),
+                    PassportNo = string.IsNullOrWhiteSpace(req.PassportNo) ? null : req.PassportNo.Trim().ToUpperInvariant(),
+                    Country = (req.Country ?? string.Empty).Trim(),
+                    CreatedAtUtc = utcNow,
+                    UpdatedAtUtc = utcNow
+                });
+            }
+
+            if (validationErrors.Count > 0)
+            {
+                return BadRequest(isArray ? (object)new { errors = validationErrors } : validationErrors[0]);
+            }
+
+            dbContext.Travelers.AddRange(entitiesToInsert);
             await dbContext.SaveChangesAsync();
 
-            return CreatedAtAction(nameof(GetTravelerById), new { travelerId = traveler.Id }, MapTraveler(traveler));
+            if (isArray)
+            {
+                return Ok(entitiesToInsert.Select(MapTraveler));
+            }
+
+            var created = entitiesToInsert[0];
+            return CreatedAtAction(nameof(GetTravelerById), new { travelerId = created.Id.ToString() }, MapTraveler(created));
         }
 
-        [HttpPut("{travelerId:int}")]
-        public async Task<IActionResult> UpdateTraveler(int travelerId, [FromBody] UpsertTravelerRequestDto request)
+        [HttpPut("{travelerId}")]
+        public async Task<IActionResult> UpdateTraveler(string travelerId, [FromBody] JsonElement payload)
         {
             if (!TryGetCurrentUserId(out var userId, out var userIdError))
             {
                 return BadRequest(userIdError);
             }
 
-            //var validationError = ValidateTraveler(request, out var normalizedType, out var normalizedTitle, out var normalizedGender);
-            var validationError = ValidateTraveler(
-    request,
-    out var normalizedType,
-    out var normalizedTitle,
-    out var normalizedGender
-    );
+            var routeIds = ParseIds(travelerId);
+            var updateItems = new List<UpdateTravelerItemDto>();
+            bool isArray = payload.ValueKind == JsonValueKind.Array;
 
-            if (validationError is not null)
+            if (isArray)
             {
-                return BadRequest(validationError);
+                updateItems = JsonSerializer.Deserialize<List<UpdateTravelerItemDto>>(payload.GetRawText(), JsonOptions) ?? [];
+                for (int i = 0; i < updateItems.Count; i++)
+                {
+                    if (!updateItems[i].Id.HasValue && i < routeIds.Count)
+                    {
+                        updateItems[i].Id = routeIds[i];
+                    }
+                }
+            }
+            else if (payload.ValueKind == JsonValueKind.Object)
+            {
+                var single = JsonSerializer.Deserialize<UpdateTravelerItemDto>(payload.GetRawText(), JsonOptions);
+                if (single is not null)
+                {
+                    if (!single.Id.HasValue && routeIds.Count > 0)
+                    {
+                        single.Id = routeIds[0];
+                    }
+                    updateItems.Add(single);
+                }
+            }
+            else
+            {
+                return BadRequest("Payload must be a traveler object or an array of traveler objects.");
             }
 
-            var traveler = await dbContext.Travelers
-                .FirstOrDefaultAsync(x => x.Id == travelerId && x.UserId == userId);
-            if (traveler is null)
+            if (updateItems.Count == 0)
             {
-                return NotFound("Traveler not found.");
+                return BadRequest("No traveler updates provided.");
             }
 
-            traveler.Type = normalizedType!;
-            traveler.Title = normalizedTitle!;
-            traveler.FirstName = (request.FirstName ?? string.Empty).Trim();
-            traveler.LastName = (request.LastName ?? string.Empty).Trim();
-            traveler.Gender = normalizedGender!;
-            traveler.Age = request.Age;
-            traveler.Email = (request.Email ?? string.Empty).Trim();
-            traveler.PhoneNo = (request.PhoneNo ?? string.Empty).Trim();
-            traveler.PassportNo = string.IsNullOrWhiteSpace(request.PassportNo) ? null : request.PassportNo.Trim().ToUpperInvariant();
-            traveler.Country = (request.Country ?? string.Empty).Trim();
-            traveler.UpdatedAtUtc = DateTime.UtcNow;
+            var targetIds = updateItems.Where(x => x.Id.HasValue).Select(x => x.Id!.Value).Distinct().ToList();
+            if (targetIds.Count == 0)
+            {
+                return BadRequest("Traveler ID must be provided in route or payload.");
+            }
+
+            var existingTravelers = await dbContext.Travelers
+                .Where(x => targetIds.Contains(x.Id) && x.UserId == userId)
+                .ToDictionaryAsync(x => x.Id);
+
+            var errors = new List<string>();
+            var updatedEntities = new List<Traveler>();
+
+            foreach (var item in updateItems)
+            {
+                if (!item.Id.HasValue || !existingTravelers.TryGetValue(item.Id.Value, out var traveler))
+                {
+                    errors.Add($"Traveler ID {item.Id} not found.");
+                    continue;
+                }
+
+                var validationError = ValidateTraveler(
+                    item,
+                    out var normalizedType,
+                    out var normalizedTitle,
+                    out var normalizedGender);
+
+                if (validationError is not null)
+                {
+                    errors.Add(isArray ? $"Traveler ID {item.Id}: {validationError}" : validationError);
+                    continue;
+                }
+
+                traveler.Type = normalizedType!;
+                traveler.Title = normalizedTitle!;
+                traveler.FirstName = (item.FirstName ?? string.Empty).Trim();
+                traveler.LastName = (item.LastName ?? string.Empty).Trim();
+                traveler.Gender = normalizedGender!;
+                traveler.Age = item.Age;
+                traveler.Email = (item.Email ?? string.Empty).Trim();
+                traveler.PhoneNo = (item.PhoneNo ?? string.Empty).Trim();
+                traveler.PassportNo = string.IsNullOrWhiteSpace(item.PassportNo) ? null : item.PassportNo.Trim().ToUpperInvariant();
+                traveler.Country = (item.Country ?? string.Empty).Trim();
+                traveler.UpdatedAtUtc = DateTime.UtcNow;
+
+                updatedEntities.Add(traveler);
+            }
+
+            if (errors.Count > 0)
+            {
+                if (!isArray)
+                {
+                    if (existingTravelers.Count == 0)
+                    {
+                        return NotFound("Traveler not found.");
+                    }
+                    return BadRequest(errors[0]);
+                }
+                return BadRequest(new { errors });
+            }
 
             await dbContext.SaveChangesAsync();
-            return Ok(MapTraveler(traveler));
+
+            if (isArray)
+            {
+                return Ok(updatedEntities.Select(MapTraveler));
+            }
+
+            return Ok(MapTraveler(updatedEntities[0]));
         }
 
-        [HttpDelete("{travelerId:int}")]
-        public async Task<IActionResult> DeleteTraveler(int travelerId)
+        [HttpDelete("{travelerId}")]
+        public async Task<IActionResult> DeleteTraveler(string travelerId)
         {
             if (!TryGetCurrentUserId(out var userId, out var userIdError))
             {
                 return BadRequest(userIdError);
             }
 
-            var traveler = await dbContext.Travelers
-                .FirstOrDefaultAsync(x => x.Id == travelerId && x.UserId == userId);
-            if (traveler is null)
+            var idList = ParseIds(travelerId);
+            if (idList.Count == 0)
             {
-                return NotFound("Traveler not found.");
+                return BadRequest("No valid traveler ID(s) provided.");
             }
 
-            dbContext.Travelers.Remove(traveler);
+            var travelers = await dbContext.Travelers
+                .Where(x => idList.Contains(x.Id) && x.UserId == userId)
+                .ToListAsync();
+
+            if (travelers.Count == 0)
+            {
+                return NotFound("Traveler(s) not found.");
+            }
+
+            dbContext.Travelers.RemoveRange(travelers);
             await dbContext.SaveChangesAsync();
-            return Ok(new { message = "Traveler deleted successfully." });
+
+            if (idList.Count == 1)
+            {
+                return Ok(new { message = "Traveler deleted successfully." });
+            }
+
+            return Ok(new
+            {
+                message = $"{travelers.Count} traveler(s) deleted successfully.",
+                deletedIds = travelers.Select(x => x.Id).ToList()
+            });
         }
+
+        private static List<int> ParseIds(string? rawIds)
+        {
+            if (string.IsNullOrWhiteSpace(rawIds))
+            {
+                return [];
+            }
+
+            return rawIds
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(s => int.TryParse(s, out var id) ? id : (int?)null)
+                .Where(id => id.HasValue)
+                .Select(id => id!.Value)
+                .Distinct()
+                .ToList();
+        }
+
 
         private static TravelerResponseDto MapTraveler(Traveler traveler)
         {

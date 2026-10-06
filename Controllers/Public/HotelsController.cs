@@ -1696,15 +1696,31 @@ namespace PickNBook.Api.Controllers
                     .ToListAsync();
 
                 var hotelIds = bookings.Select(b => b.Id).ToList();
-
-                var payments = await _dbContext.Payments.AsNoTracking()
-                    .Where(p => (p.BookingType == "Hotel" || p.BookingType.ToLower() == "hotel") && p.BookingId.HasValue && hotelIds.Contains(p.BookingId.Value))
-                    .ToListAsync();
-                var paymentMap = payments.GroupBy(p => p.BookingId!.Value).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
-
-                var paymentIds = payments.Select(p => p.Id).ToList();
                 var bookingRefs = bookings.Select(b => b.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
 
+                var payments = await _dbContext.Payments.AsNoTracking()
+                    .Where(p => (p.BookingType == "Hotel" || p.BookingType.ToLower() == "hotel") &&
+                                ((p.BookingId.HasValue && hotelIds.Contains(p.BookingId.Value)) ||
+                                 (p.BookingReferenceId.HasValue && hotelIds.Contains(p.BookingReferenceId.Value)) ||
+                                 (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
+                    .ToListAsync();
+
+                var paymentMapById = payments
+                    .Where(p => p.BookingId.HasValue)
+                    .GroupBy(p => p.BookingId!.Value)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).First());
+
+                var paymentMapByRefId = payments
+                    .Where(p => p.BookingReferenceId.HasValue)
+                    .GroupBy(p => p.BookingReferenceId!.Value)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).First());
+
+                var paymentMapByPaymentRef = payments
+                    .Where(p => !string.IsNullOrEmpty(p.PaymentReference))
+                    .GroupBy(p => p.PaymentReference)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).First());
+
+                var paymentIds = payments.Select(p => p.Id).ToList();
                 var cancellations = await _dbContext.BookingCancellations.AsNoTracking()
                     .Where(c => (c.BookingType == "Hotel" || c.BookingType.ToLower() == "hotel") &&
                                 (paymentIds.Contains(c.PaymentId) || bookingRefs.Contains(c.BookingReference)))
@@ -1726,7 +1742,18 @@ namespace PickNBook.Api.Controllers
 
                 var result = bookings.Select(x =>
                 {
-                    paymentMap.TryGetValue(x.Id, out var payment);
+                    PickNBook.Api.Models.Payments.Payment? payment = null;
+                    if (!paymentMapByRefId.TryGetValue(x.Id, out payment))
+                    {
+                        if (!paymentMapById.TryGetValue(x.Id, out payment))
+                        {
+                            if (!string.IsNullOrEmpty(x.BookingReference))
+                            {
+                                paymentMapByPaymentRef.TryGetValue(x.BookingReference, out payment);
+                            }
+                        }
+                    }
+
                     PickNBook.Api.Models.Entities.BookingCancellation? cancel = null;
                     if (payment != null) cancelMapByPayment.TryGetValue(payment.Id, out cancel);
                     if (cancel == null && !string.IsNullOrEmpty(x.BookingReference)) cancelMapByRef.TryGetValue(x.BookingReference, out cancel);
@@ -1773,6 +1800,16 @@ namespace PickNBook.Api.Controllers
                         TraceId = x.TraceId,
                         GuestName = x.GuestName,
                         CreatedAt = DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc),
+
+                        // Payment & Contact Identifiers
+                        PaymentId = payment?.Id,
+                        CashfreePaymentId = payment?.CashfreePaymentId,
+                        CashfreeOrderId = payment?.CashfreeOrderId,
+                        PaymentReference = payment?.PaymentReference,
+                        GuestPhone = x.GuestPhone,
+                        PhoneNumber = x.GuestPhone,
+                        Phone = x.GuestPhone,
+                        GuestEmail = x.GuestEmail,
 
                         CanonicalStatus = lifecycle.CanonicalStatus,
                         CanonicalStatusLabel = lifecycle.CanonicalStatusLabel,

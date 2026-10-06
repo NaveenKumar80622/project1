@@ -3562,15 +3562,31 @@ namespace PickNBook.Api.Controllers.Public
                     .ToListAsync();
 
                 var flightIds = bookings.Select(b => b.Id).ToList();
-
-                var payments = await _dbContext.Payments.AsNoTracking()
-                    .Where(p => (p.BookingType == "Flight" || p.BookingType.ToLower() == "flight") && p.BookingId.HasValue && flightIds.Contains(p.BookingId.Value))
-                    .ToListAsync();
-                var paymentMap = payments.GroupBy(p => p.BookingId!.Value).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
-
-                var paymentIds = payments.Select(p => p.Id).ToList();
                 var bookingRefs = bookings.Select(b => b.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
 
+                var payments = await _dbContext.Payments.AsNoTracking()
+                    .Where(p => (p.BookingType == "Flight" || p.BookingType.ToLower() == "flight") &&
+                                ((p.BookingId.HasValue && flightIds.Contains(p.BookingId.Value)) ||
+                                 (p.BookingReferenceId.HasValue && flightIds.Contains(p.BookingReferenceId.Value)) ||
+                                 (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
+                    .ToListAsync();
+
+                var paymentMapById = payments
+                    .Where(p => p.BookingId.HasValue)
+                    .GroupBy(p => p.BookingId!.Value)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).First());
+
+                var paymentMapByRefId = payments
+                    .Where(p => p.BookingReferenceId.HasValue)
+                    .GroupBy(p => p.BookingReferenceId!.Value)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).First());
+
+                var paymentMapByPaymentRef = payments
+                    .Where(p => !string.IsNullOrEmpty(p.PaymentReference))
+                    .GroupBy(p => p.PaymentReference)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).First());
+
+                var paymentIds = payments.Select(p => p.Id).ToList();
                 var cancellations = await _dbContext.BookingCancellations.AsNoTracking()
                     .Where(c => (c.BookingType == "Flight" || c.BookingType.ToLower() == "flight") &&
                                 (paymentIds.Contains(c.PaymentId) || bookingRefs.Contains(c.BookingReference)))
@@ -3602,7 +3618,18 @@ namespace PickNBook.Api.Controllers.Public
                     paxMap.TryGetValue(booking.Id, out var passengers);
                     passengers ??= new List<FlightReservationPassenger>();
 
-                    paymentMap.TryGetValue(booking.Id, out var payment);
+                    PickNBook.Api.Models.Payments.Payment? payment = null;
+                    if (!paymentMapByRefId.TryGetValue(booking.Id, out payment))
+                    {
+                        if (!paymentMapById.TryGetValue(booking.Id, out payment))
+                        {
+                            if (!string.IsNullOrEmpty(booking.BookingReference))
+                            {
+                                paymentMapByPaymentRef.TryGetValue(booking.BookingReference, out payment);
+                            }
+                        }
+                    }
+
                     PickNBook.Api.Models.Entities.BookingCancellation? cancel = null;
                     if (payment != null) cancelMapByPayment.TryGetValue(payment.Id, out cancel);
                     if (cancel == null && !string.IsNullOrEmpty(booking.BookingReference)) cancelMapByRef.TryGetValue(booking.BookingReference, out cancel);
@@ -3649,6 +3676,17 @@ namespace PickNBook.Api.Controllers.Public
                             SeatNumber = p.SeatNumber,
                             TicketId = p.TicketId
                         }).ToList(),
+
+                        // Payment & Contact Identifiers
+                        PaymentId = payment?.Id,
+                        CashfreePaymentId = payment?.CashfreePaymentId,
+                        CashfreeOrderId = payment?.CashfreeOrderId,
+                        PaymentReference = payment?.PaymentReference,
+                        PassengerName = booking.PassengerName,
+                        PassengerPhone = booking.PassengerPhone,
+                        PhoneNumber = booking.PassengerPhone,
+                        Phone = booking.PassengerPhone,
+                        PassengerEmail = booking.PassengerEmail,
 
                         CanonicalStatus = lifecycle.CanonicalStatus,
                         CanonicalStatusLabel = lifecycle.CanonicalStatusLabel,

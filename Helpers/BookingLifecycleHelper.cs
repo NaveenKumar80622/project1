@@ -575,6 +575,7 @@ namespace PickNBook.Api.Helpers
 
             var paymentBreakdown = new
             {
+                PaymentId = payment?.Id,
                 TotalAmount = totalPaid,
                 GatewayPaidAmount = gwPaid,
                 WalletUsedAmount = walletUsed,

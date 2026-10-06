@@ -198,6 +198,16 @@ namespace PickNBook.Api.Models.DTOs
         public string GuestName { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
 
+        // Payment & Contact Identifiers
+        public int? PaymentId { get; set; }
+        public string? CashfreePaymentId { get; set; }
+        public string? CashfreeOrderId { get; set; }
+        public string? PaymentReference { get; set; }
+        public string? GuestPhone { get; set; }
+        public string? PhoneNumber { get; set; }
+        public string? Phone { get; set; }
+        public string? GuestEmail { get; set; }
+
         public string? CanonicalStatus { get; set; }
         public string? CanonicalStatusLabel { get; set; }
         public PickNBook.Api.Helpers.UserLifecycleHierarchyDto? LifecycleHierarchy { get; set; }
