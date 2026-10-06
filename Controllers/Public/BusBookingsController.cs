@@ -652,6 +652,13 @@ namespace PickNBook.Api.Controllers
                 var ip = HttpContext.GetClientIpAddress();
                 var balance = await _srdvBusService.GetSrdvMasterWalletBalanceAsync(ip);
 
+                var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
+                if (alertService != null)
+                {
+                    decimal avail = (balance?.IsSuccess == true && balance.AvailableBalance.HasValue) ? balance.AvailableBalance.Value : 0m;
+                    _ = alertService.EvaluateAndAlertAsync(avail);
+                }
+
                 if (!balance.IsSuccess || balance.AvailableBalance == null || balance.AvailableBalance <= 0)
                 {
                     return StatusCode(StatusCodes.Status503ServiceUnavailable, new

@@ -262,6 +262,12 @@ namespace PickNBook.Api.Controllers
                             _logger.LogCritical("SRDV WALLET INSUFFICIENT FUNDS: Required={Required}, Available={Available}. Aborting payment.",
                                 providerAmount, availableFunds);
 
+                            var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
+                            if (alertService != null)
+                            {
+                                _ = alertService.EvaluateAndAlertAsync(availableFunds);
+                            }
+
                             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
                             {
                                 success = false,

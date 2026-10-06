@@ -189,6 +189,12 @@ builder.Services.AddHostedService<PickNBook.Api.Services.Background.Notification
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.BusBoardingReminderHostedService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.HotelCheckInReminderHostedService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.DailyAdminSummaryHostedService>();
+builder.Services.AddHostedService<PickNBook.Api.Services.Background.SrdvBusWalletMonitorHostedService>();
+
+// Centralized SRDV Wallet Monitoring & Alerting DI
+builder.Services.Configure<PickNBook.Api.Models.Config.SrdvWalletMonitoringSettings>(
+    builder.Configuration.GetSection("SrdvWalletMonitoring"));
+builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService, PickNBook.Api.Services.Implementations.SrdvWalletAlertService>();
 
 // In-App Bell Notification Service DI
 builder.Services.AddScoped<PickNBook.Api.Services.Interfaces.IInAppNotificationService, PickNBook.Api.Services.Implementations.InAppNotificationService>();
