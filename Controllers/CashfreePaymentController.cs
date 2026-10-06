@@ -733,8 +733,13 @@ namespace PickNBook.Api.Controllers
                         return BadRequest(new { message = "Calculated total fare must be greater than zero." });
                     }
 
+                    bool isWalletPaymentRequested = request.UseWallet
+                        || (request.WalletAmount.HasValue && request.WalletAmount.Value > 0)
+                        || string.Equals(request.PaymentMethod, "Hybrid", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase);
+
                     // Strict Price Parity Check (Rounded) when customer is paying full Cashfree
-                    if (!request.UseWallet)
+                    if (!isWalletPaymentRequested)
                     {
                         if (Math.Round(totalFare, 2) != Math.Round(request.OrderAmount, 2))
                         {
@@ -786,8 +791,14 @@ namespace PickNBook.Api.Controllers
                 decimal walletUsedAmount = 0m;
                 decimal gatewayPaidAmount = calculatedTotalFare;
                 string paymentMethod = "Cashfree";
+                decimal? currentCustomerWalletBalance = null;
 
-                if (request.UseWallet)
+                bool hasWalletRequest = request.WalletAmount.HasValue
+                    || request.UseWallet
+                    || string.Equals(request.PaymentMethod, "Hybrid", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase);
+
+                if (hasWalletRequest)
                 {
                     if (!int.TryParse(userIdStr, out var customerId) || customerId <= 0)
                     {
@@ -805,38 +816,73 @@ namespace PickNBook.Api.Controllers
                         return BadRequest(new { message = "Customer wallet is not active." });
                     }
 
-                    decimal availableBalance = Math.Max(0m, user.WalletBalance);
+                    decimal availableWalletBalance = Math.Max(0m, user.WalletBalance);
+                    currentCustomerWalletBalance = availableWalletBalance;
 
-                    if (availableBalance <= 0)
+                    decimal requestedWalletAmount;
+                    if (request.WalletAmount.HasValue)
                     {
-                        // Wallet = 0 -> Cashfree full amount
-                        _logger.LogInformation("User {UserId} has zero wallet balance. Proceeding with full Cashfree payment.", customerId);
-                        walletUsedAmount = 0m;
-                        gatewayPaidAmount = calculatedTotalFare;
-                        paymentMethod = "Cashfree";
+                        requestedWalletAmount = request.WalletAmount.Value;
+                    }
+                    else if (string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase))
+                    {
+                        requestedWalletAmount = calculatedTotalFare;
+                    }
+                    else if (request.UseWallet)
+                    {
+                        // Fallback for legacy clients sending only useWallet=true without explicit amount
+                        requestedWalletAmount = Math.Min(availableWalletBalance, calculatedTotalFare);
                     }
                     else
                     {
-                        // Calculate authoritative amounts
-                        walletUsedAmount = Math.Min(availableBalance, calculatedTotalFare);
-                        gatewayPaidAmount = calculatedTotalFare - walletUsedAmount;
+                        requestedWalletAmount = 0m;
+                    }
 
-                        // Invariant guards
-                        if (gatewayPaidAmount < 0) gatewayPaidAmount = 0m;
-                        if (walletUsedAmount > calculatedTotalFare) walletUsedAmount = calculatedTotalFare;
-                        if (walletUsedAmount + gatewayPaidAmount != calculatedTotalFare)
-                        {
-                            throw new InvalidOperationException($"Invariant violation: walletUsedAmount ({walletUsedAmount}) + gatewayPaidAmount ({gatewayPaidAmount}) != totalFare ({calculatedTotalFare})");
-                        }
+                    // Rule 1: Wallet amount entered by customer must be >= 0.
+                    if (requestedWalletAmount < 0m)
+                    {
+                        return BadRequest(new { message = "Wallet amount cannot be negative." });
+                    }
 
-                        if (gatewayPaidAmount == 0)
-                        {
-                            paymentMethod = "Wallet";
-                        }
-                        else
-                        {
-                            paymentMethod = "Hybrid";
-                        }
+                    // Rule 2: Wallet amount cannot exceed customer's available wallet balance.
+                    if (requestedWalletAmount > availableWalletBalance)
+                    {
+                        return BadRequest(new { message = $"Requested wallet amount (₹{requestedWalletAmount:N2}) exceeds available wallet balance (₹{availableWalletBalance:N2})." });
+                    }
+
+                    // Rule 3: Wallet amount cannot exceed booking total.
+                    if (requestedWalletAmount > calculatedTotalFare)
+                    {
+                        return BadRequest(new { message = $"Requested wallet amount (₹{requestedWalletAmount:N2}) cannot exceed the booking total (₹{calculatedTotalFare:N2})." });
+                    }
+
+                    // Rule 4: Cashfree amount must always be: CashfreeAmount = BookingTotal - WalletAmount
+                    decimal cashfreeAmount = calculatedTotalFare - requestedWalletAmount;
+
+                    // Rule 5: Total must always satisfy: WalletAmount + CashfreeAmount = BookingTotal
+                    if (requestedWalletAmount + cashfreeAmount != calculatedTotalFare)
+                    {
+                        throw new InvalidOperationException($"Invariant violation: requestedWalletAmount ({requestedWalletAmount}) + cashfreeAmount ({cashfreeAmount}) != calculatedTotalFare ({calculatedTotalFare})");
+                    }
+
+                    walletUsedAmount = requestedWalletAmount;
+                    gatewayPaidAmount = cashfreeAmount;
+
+                    // Payment method normalization:
+                    // Rule 6: If WalletAmount = 0 -> 100% Cashfree
+                    // Rule 7: If WalletAmount = BookingTotal -> 100% Wallet
+                    // Rule 8: If 0 < WalletAmount < BookingTotal -> Hybrid
+                    if (walletUsedAmount == 0m)
+                    {
+                        paymentMethod = "Cashfree";
+                    }
+                    else if (walletUsedAmount == calculatedTotalFare)
+                    {
+                        paymentMethod = "Wallet";
+                    }
+                    else
+                    {
+                        paymentMethod = "Hybrid";
                     }
                 }
 
@@ -848,25 +894,86 @@ namespace PickNBook.Api.Controllers
                     string paymentRef = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
                     int customerUserId = int.Parse(userIdStr);
 
-                    Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? dbTx = null;
-                    if (_dbContext.Database.IsRelational())
-                    {
-                        dbTx = await _dbContext.Database.BeginTransactionAsync();
-                    }
-
-                    WalletTransaction walletTx;
+                    Payment payment = null!;
+                    var strategy = _dbContext.Database.CreateExecutionStrategy();
                     try
                     {
-                        walletTx = await _walletService.DebitAsync(
-                            userId: customerUserId,
-                            amount: calculatedTotalFare,
-                            referenceType: request.BookingType ?? "Booking",
-                            refCode: paymentRef,
-                            description: $"Full wallet payment for {request.BookingType} ({paymentRef})");
+                        payment = await strategy.ExecuteAsync(async () =>
+                        {
+                            Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? dbTx = null;
+                            if (_dbContext.Database.IsRelational())
+                            {
+                                dbTx = await _dbContext.Database.BeginTransactionAsync();
+                            }
+
+                            WalletTransaction walletTx;
+                            try
+                            {
+                                walletTx = await _walletService.DebitAsync(
+                                    userId: customerUserId,
+                                    amount: calculatedTotalFare,
+                                    referenceType: request.BookingType ?? "Booking",
+                                    refCode: paymentRef,
+                                    description: $"Full wallet payment for {request.BookingType} ({paymentRef})");
+                            }
+                            catch (Exception)
+                            {
+                                if (dbTx != null) await dbTx.RollbackAsync();
+                                throw;
+                            }
+
+                            Payment p;
+                            try
+                            {
+                                p = await _paymentService.CreatePaymentAsync(
+                                    userIdStr, request.BookingType,
+                                    providerAmount, markupAmount, convenienceFee, discountAmount,
+                                    actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
+                                    finalPayableAmount: 0m,
+                                    currency: request.OrderCurrency,
+                                    totalAmount: calculatedTotalFare,
+                                    walletUsedAmount: calculatedTotalFare,
+                                    gatewayPaidAmount: 0m,
+                                    paymentMethod: "Wallet",
+                                    walletReservationStatus: "None",
+                                    walletTransactionId: walletTx.Id,
+                                    gatewayPaymentMethod: null,
+                                    paymentReference: paymentRef,
+                                    customerName: extractedCustomerName,
+                                    customerEmail: extractedCustomerEmail,
+                                    customerPhone: extractedCustomerPhone,
+                                    passengerCount: extractedPassengerCount,
+                                    passengerDetailsJson: extractedPassengerDetailsJson);
+
+                                p.Status = PaymentStatus.Success;
+                                p.PaidAt = DateTime.UtcNow;
+                                p.FulfillmentStatus = "Pending";
+                                await _dbContext.SaveChangesAsync();
+
+                                await _paymentService.CreatePendingBookingAsync(
+                                    p.Id, request.BookingType, userIdStr, calculatedTotalFare, request.OrderCurrency,
+                                    request.BookingPayloadJson, pricingSnapshotJson, DateTime.UtcNow.AddMinutes(30));
+
+                                if (dbTx != null) await dbTx.CommitAsync();
+                                return p;
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger.LogError(ex, "Payment creation or persistence failed for full wallet payment {PaymentRef}. Performing technical rollback.", paymentRef);
+                                if (dbTx != null)
+                                {
+                                    await dbTx.RollbackAsync();
+                                }
+                                throw;
+                            }
+                            finally
+                            {
+                                if (dbTx != null) await dbTx.DisposeAsync();
+                            }
+                        });
                     }
                     catch (InvalidOperationException ex)
                     {
-                        if (dbTx != null) await dbTx.RollbackAsync();
                         _logger.LogWarning(ex, "Full wallet debit failed for User {UserId}, amount {Amount}", customerUserId, calculatedTotalFare);
                         var currentBalance = await _dbContext.Users.Where(u => u.Id == customerUserId).Select(u => u.WalletBalance).FirstOrDefaultAsync();
                         return StatusCode(StatusCodes.Status409Conflict, new
@@ -875,66 +982,6 @@ namespace PickNBook.Api.Controllers
                             message = "Your wallet balance has changed. Please refresh and review your payment summary.",
                             currentWalletBalance = currentBalance
                         });
-                    }
-
-                    Payment payment;
-                    try
-                    {
-                        payment = await _paymentService.CreatePaymentAsync(
-                            userIdStr, request.BookingType,
-                            providerAmount, markupAmount, convenienceFee, discountAmount,
-                            actualCouponCode, request.SelectedFeaturedOfferId?.ToString(),
-                            finalPayableAmount: 0m,
-                            currency: request.OrderCurrency,
-                            totalAmount: calculatedTotalFare,
-                            walletUsedAmount: calculatedTotalFare,
-                            gatewayPaidAmount: 0m,
-                            paymentMethod: "Wallet",
-                            walletReservationStatus: "None",
-                            walletTransactionId: walletTx.Id,
-                            gatewayPaymentMethod: null,
-                            paymentReference: paymentRef,
-                            customerName: extractedCustomerName,
-                            customerEmail: extractedCustomerEmail,
-                            customerPhone: extractedCustomerPhone,
-                            passengerCount: extractedPassengerCount,
-                            passengerDetailsJson: extractedPassengerDetailsJson);
-
-                        payment.Status = PaymentStatus.Success;
-                        payment.PaidAt = DateTime.UtcNow;
-                        payment.FulfillmentStatus = "Pending";
-                        await _dbContext.SaveChangesAsync();
-
-                        await _paymentService.CreatePendingBookingAsync(
-                            payment.Id, request.BookingType, userIdStr, calculatedTotalFare, request.OrderCurrency,
-                            request.BookingPayloadJson, pricingSnapshotJson, DateTime.UtcNow.AddMinutes(30));
-
-                        if (dbTx != null) await dbTx.CommitAsync();
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Payment creation or persistence failed for full wallet payment {PaymentRef}. Performing technical rollback.", paymentRef);
-                        if (dbTx != null)
-                        {
-                            await dbTx.RollbackAsync();
-                        }
-                        else
-                        {
-                            // In-memory fallback technical rollback: restore balance and remove orphan debit
-                            var u = await _dbContext.Users.FindAsync(customerUserId);
-                            if (u != null)
-                            {
-                                u.WalletBalance += calculatedTotalFare;
-                                var orphanTx = await _dbContext.WalletTransactions.FindAsync(walletTx.Id);
-                                if (orphanTx != null) _dbContext.WalletTransactions.Remove(orphanTx);
-                                await _dbContext.SaveChangesAsync();
-                            }
-                        }
-                        throw;
-                    }
-                    finally
-                    {
-                        if (dbTx != null) await dbTx.DisposeAsync();
                     }
 
                     // Enqueue immediate fulfillment
@@ -958,7 +1005,8 @@ namespace PickNBook.Api.Controllers
                         GatewayPaidAmount = 0m,
                         PaymentMethod = "Wallet",
                         IsWalletFullyPaid = true,
-                        PaymentReference = payment.PaymentReference
+                        PaymentReference = payment.PaymentReference,
+                        WalletBalance = currentCustomerWalletBalance.HasValue ? currentCustomerWalletBalance.Value - calculatedTotalFare : null
                     });
                 }
 
@@ -1073,7 +1121,9 @@ namespace PickNBook.Api.Controllers
                         CashfreeOrderId = cfResponse.OrderId,
                         PaymentSessionId = cfResponse.PaymentSessionId,
                         CfOrderId = cfResponse.CfOrderId,
-                        OrderStatus = cfResponse.OrderStatus
+                        OrderStatus = cfResponse.OrderStatus,
+                        PaymentReference = payment.PaymentReference,
+                        WalletBalance = currentCustomerWalletBalance
                     });
                 }
 
@@ -1126,7 +1176,9 @@ namespace PickNBook.Api.Controllers
                     CashfreeOrderId = cfResponseCashfree.OrderId,
                     PaymentSessionId = cfResponseCashfree.PaymentSessionId,
                     CfOrderId = cfResponseCashfree.CfOrderId,
-                    OrderStatus = cfResponseCashfree.OrderStatus
+                    OrderStatus = cfResponseCashfree.OrderStatus,
+                    PaymentReference = paymentCashfree.PaymentReference,
+                    WalletBalance = currentCustomerWalletBalance
                 });
             }
             catch (InvalidOperationException ex)
