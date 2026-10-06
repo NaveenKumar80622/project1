@@ -1,10 +1,11 @@
-﻿namespace PickNBook.Api.Models.DTOs
+namespace PickNBook.Api.Models.DTOs
 {
     public class FetchTicketRequest
     {
-        public string Mobile { get; set; } = string.Empty;
-        public string Email { get; set; } = string.Empty;
-        public string BookingType { get; set; } = string.Empty; // "bus" | "flight"
+        public string? Mobile { get; set; }
+        public string? Email { get; set; }
+        public string? BookingType { get; set; } // "bus" | "flight" | "hotel" | "all"
+        public string? BookingReference { get; set; }
         public bool ActiveOnly { get; set; } = true; // default true
     }
 }
