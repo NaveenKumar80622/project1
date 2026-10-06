@@ -1676,6 +1676,7 @@ namespace PickNBook.Api.Controllers
         // MY BOOKINGS
         // =====================================
         [HttpGet("my-bookings")]
+        [HttpGet("/api/hotel/my-bookings")]
         [Authorize]
         public async Task<IActionResult> MyBookings()
         {
@@ -1692,7 +1693,72 @@ namespace PickNBook.Api.Controllers
                 var bookings = await _dbContext.HotelReservations
                     .Where(x => x.UserId == userId)
                     .OrderByDescending(x => x.CreatedAt)
-                    .Select(x => new HotelBookingHistoryDto
+                    .ToListAsync();
+
+                var hotelIds = bookings.Select(b => b.Id).ToList();
+
+                var payments = await _dbContext.Payments.AsNoTracking()
+                    .Where(p => (p.BookingType == "Hotel" || p.BookingType.ToLower() == "hotel") && p.BookingId.HasValue && hotelIds.Contains(p.BookingId.Value))
+                    .ToListAsync();
+                var paymentMap = payments.GroupBy(p => p.BookingId!.Value).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
+
+                var paymentIds = payments.Select(p => p.Id).ToList();
+                var bookingRefs = bookings.Select(b => b.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
+
+                var cancellations = await _dbContext.BookingCancellations.AsNoTracking()
+                    .Where(c => (c.BookingType == "Hotel" || c.BookingType.ToLower() == "hotel") &&
+                                (paymentIds.Contains(c.PaymentId) || bookingRefs.Contains(c.BookingReference)))
+                    .ToListAsync();
+                var cancelMapByPayment = cancellations
+                    .Where(c => c.PaymentId > 0)
+                    .GroupBy(c => c.PaymentId)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
+                var cancelMapByRef = cancellations
+                    .GroupBy(c => c.BookingReference)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
+
+                var execs = paymentIds.Any()
+                    ? await _dbContext.SupplierFulfillmentExecutions.AsNoTracking()
+                        .Where(e => paymentIds.Contains(e.PaymentId))
+                        .ToListAsync()
+                    : new List<PickNBook.Api.Models.Entities.SupplierFulfillmentExecution>();
+                var execMap = execs.GroupBy(e => e.PaymentId).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
+
+                var result = bookings.Select(x =>
+                {
+                    paymentMap.TryGetValue(x.Id, out var payment);
+                    PickNBook.Api.Models.Entities.BookingCancellation? cancel = null;
+                    if (payment != null) cancelMapByPayment.TryGetValue(payment.Id, out cancel);
+                    if (cancel == null && !string.IsNullOrEmpty(x.BookingReference)) cancelMapByRef.TryGetValue(x.BookingReference, out cancel);
+                    PickNBook.Api.Models.Entities.SupplierFulfillmentExecution? exec = null;
+                    if (payment != null) execMap.TryGetValue(payment.Id, out exec);
+
+                    decimal cancelCharges = cancel?.SupplierCancellationCharge ?? x.CancellationCharges;
+                    decimal refundAmt = cancel?.CustomerRefundAmount ?? x.RefundAmount;
+                    if (refundAmt == 0 && (string.Equals(payment?.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) || string.Equals(x.Status, "Refunded", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        refundAmt = payment?.FinalPayableAmount ?? x.TotalPrice;
+                    }
+
+                    var pnr = !string.IsNullOrWhiteSpace(x.ConfirmationNo) ? x.ConfirmationNo : (!string.IsNullOrWhiteSpace(x.ProviderBookingId) ? x.ProviderBookingId : exec?.SupplierReference);
+                    var summary = !string.IsNullOrWhiteSpace(x.HotelName) ? $"{x.HotelName} ({x.CheckInDate:dd MMM} - {x.CheckOutDate:dd MMM})" : "Hotel Stay";
+
+                    var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
+                        "Hotel",
+                        x.Id,
+                        x.BookingReference,
+                        pnr,
+                        x.Status,
+                        summary,
+                        x.CreatedAt,
+                        payment,
+                        exec,
+                        cancel,
+                        x.TotalPrice,
+                        cancelCharges,
+                        refundAmt);
+
+                    return new HotelBookingHistoryDto
                     {
                         BookingId = "bk-" + x.Id,
                         BookingReference = x.BookingReference,
@@ -1706,11 +1772,18 @@ namespace PickNBook.Api.Controllers
                         ProviderBookingId = x.ProviderBookingId,
                         TraceId = x.TraceId,
                         GuestName = x.GuestName,
-                        CreatedAt = DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc)
-                    })
-                    .ToListAsync();
+                        CreatedAt = DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc),
 
-                return Ok(bookings);
+                        CanonicalStatus = lifecycle.CanonicalStatus,
+                        CanonicalStatusLabel = lifecycle.CanonicalStatusLabel,
+                        LifecycleHierarchy = lifecycle.Hierarchy,
+                        Timeline = lifecycle.Timeline,
+                        PaymentBreakdown = lifecycle.PaymentBreakdown,
+                        CancellationAudit = lifecycle.CancellationAudit
+                    };
+                }).ToList();
+
+                return Ok(result);
             }
             catch (Exception ex)
             {

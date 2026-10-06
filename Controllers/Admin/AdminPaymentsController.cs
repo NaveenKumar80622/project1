@@ -229,36 +229,42 @@ namespace PickNBook.Api.Controllers.Admin
                 decimal cancelCharges = cancel?.SupplierCancellationCharge ?? 0m;
                 decimal refundAmt = cancel?.CustomerRefundAmount ?? (string.Equals(p.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) || string.Equals(p.Status, "REFUNDED", StringComparison.OrdinalIgnoreCase) ? p.FinalPayableAmount : 0m);
 
-                if (string.Equals(p.BookingType, "Hotel", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && hotelMap.TryGetValue(p.BookingId.Value, out var hotel))
+                HotelReservation? curHotel = null;
+                BusReservation? curBus = null;
+                FlightReservation? curFlight = null;
+
+                if (string.Equals(p.BookingType, "Hotel", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && hotelMap.TryGetValue(p.BookingId.Value, out curHotel))
                 {
-                    bookingRef = hotel.BookingReference;
-                    pnr = !string.IsNullOrWhiteSpace(hotel.ConfirmationNo) ? hotel.ConfirmationNo : (!string.IsNullOrWhiteSpace(hotel.ProviderBookingId) ? hotel.ProviderBookingId : pnr);
-                    if (!string.IsNullOrWhiteSpace(hotel.Status)) srdvStatus = hotel.Status;
-                    summary = !string.IsNullOrWhiteSpace(hotel.HotelName) ? $"{hotel.HotelName} ({hotel.CheckInDate:dd MMM} - {hotel.CheckOutDate:dd MMM})" : "Hotel Stay";
-                    if (string.Equals(hotel.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
-                    if (cancelCharges == 0 && hotel.CancellationCharges > 0) cancelCharges = hotel.CancellationCharges;
-                    if (refundAmt == 0 && hotel.RefundAmount > 0) refundAmt = hotel.RefundAmount;
+                    bookingRef = curHotel.BookingReference;
+                    pnr = !string.IsNullOrWhiteSpace(curHotel.ConfirmationNo) ? curHotel.ConfirmationNo : (!string.IsNullOrWhiteSpace(curHotel.ProviderBookingId) ? curHotel.ProviderBookingId : pnr);
+                    if (!string.IsNullOrWhiteSpace(curHotel.Status)) srdvStatus = curHotel.Status;
+                    summary = !string.IsNullOrWhiteSpace(curHotel.HotelName) ? $"{curHotel.HotelName} ({curHotel.CheckInDate:dd MMM} - {curHotel.CheckOutDate:dd MMM})" : "Hotel Stay";
+                    if (string.Equals(curHotel.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
+                    if (cancelCharges == 0 && curHotel.CancellationCharges > 0) cancelCharges = curHotel.CancellationCharges;
+                    if (refundAmt == 0 && curHotel.RefundAmount > 0) refundAmt = curHotel.RefundAmount;
                 }
-                else if (string.Equals(p.BookingType, "Bus", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && busMap.TryGetValue(p.BookingId.Value, out var bus))
+                else if (string.Equals(p.BookingType, "Bus", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && busMap.TryGetValue(p.BookingId.Value, out curBus))
                 {
-                    bookingRef = bus.BookingReference;
-                    pnr = !string.IsNullOrWhiteSpace(bus.Pnr) ? bus.Pnr : pnr;
-                    if (!string.IsNullOrWhiteSpace(bus.Status)) srdvStatus = bus.Status;
-                    summary = bus.BusBooking != null ? $"{bus.BusBooking.FromCity} → {bus.BusBooking.ToCity} ({bus.BusBooking.OperatorName})" : "Bus Journey";
-                    if (string.Equals(bus.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) || string.Equals(bus.Status, "Partially Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
-                    if (cancelCharges == 0 && (bus.CancellationChargeInr ?? 0) > 0) cancelCharges = bus.CancellationChargeInr!.Value;
-                    if (refundAmt == 0 && (bus.RefundAmountInr ?? 0) > 0) refundAmt = bus.RefundAmountInr!.Value;
+                    bookingRef = curBus.BookingReference;
+                    pnr = !string.IsNullOrWhiteSpace(curBus.Pnr) ? curBus.Pnr : pnr;
+                    if (!string.IsNullOrWhiteSpace(curBus.Status)) srdvStatus = curBus.Status;
+                    summary = curBus.BusBooking != null ? $"{curBus.BusBooking.FromCity} → {curBus.BusBooking.ToCity} ({curBus.BusBooking.OperatorName})" : "Bus Journey";
+                    if (string.Equals(curBus.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) || string.Equals(curBus.Status, "Partially Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
+                    if (cancelCharges == 0 && (curBus.CancellationChargeInr ?? 0) > 0) cancelCharges = curBus.CancellationChargeInr!.Value;
+                    if (refundAmt == 0 && (curBus.RefundAmountInr ?? 0) > 0) refundAmt = curBus.RefundAmountInr!.Value;
                 }
-                else if (string.Equals(p.BookingType, "Flight", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && flightMap.TryGetValue(p.BookingId.Value, out var flight))
+                else if (string.Equals(p.BookingType, "Flight", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && flightMap.TryGetValue(p.BookingId.Value, out curFlight))
                 {
-                    bookingRef = flight.BookingReference;
-                    pnr = !string.IsNullOrWhiteSpace(flight.Pnr) ? flight.Pnr : pnr;
-                    if (!string.IsNullOrWhiteSpace(flight.Status)) srdvStatus = flight.Status;
-                    summary = !string.IsNullOrWhiteSpace(flight.Airline) ? $"{flight.Airline} ({flight.FromCity} → {flight.ToCity})" : "Flight Journey";
-                    if (string.Equals(flight.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
-                    if (cancelCharges == 0 && (flight.CancellationChargeInr ?? 0) > 0) cancelCharges = flight.CancellationChargeInr!.Value;
-                    if (refundAmt == 0 && (flight.RefundAmountInr ?? 0) > 0) refundAmt = flight.RefundAmountInr!.Value;
+                    bookingRef = curFlight.BookingReference;
+                    pnr = !string.IsNullOrWhiteSpace(curFlight.Pnr) ? curFlight.Pnr : pnr;
+                    if (!string.IsNullOrWhiteSpace(curFlight.Status)) srdvStatus = curFlight.Status;
+                    summary = !string.IsNullOrWhiteSpace(curFlight.Airline) ? $"{curFlight.Airline} ({curFlight.FromCity} → {curFlight.ToCity})" : "Flight Journey";
+                    if (string.Equals(curFlight.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
+                    if (cancelCharges == 0 && (curFlight.CancellationChargeInr ?? 0) > 0) cancelCharges = curFlight.CancellationChargeInr!.Value;
+                    if (refundAmt == 0 && (curFlight.RefundAmountInr ?? 0) > 0) refundAmt = curFlight.RefundAmountInr!.Value;
                 }
+
+                var hierarchy = BuildLifecycleHierarchy(p, exec, cancel, curHotel, curBus, curFlight, bookingRef, pnr, srdvStatus, isCancelled, cancelCharges, refundAmt);
 
                 return new
                 {
@@ -298,7 +304,22 @@ namespace PickNBook.Api.Controllers.Admin
                     p.CreatedAt,
                     p.PaidAt,
                     p.FailureReason,
-                    SupplierError = exec?.LastError
+                    SupplierError = exec?.LastError,
+
+                    // Hierarchy & Tracing
+                    CanonicalStatus = hierarchy.CanonicalStatus,
+                    CanonicalStatusLabel = hierarchy.CanonicalStatusLabel,
+                    LifecycleHierarchy = new
+                    {
+                        hierarchy.CanonicalStatus,
+                        hierarchy.CanonicalStatusLabel,
+                        hierarchy.CurrentStageIndex,
+                        hierarchy.CurrentStageKey,
+                        hierarchy.CurrentStageName,
+                        hierarchy.TotalStages,
+                        hierarchy.IsTerminal,
+                        hierarchy.NextActionRequired
+                    }
                 };
             }).ToList();
 
@@ -480,6 +501,8 @@ namespace PickNBook.Api.Controllers.Admin
                 });
             }
 
+            var hierarchy = BuildLifecycleHierarchy(payment, exec, cancel, hotel, bus, flight, bookingRef, pnr, srdvStatus, isCancelled, cancelCharges, refundAmt);
+
             return Ok(new
             {
                 success = true,
@@ -528,6 +551,11 @@ namespace PickNBook.Api.Controllers.Admin
                     payment.UpdatedAt,
                     payment.PaidAt,
                     payment.WebhookReceivedAt,
+
+                    // Lifecycle Tracing & Hierarchy
+                    canonicalStatus = hierarchy.CanonicalStatus,
+                    canonicalStatusLabel = hierarchy.CanonicalStatusLabel,
+                    lifecycleHierarchy = hierarchy,
 
                     // Nested 3-Pillar Enterprise Details
                     supplierFulfillment = exec == null ? null : new
@@ -727,12 +755,440 @@ namespace PickNBook.Api.Controllers.Admin
                 });
             }
         }
+        private static LifecycleHierarchyDto BuildLifecycleHierarchy(
+            Payment p,
+            SupplierFulfillmentExecution? exec,
+            BookingCancellation? cancel,
+            HotelReservation? hotel,
+            BusReservation? bus,
+            FlightReservation? flight,
+            string? bookingRef,
+            string? pnr,
+            string srdvStatus,
+            bool isCancelled,
+            decimal cancelCharges,
+            decimal refundAmt)
+        {
+            var stages = new List<LifecycleStageNodeDto>();
+            decimal gwPaid = p.GatewayPaidAmount > 0 ? p.GatewayPaidAmount : (p.FinalPayableAmount - p.WalletUsedAmount);
+
+            // 1. Stage: Payment Authorization
+            bool isPaymentSuccess = string.Equals(p.Status, "SUCCESS", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(p.Status, "PAID", StringComparison.OrdinalIgnoreCase) ||
+                                    p.PaidAt.HasValue;
+            bool isPaymentFailed = string.Equals(p.Status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(p.Status, "USER_DROPPED", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(p.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase);
+
+            string stage1Status = isPaymentSuccess ? "COMPLETED" : (isPaymentFailed ? "FAILED" : "PENDING");
+            DateTime? stage1Time = isPaymentSuccess ? (p.PaidAt ?? p.UpdatedAt) : (isPaymentFailed ? p.UpdatedAt : p.CreatedAt);
+            string stage1Summary = isPaymentSuccess
+                ? $"₹{p.FinalPayableAmount:F2} captured via {p.PaymentMethod ?? "Cashfree"} (Gateway: ₹{gwPaid:F2}, Wallet: ₹{p.WalletUsedAmount:F2})."
+                : (isPaymentFailed
+                    ? (p.FailureReason ?? p.LastError ?? "Payment dropped or declined by customer bank.")
+                    : $"Cashfree Order #{p.CashfreeOrderId} created for ₹{p.FinalPayableAmount:F2}. Awaiting customer payment.");
+
+            stages.Add(new LifecycleStageNodeDto
+            {
+                StageIndex = 0,
+                Key = "GATEWAY_PAYMENT",
+                Name = "Payment Authorization",
+                Status = stage1Status,
+                Timestamp = stage1Time,
+                Summary = stage1Summary,
+                Meta = new Dictionary<string, object?>
+                {
+                    { "orderId", p.CashfreeOrderId },
+                    { "paymentId", p.CashfreePaymentId },
+                    { "amount", p.FinalPayableAmount },
+                    { "gatewayPaid", gwPaid },
+                    { "walletUsed", p.WalletUsedAmount },
+                    { "currency", p.Currency },
+                    { "method", p.PaymentMethod ?? "Cashfree" },
+                    { "isPaid", isPaymentSuccess }
+                }
+            });
+
+            // 2. Stage: SRDV Supplier Dispatch
+            bool hasDispatched = exec != null || !string.Equals(p.FulfillmentStatus, "Pending", StringComparison.OrdinalIgnoreCase);
+            string stage2Status;
+            DateTime? stage2Time = null;
+            string stage2Summary;
+
+            if (!isPaymentSuccess)
+            {
+                stage2Status = "SKIPPED";
+                stage2Summary = "Awaiting payment authorization before supplier dispatch.";
+            }
+            else if (hasDispatched)
+            {
+                stage2Status = "COMPLETED";
+                stage2Time = exec?.CreatedAt ?? p.UpdatedAt;
+                stage2Summary = $"Dispatched {p.BookingType} booking request to SRDV supplier API (Reservation #{p.BookingId}).";
+            }
+            else
+            {
+                stage2Status = "IN_PROGRESS";
+                stage2Time = p.PaidAt;
+                stage2Summary = "Payment verified. Queued for supplier booking dispatch.";
+            }
+
+            stages.Add(new LifecycleStageNodeDto
+            {
+                StageIndex = 1,
+                Key = "SUPPLIER_DISPATCH",
+                Name = "Supplier Dispatch",
+                Status = stage2Status,
+                Timestamp = stage2Time,
+                Summary = stage2Summary,
+                Meta = new Dictionary<string, object?>
+                {
+                    { "bookingType", p.BookingType },
+                    { "bookingId", p.BookingId },
+                    { "executionId", exec?.Id }
+                }
+            });
+
+            // 3. Stage: Supplier Confirmation & PNR
+            bool isFulfillSuccess = string.Equals(p.FulfillmentStatus, "Success", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(p.FulfillmentStatus, "CONFIRMED", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(exec?.SupplierBookingStatus, "Success", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(exec?.SupplierBookingStatus, "Confirmed", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(srdvStatus, "Booked", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(srdvStatus, "Confirmed", StringComparison.OrdinalIgnoreCase);
+
+            bool isFulfillFailed = (p.FulfillmentStatus != null && p.FulfillmentStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
+                                   (exec?.SupplierBookingStatus != null && exec.SupplierBookingStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
+                                   string.Equals(srdvStatus, "Failed", StringComparison.OrdinalIgnoreCase);
+
+            string stage3Status;
+            DateTime? stage3Time = null;
+            string stage3Summary;
+
+            if (!isPaymentSuccess)
+            {
+                stage3Status = "SKIPPED";
+                stage3Summary = "Skipped because payment was not completed.";
+            }
+            else if (isFulfillSuccess)
+            {
+                stage3Status = "COMPLETED";
+                stage3Time = exec?.UpdatedAt ?? p.UpdatedAt;
+                stage3Summary = $"SRDV confirmed reservation #{p.BookingId}. Provider Reference / PNR: {pnr ?? exec?.SupplierReference ?? "Confirmed"}.";
+            }
+            else if (isFulfillFailed)
+            {
+                stage3Status = "FAILED";
+                stage3Time = exec?.UpdatedAt ?? p.UpdatedAt;
+                stage3Summary = exec?.LastError ?? p.LastError ?? "Supplier fulfillment failed during confirmation.";
+            }
+            else
+            {
+                stage3Status = "IN_PROGRESS";
+                stage3Time = exec?.CreatedAt ?? p.UpdatedAt;
+                stage3Summary = "SRDV supplier is confirming inventory and issuing PNR/Ticket.";
+            }
+
+            stages.Add(new LifecycleStageNodeDto
+            {
+                StageIndex = 2,
+                Key = "SUPPLIER_CONFIRMATION",
+                Name = "Supplier Booking & PNR",
+                Status = stage3Status,
+                Timestamp = stage3Time,
+                Summary = stage3Summary,
+                Meta = new Dictionary<string, object?>
+                {
+                    { "pnr", pnr },
+                    { "bookingReference", bookingRef },
+                    { "supplierStatus", srdvStatus },
+                    { "providerReference", exec?.SupplierReference },
+                    { "supplierError", exec?.LastError }
+                }
+            });
+
+            // 4. Stage: Post-Booking Lifecycle
+            string stage4Status;
+            DateTime? stage4Time = null;
+            string stage4Summary;
+
+            if (!isPaymentSuccess || isFulfillFailed)
+            {
+                stage4Status = "SKIPPED";
+                stage4Summary = "Not applicable (booking was not established).";
+            }
+            else if (!isFulfillSuccess)
+            {
+                stage4Status = "PENDING";
+                stage4Summary = "Awaiting supplier booking confirmation.";
+            }
+            else if (isCancelled)
+            {
+                stage4Status = "COMPLETED";
+                stage4Time = cancel?.CreatedAtUtc ?? hotel?.CancelledAt ?? bus?.CancelledAtUtc ?? flight?.CancelledAtUtc ?? p.UpdatedAt;
+                stage4Summary = $"Booking cancelled. Supplier penalty: ₹{cancelCharges:F2}, Eligible refund: ₹{refundAmt:F2}.";
+            }
+            else
+            {
+                stage4Status = "COMPLETED";
+                stage4Time = exec?.UpdatedAt ?? p.PaidAt;
+                stage4Summary = "Booking is confirmed and active.";
+            }
+
+            stages.Add(new LifecycleStageNodeDto
+            {
+                StageIndex = 3,
+                Key = "POST_BOOKING_LIFECYCLE",
+                Name = isCancelled ? "Booking Cancellation" : "Active Reservation",
+                Status = stage4Status,
+                Timestamp = stage4Time,
+                Summary = stage4Summary,
+                Meta = new Dictionary<string, object?>
+                {
+                    { "isCancelled", isCancelled },
+                    { "cancellationCharges", cancelCharges },
+                    { "eligibleRefundAmount", refundAmt },
+                    { "cancellationReason", cancel?.FailureReason ?? hotel?.CancellationReason ?? bus?.CancellationReason ?? flight?.CancellationReason ?? p.RefundReason }
+                }
+            });
+
+            // 5. Stage: Refund Settlement
+            bool isRefundDone = string.Equals(p.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(p.RefundStatus, "COMPLETED", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(p.Status, "REFUNDED", StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(cancel?.RefundStatus, "COMPLETED", StringComparison.OrdinalIgnoreCase);
+
+            bool isRefundOnHold = string.Equals(p.RefundStatus, "RefundOnHold", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(cancel?.RefundStatus, "ON_HOLD", StringComparison.OrdinalIgnoreCase);
+
+            bool isRefundProcessing = string.Equals(p.RefundStatus, "RefundProcessing", StringComparison.OrdinalIgnoreCase) ||
+                                      string.Equals(p.RefundStatus, "PROCESSING", StringComparison.OrdinalIgnoreCase) ||
+                                      string.Equals(cancel?.RefundStatus, "PROCESSING", StringComparison.OrdinalIgnoreCase);
+
+            bool isRefundFailed = string.Equals(p.RefundStatus, "RefundFailed", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(cancel?.RefundStatus, "FAILED", StringComparison.OrdinalIgnoreCase);
+
+            string stage5Status;
+            DateTime? stage5Time = null;
+            string stage5Summary;
+
+            if (!isCancelled && !isFulfillFailed)
+            {
+                stage5Status = "SKIPPED";
+                stage5Summary = "Not applicable (booking active, no refund requested).";
+            }
+            else if (isRefundDone)
+            {
+                stage5Status = "COMPLETED";
+                stage5Time = cancel?.CompletedAtUtc ?? p.UpdatedAt;
+                decimal settledAmt = refundAmt > 0 ? refundAmt : p.FinalPayableAmount;
+                stage5Summary = $"Refund of ₹{settledAmt:F2} settled. Cashfree Refund ID: {p.RefundId ?? cancel?.CashfreeRefundId ?? "Settled"}.";
+            }
+            else if (isRefundOnHold)
+            {
+                stage5Status = "WARNING";
+                stage5Time = p.UpdatedAt;
+                stage5Summary = "Refund on hold at Cashfree due to insufficient merchant account balance.";
+            }
+            else if (isRefundProcessing)
+            {
+                stage5Status = "IN_PROGRESS";
+                stage5Time = p.UpdatedAt;
+                stage5Summary = $"Refund of ₹{refundAmt:F2} is processing with Cashfree.";
+            }
+            else if (isRefundFailed)
+            {
+                stage5Status = "FAILED";
+                stage5Time = p.UpdatedAt;
+                stage5Summary = p.LastError ?? "Cashfree refund failed or rejected.";
+            }
+            else
+            {
+                stage5Status = "PENDING";
+                stage5Time = p.UpdatedAt;
+                stage5Summary = $"Eligible refund amount: ₹{refundAmt:F2}. Awaiting admin / auto refund initiation.";
+            }
+
+            stages.Add(new LifecycleStageNodeDto
+            {
+                StageIndex = 4,
+                Key = "REFUND_SETTLEMENT",
+                Name = "Refund Settlement",
+                Status = stage5Status,
+                Timestamp = stage5Time,
+                Summary = stage5Summary,
+                Meta = new Dictionary<string, object?>
+                {
+                    { "refundId", p.RefundId ?? cancel?.CashfreeRefundId },
+                    { "refundStatus", p.RefundStatus ?? cancel?.RefundStatus },
+                    { "refundAmount", refundAmt > 0 ? refundAmt : (isRefundDone ? p.FinalPayableAmount : 0m) },
+                    { "cashfreeError", p.LastError }
+                }
+            });
+
+            // Canonical synthesis
+            string canonicalStatus;
+            string canonicalLabel;
+            int currentStageIndex;
+            string currentStageKey;
+            string currentStageName;
+            bool isTerminal;
+            string nextAction;
+
+            if (isPaymentFailed)
+            {
+                canonicalStatus = "PAYMENT_FAILED";
+                canonicalLabel = "Payment Failed / Dropped";
+                currentStageIndex = 0;
+                currentStageKey = "GATEWAY_PAYMENT";
+                currentStageName = "Payment Authorization";
+                isTerminal = true;
+                nextAction = "None (Customer abandoned or bank declined)";
+            }
+            else if (!isPaymentSuccess)
+            {
+                canonicalStatus = "PAYMENT_PENDING";
+                canonicalLabel = "Payment Pending";
+                currentStageIndex = 0;
+                currentStageKey = "GATEWAY_PAYMENT";
+                currentStageName = "Payment Authorization";
+                isTerminal = false;
+                nextAction = "Awaiting customer to complete payment";
+            }
+            else if (isFulfillFailed)
+            {
+                currentStageIndex = 4;
+                currentStageKey = "REFUND_SETTLEMENT";
+                currentStageName = "Refund Settlement";
+
+                if (isRefundDone)
+                {
+                    canonicalStatus = "BOOKING_FAILED_REFUNDED";
+                    canonicalLabel = "Booking Failed & Refunded";
+                    isTerminal = true;
+                    nextAction = "None (Refund fully settled)";
+                }
+                else if (isRefundOnHold)
+                {
+                    canonicalStatus = "REFUND_ON_HOLD";
+                    canonicalLabel = "Refund On Hold (Low Balance)";
+                    isTerminal = false;
+                    nextAction = "Recharge Cashfree merchant balance to release refund";
+                }
+                else if (isRefundProcessing)
+                {
+                    canonicalStatus = "BOOKING_FAILED_REFUND_PROCESSING";
+                    canonicalLabel = "Booking Failed - Refund Processing";
+                    isTerminal = false;
+                    nextAction = "Monitor Cashfree refund status";
+                }
+                else
+                {
+                    canonicalStatus = "BOOKING_FAILED_REFUND_PENDING";
+                    canonicalLabel = "Booking Failed - Refund Pending";
+                    isTerminal = false;
+                    nextAction = "Trigger refund to customer from Admin action button";
+                }
+            }
+            else if (!isFulfillSuccess)
+            {
+                canonicalStatus = "PAYMENT_SUCCESS_FULFILLING";
+                canonicalLabel = "Paid - Fulfilling with SRDV";
+                currentStageIndex = 1;
+                currentStageKey = "SUPPLIER_DISPATCH";
+                currentStageName = "Supplier Dispatch";
+                isTerminal = false;
+                nextAction = "Awaiting SRDV supplier confirmation";
+            }
+            else if (isCancelled)
+            {
+                currentStageIndex = 4;
+                currentStageKey = "REFUND_SETTLEMENT";
+                currentStageName = "Refund Settlement";
+
+                if (isRefundDone)
+                {
+                    canonicalStatus = "CANCELLED_AND_REFUNDED";
+                    canonicalLabel = "Cancelled & Refunded";
+                    isTerminal = true;
+                    nextAction = "None (Cancellation & refund complete)";
+                }
+                else if (isRefundOnHold)
+                {
+                    canonicalStatus = "REFUND_ON_HOLD";
+                    canonicalLabel = "Refund On Hold (Low Balance)";
+                    isTerminal = false;
+                    nextAction = "Recharge Cashfree merchant balance to release refund";
+                }
+                else if (isRefundProcessing)
+                {
+                    canonicalStatus = "CANCELLED_REFUND_PROCESSING";
+                    canonicalLabel = "Cancelled - Refund Processing";
+                    isTerminal = false;
+                    nextAction = "Monitor Cashfree refund status";
+                }
+                else
+                {
+                    canonicalStatus = "CANCELLED_REFUND_PENDING";
+                    canonicalLabel = "Cancelled - Refund Pending";
+                    isTerminal = false;
+                    nextAction = "Initiate customer refund via action button";
+                }
+            }
+            else
+            {
+                canonicalStatus = "BOOKING_CONFIRMED";
+                canonicalLabel = "Booking Confirmed";
+                currentStageIndex = 3;
+                currentStageKey = "POST_BOOKING_LIFECYCLE";
+                currentStageName = "Active Reservation";
+                isTerminal = true;
+                nextAction = "None (Reservation active & confirmed)";
+            }
+
+            return new LifecycleHierarchyDto
+            {
+                CanonicalStatus = canonicalStatus,
+                CanonicalStatusLabel = canonicalLabel,
+                CurrentStageIndex = currentStageIndex,
+                CurrentStageKey = currentStageKey,
+                CurrentStageName = currentStageName,
+                TotalStages = stages.Count,
+                IsTerminal = isTerminal,
+                NextActionRequired = nextAction,
+                Stages = stages
+            };
+        }
     }
 
     public class AdminRefundRequestDto
     {
         public decimal? RefundAmount { get; set; }
         public string? RefundReason { get; set; }
+    }
+
+    public class LifecycleHierarchyDto
+    {
+        public string CanonicalStatus { get; set; } = string.Empty;
+        public string CanonicalStatusLabel { get; set; } = string.Empty;
+        public int CurrentStageIndex { get; set; }
+        public string CurrentStageKey { get; set; } = string.Empty;
+        public string CurrentStageName { get; set; } = string.Empty;
+        public int TotalStages { get; set; } = 5;
+        public bool IsTerminal { get; set; }
+        public string NextActionRequired { get; set; } = string.Empty;
+        public List<LifecycleStageNodeDto> Stages { get; set; } = new();
+    }
+
+    public class LifecycleStageNodeDto
+    {
+        public int StageIndex { get; set; }
+        public string Key { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public DateTime? Timestamp { get; set; }
+        public string Summary { get; set; } = string.Empty;
+        public Dictionary<string, object?> Meta { get; set; } = new();
     }
 }
 

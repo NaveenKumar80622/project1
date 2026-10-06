@@ -197,6 +197,13 @@ namespace PickNBook.Api.Models.DTOs
         public string? TraceId { get; set; }
         public string GuestName { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
+
+        public string? CanonicalStatus { get; set; }
+        public string? CanonicalStatusLabel { get; set; }
+        public PickNBook.Api.Helpers.UserLifecycleHierarchyDto? LifecycleHierarchy { get; set; }
+        public List<PickNBook.Api.Helpers.UserBookingTimelineEventDto>? Timeline { get; set; }
+        public object? PaymentBreakdown { get; set; }
+        public object? CancellationAudit { get; set; }
     }
 
     public class HotelCancellationDto

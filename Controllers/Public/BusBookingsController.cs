@@ -19,6 +19,8 @@ using PickNBook.Api.Services.Notifications.Interfaces;
 namespace PickNBook.Api.Controllers
 {
     [Authorize]
+    [Route("api/[controller]")]
+    [Route("api/bus")]
     public class BusBookingsController(
     AppDbContext dbContext,
       IBusPromotionEngineService promotionEngine,
@@ -2737,6 +2739,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("bookings")]
+        [HttpGet("my-bookings")]
         public async Task<IActionResult> GetBusBookings([FromQuery] string? passengerPhone, [FromQuery] string? status)
         {
             if (!currentUserService.IsAuthenticated())
@@ -2790,6 +2793,37 @@ namespace PickNBook.Api.Controllers
                 .ToListAsync();
 
             var bookingIds = bookings.Select(x => x.Id).ToList();
+
+            var payments = await dbContext.Payments.AsNoTracking()
+                .Where(p => (p.BookingType == "Bus" || p.BookingType.ToLower() == "bus") && p.BookingId.HasValue && bookingIds.Contains(p.BookingId.Value))
+                .ToListAsync();
+            var paymentMap = payments
+                .GroupBy(p => p.BookingId!.Value)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(p => p.Id).FirstOrDefault());
+
+            var paymentIds = payments.Select(p => p.Id).ToList();
+            var bookingRefs = bookings.Select(x => x.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
+            var cancellations = await dbContext.BookingCancellations.AsNoTracking()
+                .Where(c => (c.BookingType == "Bus" || c.BookingType.ToLower() == "bus") &&
+                            (paymentIds.Contains(c.PaymentId) || bookingRefs.Contains(c.BookingReference)))
+                .ToListAsync();
+            var cancelMapByPayment = cancellations
+                .Where(c => c.PaymentId > 0)
+                .GroupBy(c => c.PaymentId)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
+            var cancelMapByRef = cancellations
+                .GroupBy(c => c.BookingReference)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
+
+            var execs = paymentIds.Any()
+                ? await dbContext.SupplierFulfillmentExecutions.AsNoTracking()
+                    .Where(e => paymentIds.Contains(e.PaymentId))
+                    .ToListAsync()
+                : new List<PickNBook.Api.Models.Entities.SupplierFulfillmentExecution>();
+            var execMap = execs
+                .GroupBy(e => e.PaymentId)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(e => e.Id).FirstOrDefault());
+
             var passengers = await dbContext.BusReservationPassengers
                 .AsNoTracking()
                 .Where(x => bookingIds.Contains(x.BusReservationId))
@@ -2809,7 +2843,32 @@ namespace PickNBook.Api.Controllers
                         passengerRows = Array.Empty<BusReservationPassenger>();
                     }
 
-                    return MapBusReservation(x, x.BusBooking!, passengerRows);
+                    paymentMap.TryGetValue(x.Id, out var payment);
+                    PickNBook.Api.Models.Entities.BookingCancellation? cancel = null;
+                    if (payment != null) cancelMapByPayment.TryGetValue(payment.Id, out cancel);
+                    if (cancel == null && !string.IsNullOrEmpty(x.BookingReference)) cancelMapByRef.TryGetValue(x.BookingReference, out cancel);
+                    PickNBook.Api.Models.Entities.SupplierFulfillmentExecution? exec = null;
+                    if (payment != null) execMap.TryGetValue(payment.Id, out exec);
+
+                    decimal cancelCharges = cancel?.SupplierCancellationCharge ?? x.CancellationChargeInr ?? 0m;
+                    decimal refundAmt = cancel?.CustomerRefundAmount ?? x.RefundAmountInr ?? (string.Equals(payment?.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) ? (payment?.FinalPayableAmount ?? x.TotalPriceInr) : 0m);
+
+                    var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
+                        "Bus",
+                        x.Id,
+                        x.BookingReference,
+                        x.Pnr,
+                        x.Status,
+                        $"{x.BusBooking!.FromCity} → {x.BusBooking.ToCity} ({x.BusBooking.OperatorName})",
+                        x.BookedAtUtc,
+                        payment,
+                        exec,
+                        cancel,
+                        x.TotalPriceInr,
+                        cancelCharges,
+                        refundAmt);
+
+                    return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle);
                 });
 
             return Ok(response);
@@ -2836,13 +2895,51 @@ namespace PickNBook.Api.Controllers
                 return NotFound("Booking not found.");
             }
 
+            var payment = await dbContext.Payments.AsNoTracking()
+                .Where(p => (p.BookingType == "Bus" || p.BookingType.ToLower() == "bus") && p.BookingId == bookingId)
+                .OrderByDescending(p => p.Id)
+                .FirstOrDefaultAsync();
+
+            var cancel = await dbContext.BookingCancellations.AsNoTracking()
+                .Where(c => (c.BookingType == "Bus" || c.BookingType.ToLower() == "bus") &&
+                            ((payment != null && c.PaymentId == payment.Id) || c.BookingReference == booking.BookingReference))
+                .OrderByDescending(c => c.Id)
+                .FirstOrDefaultAsync();
+
+            PickNBook.Api.Models.Entities.SupplierFulfillmentExecution? exec = null;
+            if (payment != null)
+            {
+                exec = await dbContext.SupplierFulfillmentExecutions.AsNoTracking()
+                    .Where(e => e.PaymentId == payment.Id)
+                    .OrderByDescending(e => e.Id)
+                    .FirstOrDefaultAsync();
+            }
+
+            decimal cancelCharges = cancel?.SupplierCancellationCharge ?? booking.CancellationChargeInr ?? 0m;
+            decimal refundAmt = cancel?.CustomerRefundAmount ?? booking.RefundAmountInr ?? (string.Equals(payment?.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) ? (payment?.FinalPayableAmount ?? booking.TotalPriceInr) : 0m);
+
+            var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
+                "Bus",
+                booking.Id,
+                booking.BookingReference,
+                booking.Pnr,
+                booking.Status,
+                $"{booking.BusBooking.FromCity} → {booking.BusBooking.ToCity} ({booking.BusBooking.OperatorName})",
+                booking.BookedAtUtc,
+                payment,
+                exec,
+                cancel,
+                booking.TotalPriceInr,
+                cancelCharges,
+                refundAmt);
+
             var passengers = await dbContext.BusReservationPassengers
                 .AsNoTracking()
                 .Where(x => x.BusReservationId == booking.Id)
                 .OrderBy(x => x.Id)
                 .ToListAsync();
 
-            return Ok(MapBusReservation(booking, booking.BusBooking, passengers));
+            return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle));
         }
 
 
@@ -3572,7 +3669,11 @@ namespace PickNBook.Api.Controllers
             }
         }
 
-        private static object MapBusReservation(BusReservation reservation, BusBooking bus, IReadOnlyList<BusReservationPassenger> passengers)
+        private static object MapBusReservation(
+            BusReservation reservation,
+            BusBooking bus,
+            IReadOnlyList<BusReservationPassenger> passengers,
+            PickNBook.Api.Helpers.UserBookingLifecycleResult? lifecycle = null)
         {
             var baseDto = new BookingResponseDto
             {
@@ -3679,10 +3780,17 @@ namespace PickNBook.Api.Controllers
                 reservation.RefundAmountInr,
                 baseDto.BookedAtUtc,
                 baseDto.CancelledAtUtc,
-                baseDto.CancellationReason,
                 Passengers = passengerDtos,
                 MaleCount = maleCount,
-                FemaleCount = femaleCount
+                FemaleCount = femaleCount,
+
+                // Lifecycle Hierarchy & State Tracing
+                CanonicalStatus = lifecycle?.CanonicalStatus ?? reservation.Status,
+                CanonicalStatusLabel = lifecycle?.CanonicalStatusLabel ?? reservation.Status,
+                LifecycleHierarchy = lifecycle?.Hierarchy,
+                Timeline = lifecycle?.Timeline,
+                PaymentBreakdown = lifecycle?.PaymentBreakdown,
+                CancellationAudit = lifecycle?.CancellationAudit
             };
         }
 

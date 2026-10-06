@@ -3543,6 +3543,9 @@ namespace PickNBook.Api.Controllers.Public
 
         [Authorize]
         [HttpGet("my-bookings")]
+        [HttpGet("/api/flight/my-bookings")]
+        [HttpGet("/api/flight/bookings")]
+        [HttpGet("/api/flight/srdv/bookings")]
         public async Task<IActionResult> MyBookings()
         {
             try
@@ -3558,13 +3561,71 @@ namespace PickNBook.Api.Controllers.Public
                     .OrderByDescending(x => x.Id)
                     .ToListAsync();
 
+                var flightIds = bookings.Select(b => b.Id).ToList();
+
+                var payments = await _dbContext.Payments.AsNoTracking()
+                    .Where(p => (p.BookingType == "Flight" || p.BookingType.ToLower() == "flight") && p.BookingId.HasValue && flightIds.Contains(p.BookingId.Value))
+                    .ToListAsync();
+                var paymentMap = payments.GroupBy(p => p.BookingId!.Value).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
+
+                var paymentIds = payments.Select(p => p.Id).ToList();
+                var bookingRefs = bookings.Select(b => b.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
+
+                var cancellations = await _dbContext.BookingCancellations.AsNoTracking()
+                    .Where(c => (c.BookingType == "Flight" || c.BookingType.ToLower() == "flight") &&
+                                (paymentIds.Contains(c.PaymentId) || bookingRefs.Contains(c.BookingReference)))
+                    .ToListAsync();
+                var cancelMapByPayment = cancellations
+                    .Where(c => c.PaymentId > 0)
+                    .GroupBy(c => c.PaymentId)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
+                var cancelMapByRef = cancellations
+                    .GroupBy(c => c.BookingReference)
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
+
+                var execs = paymentIds.Any()
+                    ? await _dbContext.SupplierFulfillmentExecutions.AsNoTracking()
+                        .Where(e => paymentIds.Contains(e.PaymentId))
+                        .ToListAsync()
+                    : new List<PickNBook.Api.Models.Entities.SupplierFulfillmentExecution>();
+                var execMap = execs.GroupBy(e => e.PaymentId).ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
+
+                var allPassengers = await _dbContext.FlightReservationPassengers.AsNoTracking()
+                    .Where(p => flightIds.Contains(p.FlightReservationId))
+                    .ToListAsync();
+                var paxMap = allPassengers.GroupBy(p => p.FlightReservationId).ToDictionary(g => g.Key, g => g.ToList());
+
                 var result = new List<MyFlightBookingResponseDto>();
 
                 foreach (var booking in bookings)
                 {
-                    var passengers = await _dbContext.FlightReservationPassengers
-                        .Where(p => p.FlightReservationId == booking.Id)
-                        .ToListAsync();
+                    paxMap.TryGetValue(booking.Id, out var passengers);
+                    passengers ??= new List<FlightReservationPassenger>();
+
+                    paymentMap.TryGetValue(booking.Id, out var payment);
+                    PickNBook.Api.Models.Entities.BookingCancellation? cancel = null;
+                    if (payment != null) cancelMapByPayment.TryGetValue(payment.Id, out cancel);
+                    if (cancel == null && !string.IsNullOrEmpty(booking.BookingReference)) cancelMapByRef.TryGetValue(booking.BookingReference, out cancel);
+                    PickNBook.Api.Models.Entities.SupplierFulfillmentExecution? exec = null;
+                    if (payment != null) execMap.TryGetValue(payment.Id, out exec);
+
+                    decimal cancelCharges = cancel?.SupplierCancellationCharge ?? booking.CancellationChargeInr ?? 0m;
+                    decimal refundAmt = cancel?.CustomerRefundAmount ?? booking.RefundAmountInr ?? (string.Equals(payment?.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) ? (payment?.FinalPayableAmount ?? booking.TotalPriceInr) : 0m);
+
+                    var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
+                        "Flight",
+                        booking.Id,
+                        booking.BookingReference,
+                        booking.Pnr,
+                        booking.Status,
+                        $"{booking.Airline ?? "Flight"} ({booking.FromCity} → {booking.ToCity})",
+                        booking.DepartureTime,
+                        payment,
+                        exec,
+                        cancel,
+                        booking.TotalPriceInr,
+                        cancelCharges,
+                        refundAmt);
 
                     var responseDto = new MyFlightBookingResponseDto
                     {
@@ -3587,7 +3648,14 @@ namespace PickNBook.Api.Controllers.Public
                             FullName = p.FullName,
                             SeatNumber = p.SeatNumber,
                             TicketId = p.TicketId
-                        }).ToList()
+                        }).ToList(),
+
+                        CanonicalStatus = lifecycle.CanonicalStatus,
+                        CanonicalStatusLabel = lifecycle.CanonicalStatusLabel,
+                        LifecycleHierarchy = lifecycle.Hierarchy,
+                        Timeline = lifecycle.Timeline,
+                        PaymentBreakdown = lifecycle.PaymentBreakdown,
+                        CancellationAudit = lifecycle.CancellationAudit
                     };
 
                     result.Add(responseDto);

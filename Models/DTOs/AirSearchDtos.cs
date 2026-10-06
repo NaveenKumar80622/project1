@@ -799,6 +799,13 @@ namespace PickNBook.Api.Models.DTOs
         public string? SrdvIndex { get; set; }
 
         public List<MyFlightPassengerDto> Passengers { get; set; } = new();
+
+        public string? CanonicalStatus { get; set; }
+        public string? CanonicalStatusLabel { get; set; }
+        public PickNBook.Api.Helpers.UserLifecycleHierarchyDto? LifecycleHierarchy { get; set; }
+        public List<PickNBook.Api.Helpers.UserBookingTimelineEventDto>? Timeline { get; set; }
+        public object? PaymentBreakdown { get; set; }
+        public object? CancellationAudit { get; set; }
     }
 }
 
