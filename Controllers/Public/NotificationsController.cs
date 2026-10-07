@@ -43,11 +43,12 @@ namespace PickNBook.Api.Controllers
             });
         }
 
+        [AllowAnonymous]
         [HttpGet("unread-count")]
         public async Task<IActionResult> GetUnreadCount(CancellationToken cancellationToken)
         {
             if (!TryGetCurrentUserId(out var userId))
-                return Unauthorized(new { message = "Invalid or missing user authentication token." });
+                return Ok(new UnreadCountDto { UnreadCount = 0 });
 
             var result = await _notificationService.GetUnreadCountAsync(userId, AuthRoles.User, cancellationToken);
             return Ok(result);

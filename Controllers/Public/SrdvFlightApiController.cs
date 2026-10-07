@@ -3546,7 +3546,8 @@ namespace PickNBook.Api.Controllers.Public
         [HttpGet("/api/flight/my-bookings")]
         [HttpGet("/api/flight/bookings")]
         [HttpGet("/api/flight/srdv/bookings")]
-        public async Task<IActionResult> MyBookings()
+        [HttpGet("/api/flight/srdv/my-bookings")]
+        public async Task<IActionResult> MyBookings([FromQuery] string? status = null)
         {
             try
             {
@@ -3556,8 +3557,39 @@ namespace PickNBook.Api.Controllers.Public
                     return Unauthorized(new { message = "User is not authenticated." });
                 }
 
-                var bookings = await _dbContext.FlightReservations
-                    .Where(x => x.UserId == userId)
+                var query = _dbContext.FlightReservations.Where(x => x.UserId == userId);
+
+                if (!string.IsNullOrWhiteSpace(status))
+                {
+                    var normalizedStatus = status.Trim().ToLowerInvariant();
+
+                    if (normalizedStatus == "all")
+                    {
+                        // No filter
+                    }
+                    else if (normalizedStatus == "upcoming")
+                    {
+                        query = query.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.DepartureTime > DateTime.UtcNow);
+                    }
+                    else if (normalizedStatus == "completed" || normalizedStatus == "past")
+                    {
+                        query = query.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.DepartureTime <= DateTime.UtcNow);
+                    }
+                    else if (normalizedStatus == "cancelled")
+                    {
+                        query = query.Where(x => x.Status == "Cancelled" || x.Status == "Partially Cancelled");
+                    }
+                    else if (normalizedStatus == "payment failed" || normalizedStatus == "payment_failed" || normalizedStatus == "failed")
+                    {
+                        query = query.Where(x => x.Status == "Failed" || x.Status == "FAILED" || (x.Status == "Pending" && (x.DepartureTime <= DateTime.UtcNow || x.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)));
+                    }
+                    else
+                    {
+                        query = query.Where(x => EF.Functions.Like(x.Status, status.Trim()));
+                    }
+                }
+
+                var bookings = await query
                     .OrderByDescending(x => x.Id)
                     .ToListAsync();
 
@@ -3565,11 +3597,15 @@ namespace PickNBook.Api.Controllers.Public
                 var bookingRefs = bookings.Select(b => b.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
 
                 var payments = await _dbContext.Payments.AsNoTracking()
-                    .Where(p => (p.BookingType == "Flight" || p.BookingType.ToLower() == "flight") &&
-                                ((p.BookingId.HasValue && flightIds.Contains(p.BookingId.Value)) ||
-                                 (p.BookingReferenceId.HasValue && flightIds.Contains(p.BookingReferenceId.Value)) ||
+                    .Where(p => (flightIds.Contains(p.BookingId ?? -1) ||
+                                 flightIds.Contains(p.BookingReferenceId ?? -1) ||
                                  (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
                     .ToListAsync();
+
+                var walletTxMap = await _dbContext.WalletTransactions.AsNoTracking()
+                    .Where(w => bookingRefs.Contains(w.RefCode ?? ""))
+                    .GroupBy(w => w.RefCode!)
+                    .ToDictionaryAsync(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
 
                 var paymentMapById = payments
                     .Where(p => p.BookingId.HasValue)
@@ -3639,28 +3675,129 @@ namespace PickNBook.Api.Controllers.Public
                     decimal cancelCharges = cancel?.SupplierCancellationCharge ?? booking.CancellationChargeInr ?? 0m;
                     decimal refundAmt = cancel?.CustomerRefundAmount ?? booking.RefundAmountInr ?? (string.Equals(payment?.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) ? (payment?.FinalPayableAmount ?? booking.TotalPriceInr) : 0m);
 
+                    walletTxMap.TryGetValue(booking.BookingReference ?? "", out var walletTx);
+                    int? effectivePaymentId = payment?.Id != null && payment.Id > 0 
+                        ? payment.Id 
+                        : (walletTx != null ? (int)walletTx.Id : (int?)null);
+
+                    string resolvedAirlineCode = (!string.IsNullOrWhiteSpace(booking.Airline) && !booking.Airline.Equals("srdv", StringComparison.OrdinalIgnoreCase)) ? booking.Airline.Trim() : "";
+                    string resolvedAirlineName = "";
+                    string flightNum = booking.FlightNumber ?? "";
+                    DateTime depTime = booking.DepartureTime;
+                    DateTime arrTime = booking.ArrivalTime;
+
+                    // Fallback to extract from SrdvTicketResponseJson if itinerary fields missing
+                    if (string.IsNullOrWhiteSpace(resolvedAirlineName) || string.IsNullOrWhiteSpace(resolvedAirlineCode) || depTime == default)
+                    {
+                        if (!string.IsNullOrWhiteSpace(booking.SrdvTicketResponseJson))
+                        {
+                            try
+                            {
+                                using var tDoc = JsonDocument.Parse(booking.SrdvTicketResponseJson);
+                                var tRoot = tDoc.RootElement;
+                                var tResp = tRoot.TryGetProperty("Response", out var rNode) ? rNode : tRoot;
+                                if (tResp.TryGetProperty("FlightItinerary", out var itin) && itin.TryGetProperty("Segments", out var segs) && segs.ValueKind == JsonValueKind.Array && segs.GetArrayLength() > 0)
+                                {
+                                    var s0 = segs[0];
+                                    if (s0.TryGetProperty("Airline", out var al))
+                                    {
+                                        if (string.IsNullOrWhiteSpace(resolvedAirlineCode))
+                                            resolvedAirlineCode = al.TryGetProperty("AirlineCode", out var ac) ? (ac.GetString() ?? "") : "";
+                                        var rawAlName = al.TryGetProperty("AirlineName", out var an) ? (an.GetString() ?? "") : "";
+                                        if (!string.IsNullOrWhiteSpace(rawAlName)) resolvedAirlineName = rawAlName;
+                                        if (string.IsNullOrWhiteSpace(flightNum))
+                                            flightNum = al.TryGetProperty("FlightNumber", out var fn) ? (fn.ToString() ?? "") : "";
+                                    }
+                                    if (depTime == default && s0.TryGetProperty("DepTime", out var dt) && DateTime.TryParse(dt.ToString(), out var pDt))
+                                        depTime = pDt;
+                                    var sLast = segs[segs.GetArrayLength() - 1];
+                                    if (arrTime == default && sLast.TryGetProperty("ArrTime", out var at) && DateTime.TryParse(at.ToString(), out var pAt))
+                                        arrTime = pAt;
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(resolvedAirlineName) && !string.IsNullOrWhiteSpace(resolvedAirlineCode))
+                    {
+                        resolvedAirlineName = _airlineLookup.GetAirlineName(resolvedAirlineCode, resolvedAirlineCode);
+                    }
+                    if (string.IsNullOrWhiteSpace(resolvedAirlineName) || resolvedAirlineName.Equals("srdv", StringComparison.OrdinalIgnoreCase))
+                    {
+                        resolvedAirlineName = !string.IsNullOrWhiteSpace(booking.Airline) && !booking.Airline.Equals("srdv", StringComparison.OrdinalIgnoreCase)
+                            ? _airlineLookup.GetAirlineName(booking.Airline, booking.Airline)
+                            : "Flight";
+                    }
+
+                    string flightName = !string.IsNullOrWhiteSpace(flightNum) 
+                        ? $"{resolvedAirlineName} {flightNum}".Trim()
+                        : resolvedAirlineName;
+
+                    string bookingStatus;
+                    if (booking.Status == "Cancelled" || booking.Status == "Partially Cancelled")
+                    {
+                        bookingStatus = "Cancelled";
+                    }
+                    else if (booking.Status == "Failed" || booking.Status == "FAILED" ||
+                             (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED")) ||
+                             ((booking.Status == "Pending" || booking.Status == "Initiated") && (depTime <= DateTime.UtcNow || booking.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)))
+                    {
+                        bookingStatus = "Payment Failed";
+                    }
+                    else if (depTime <= DateTime.UtcNow && (booking.Status == "Booked" || booking.Status == "Confirmed" || booking.Status == "SUCCESS"))
+                    {
+                        bookingStatus = "Past";
+                    }
+                    else if (booking.Status == "Booked" || booking.Status == "Confirmed" || booking.Status == "SUCCESS")
+                    {
+                        bookingStatus = "Upcoming";
+                    }
+                    else
+                    {
+                        bookingStatus = booking.Status;
+                    }
+
+                    string tripState = bookingStatus == "Cancelled" ? "Cancelled" : (depTime <= DateTime.UtcNow ? "Completed" : "Upcoming");
+                    string dates = depTime != default 
+                        ? (arrTime != default && arrTime != depTime 
+                            ? $"{depTime:dd MMM yyyy HH:mm} - {arrTime:dd MMM yyyy HH:mm}" 
+                            : depTime.ToString("dd MMM yyyy HH:mm"))
+                        : (booking.BookedAtUtc != default ? booking.BookedAtUtc.ToString("dd MMM yyyy HH:mm") : "");
+
                     var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
                         "Flight",
                         booking.Id,
                         booking.BookingReference,
                         booking.Pnr,
                         booking.Status,
-                        $"{booking.Airline ?? "Flight"} ({booking.FromCity} → {booking.ToCity})",
-                        booking.DepartureTime,
+                        $"{resolvedAirlineName} ({booking.FromCity} → {booking.ToCity})",
+                        booking.BookedAtUtc != default ? booking.BookedAtUtc : depTime,
                         payment,
                         exec,
                         cancel,
                         booking.TotalPriceInr,
                         cancelCharges,
-                        refundAmt);
+                        refundAmt,
+                        depTime != default ? depTime : booking.DepartureTime);
 
                     var responseDto = new MyFlightBookingResponseDto
                     {
                         BookingReference = booking.BookingReference,
                         FromCity = booking.FromCity,
                         ToCity = booking.ToCity,
-                        DepartureTime = booking.DepartureTime,
+                        DepartureTime = depTime != default ? depTime : booking.DepartureTime,
+                        ArrivalTime = arrTime != default ? arrTime : (DateTime?)null,
+                        Airline = resolvedAirlineName,
+                        AirlineCode = resolvedAirlineCode,
+                        FlightName = flightName,
+                        FlightNumber = flightNum,
+                        Dates = dates,
+                        BookedAtUtc = booking.BookedAtUtc,
+                        BookingTime = booking.BookedAtUtc != default ? booking.BookedAtUtc.ToString("dd MMM yyyy HH:mm") : null,
                         Status = booking.Status,
+                        BookingStatus = bookingStatus,
+                        TripState = tripState,
                         TotalFare = booking.TotalPriceInr,
 
                         // Fields for Cancellation
@@ -3678,7 +3815,7 @@ namespace PickNBook.Api.Controllers.Public
                         }).ToList(),
 
                         // Payment & Contact Identifiers
-                        PaymentId = payment?.Id,
+                        PaymentId = effectivePaymentId,
                         CashfreePaymentId = payment?.CashfreePaymentId,
                         CashfreeOrderId = payment?.CashfreeOrderId,
                         PaymentReference = payment?.PaymentReference,

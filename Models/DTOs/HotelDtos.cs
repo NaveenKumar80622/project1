@@ -193,10 +193,14 @@ namespace PickNBook.Api.Models.DTOs
         public string CheckOutDate { get; set; } = string.Empty;
         public decimal Amount { get; set; }
         public string Status { get; set; } = string.Empty;
+        public string BookingStatus { get; set; } = string.Empty; // "Upcoming", "Past", "Cancelled", "Payment Failed"
+        public string TripState { get; set; } = string.Empty;     // "Upcoming", "Completed", "Cancelled", "Payment Failed"
         public string? ProviderBookingId { get; set; }
         public string? TraceId { get; set; }
         public string GuestName { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
+        public DateTime BookedAtUtc { get; set; }
+        public string? BookingTime { get; set; }
 
         // Payment & Contact Identifiers
         public int? PaymentId { get; set; }

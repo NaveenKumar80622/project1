@@ -1678,7 +1678,7 @@ namespace PickNBook.Api.Controllers
         [HttpGet("my-bookings")]
         [HttpGet("/api/hotel/my-bookings")]
         [Authorize]
-        public async Task<IActionResult> MyBookings()
+        public async Task<IActionResult> MyBookings([FromQuery] string? status = null)
         {
             if (!_currentUserService.IsAuthenticated())
             {
@@ -1690,8 +1690,39 @@ namespace PickNBook.Api.Controllers
 
             try
             {
-                var bookings = await _dbContext.HotelReservations
-                    .Where(x => x.UserId == userId)
+                var query = _dbContext.HotelReservations.Where(x => x.UserId == userId);
+
+                if (!string.IsNullOrWhiteSpace(status))
+                {
+                    var normalizedStatus = status.Trim().ToLowerInvariant();
+
+                    if (normalizedStatus == "all")
+                    {
+                        // No filter
+                    }
+                    else if (normalizedStatus == "upcoming")
+                    {
+                        query = query.Where(x => (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS") && x.CheckInDate > DateTime.UtcNow);
+                    }
+                    else if (normalizedStatus == "completed" || normalizedStatus == "past")
+                    {
+                        query = query.Where(x => (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS") && x.CheckInDate <= DateTime.UtcNow);
+                    }
+                    else if (normalizedStatus == "cancelled")
+                    {
+                        query = query.Where(x => x.Status == "Cancelled" || x.Status == "Partially Cancelled");
+                    }
+                    else if (normalizedStatus == "payment failed" || normalizedStatus == "payment_failed" || normalizedStatus == "failed")
+                    {
+                        query = query.Where(x => x.Status == "Failed" || x.Status == "FAILED" || (x.Status == "Pending" && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow)));
+                    }
+                    else
+                    {
+                        query = query.Where(x => EF.Functions.Like(x.Status, status.Trim()));
+                    }
+                }
+
+                var bookings = await query
                     .OrderByDescending(x => x.CreatedAt)
                     .ToListAsync();
 
@@ -1699,11 +1730,15 @@ namespace PickNBook.Api.Controllers
                 var bookingRefs = bookings.Select(b => b.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
 
                 var payments = await _dbContext.Payments.AsNoTracking()
-                    .Where(p => (p.BookingType == "Hotel" || p.BookingType.ToLower() == "hotel") &&
-                                ((p.BookingId.HasValue && hotelIds.Contains(p.BookingId.Value)) ||
-                                 (p.BookingReferenceId.HasValue && hotelIds.Contains(p.BookingReferenceId.Value)) ||
+                    .Where(p => (hotelIds.Contains(p.BookingId ?? -1) ||
+                                 hotelIds.Contains(p.BookingReferenceId ?? -1) ||
                                  (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
                     .ToListAsync();
+
+                var walletTxMap = await _dbContext.WalletTransactions.AsNoTracking()
+                    .Where(w => bookingRefs.Contains(w.RefCode ?? ""))
+                    .GroupBy(w => w.RefCode!)
+                    .ToDictionaryAsync(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
 
                 var paymentMapById = payments
                     .Where(p => p.BookingId.HasValue)
@@ -1767,6 +1802,37 @@ namespace PickNBook.Api.Controllers
                         refundAmt = payment?.FinalPayableAmount ?? x.TotalPrice;
                     }
 
+                    walletTxMap.TryGetValue(x.BookingReference ?? "", out var walletTx);
+                    int? effectivePaymentId = payment?.Id != null && payment.Id > 0 
+                        ? payment.Id 
+                        : (walletTx != null ? (int)walletTx.Id : (int?)null);
+
+                    string bookingStatus;
+                    if (x.Status == "Cancelled" || x.Status == "Partially Cancelled")
+                    {
+                        bookingStatus = "Cancelled";
+                    }
+                    else if (x.Status == "Failed" || x.Status == "FAILED" ||
+                             (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED")) ||
+                             ((x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow)))
+                    {
+                        bookingStatus = "Payment Failed";
+                    }
+                    else if (x.CheckInDate <= DateTime.UtcNow && (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS"))
+                    {
+                        bookingStatus = "Past";
+                    }
+                    else if (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS")
+                    {
+                        bookingStatus = "Upcoming";
+                    }
+                    else
+                    {
+                        bookingStatus = x.Status;
+                    }
+
+                    string tripState = bookingStatus == "Cancelled" ? "Cancelled" : (x.CheckInDate <= DateTime.UtcNow ? "Completed" : "Upcoming");
+
                     var pnr = !string.IsNullOrWhiteSpace(x.ConfirmationNo) ? x.ConfirmationNo : (!string.IsNullOrWhiteSpace(x.ProviderBookingId) ? x.ProviderBookingId : exec?.SupplierReference);
                     var summary = !string.IsNullOrWhiteSpace(x.HotelName) ? $"{x.HotelName} ({x.CheckInDate:dd MMM} - {x.CheckOutDate:dd MMM})" : "Hotel Stay";
 
@@ -1783,7 +1849,8 @@ namespace PickNBook.Api.Controllers
                         cancel,
                         x.TotalPrice,
                         cancelCharges,
-                        refundAmt);
+                        refundAmt,
+                        x.CheckInDate);
 
                     return new HotelBookingHistoryDto
                     {
@@ -1796,13 +1863,17 @@ namespace PickNBook.Api.Controllers
                         CheckOutDate = x.CheckOutDate.ToString("yyyy-MM-dd"),
                         Amount = x.TotalPrice,
                         Status = x.Status,
+                        BookingStatus = bookingStatus,
+                        TripState = tripState,
+                        BookedAtUtc = x.CreatedAt,
+                        BookingTime = x.CreatedAt.ToString("dd MMM yyyy HH:mm"),
                         ProviderBookingId = x.ProviderBookingId,
                         TraceId = x.TraceId,
                         GuestName = x.GuestName,
                         CreatedAt = DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc),
 
                         // Payment & Contact Identifiers
-                        PaymentId = payment?.Id,
+                        PaymentId = effectivePaymentId,
                         CashfreePaymentId = payment?.CashfreePaymentId,
                         CashfreeOrderId = payment?.CashfreeOrderId,
                         PaymentReference = payment?.PaymentReference,

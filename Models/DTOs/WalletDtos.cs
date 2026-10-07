@@ -10,6 +10,8 @@ namespace PickNBook.Api.Models.DTOs
         public decimal TotalAdded { get; set; }
         public decimal TotalRefunded { get; set; }
         public decimal TotalUsed { get; set; }
+        public decimal ReservedBalance { get; set; }
+        public decimal PendingDeposits { get; set; }
     }
 
     public class WalletTransactionDto

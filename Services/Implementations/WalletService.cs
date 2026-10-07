@@ -395,20 +395,56 @@ namespace PickNBook.Api.Services.Implementations
             if (user == null)
                 throw new InvalidOperationException($"User with ID {userId} not found.");
 
-            var aggregates = await _context.WalletTransactions
-                .AsNoTracking()
-                .Where(t => t.UserId == userId && t.Status == "Completed")
-                .GroupBy(t => t.TransactionType)
-                .Select(g => new
-                {
-                    Type = g.Key,
-                    Total = g.Sum(x => x.Amount)
-                })
-                .ToListAsync();
+            decimal totalAdded = 0m;
+            decimal totalRefunded = 0m;
+            decimal totalUsed = 0m;
+            decimal reservedBalance = 0m;
 
-            decimal totalAdded = aggregates.FirstOrDefault(x => x.Type == "Credit")?.Total ?? 0m;
-            decimal totalRefunded = aggregates.FirstOrDefault(x => x.Type == "Refund")?.Total ?? 0m;
-            decimal totalUsed = aggregates.FirstOrDefault(x => x.Type == "Debit")?.Total ?? 0m;
+            if (string.Equals(user.Role, AuthRoles.Agent, StringComparison.OrdinalIgnoreCase))
+            {
+                var ledgerAggregates = await _context.AgentLedgerEntries
+                    .AsNoTracking()
+                    .Where(e => e.AgentId == userId)
+                    .GroupBy(e => e.TransactionType)
+                    .Select(g => new
+                    {
+                        Type = g.Key,
+                        Credit = g.Sum(x => x.CreditAmount),
+                        Debit = g.Sum(x => x.DebitAmount)
+                    })
+                    .ToListAsync();
+
+                totalAdded = ledgerAggregates.Sum(x => x.Credit);
+                totalUsed = ledgerAggregates.Sum(x => x.Debit);
+                totalRefunded = ledgerAggregates.Where(x => x.Type == "Refund").Sum(x => x.Credit);
+            }
+            else
+            {
+                var aggregates = await _context.WalletTransactions
+                    .AsNoTracking()
+                    .Where(t => t.UserId == userId && t.Status == "Completed")
+                    .GroupBy(t => t.TransactionType)
+                    .Select(g => new
+                    {
+                        Type = g.Key,
+                        Total = g.Sum(x => x.Amount)
+                    })
+                    .ToListAsync();
+
+                totalAdded = aggregates.FirstOrDefault(x => x.Type == "Credit")?.Total ?? 0m;
+                totalRefunded = aggregates.FirstOrDefault(x => x.Type == "Refund")?.Total ?? 0m;
+                totalUsed = aggregates.FirstOrDefault(x => x.Type == "Debit")?.Total ?? 0m;
+
+                reservedBalance = await _context.WalletTransactions
+                    .AsNoTracking()
+                    .Where(t => t.UserId == userId && t.Status == "Reserved")
+                    .SumAsync(t => t.Amount);
+            }
+
+            var pendingDeposits = await _context.DepositRequests
+                .AsNoTracking()
+                .Where(d => d.UserId == userId && d.Status == "Pending")
+                .SumAsync(d => d.Amount);
 
             return new WalletSummaryDto
             {
@@ -417,7 +453,9 @@ namespace PickNBook.Api.Services.Implementations
                 WalletStatus = user.WalletStatus,
                 TotalAdded = totalAdded,
                 TotalRefunded = totalRefunded,
-                TotalUsed = totalUsed
+                TotalUsed = totalUsed,
+                ReservedBalance = reservedBalance,
+                PendingDeposits = pendingDeposits
             };
         }
 

@@ -47,13 +47,13 @@ namespace PickNBook.Api.Controllers
  
             var flightCompleted = await dbContext.FlightReservations.AsNoTracking()
                 .CountAsync(x =>
-                    x.Status != "Cancelled" &&
+                    (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") &&
                     x.DepartureTime <= nowUtc &&
                     x.UserId == userId);
  
             var flightUpcoming = await dbContext.FlightReservations.AsNoTracking()
                 .CountAsync(x =>
-                    x.Status != "Cancelled" &&
+                    (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") &&
                     x.DepartureTime > nowUtc &&
                     x.UserId == userId);
  
@@ -65,14 +65,14 @@ namespace PickNBook.Api.Controllers
  
             var busCompleted = await dbContext.BusReservations.AsNoTracking()
                 .CountAsync(x =>
-                    x.Status != "Cancelled" &&
+                    (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") &&
                     x.BusBooking != null &&
                     x.BusBooking.DepartureTime <= nowUtc &&
                     x.UserId == userId);
  
             var busUpcoming = await dbContext.BusReservations.AsNoTracking()
                 .CountAsync(x =>
-                    x.Status != "Cancelled" &&
+                    (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") &&
                     x.BusBooking != null &&
                     x.BusBooking.DepartureTime > nowUtc &&
                     x.UserId == userId);
@@ -91,13 +91,19 @@ namespace PickNBook.Api.Controllers
                 .Where(x => x.UpdatedAtUtc >= travelerPendingFromUtc && x.UserId == userId);
  
             var pendingTravelerUpdates = await travelerPendingQuery.CountAsync();
+
+            int.TryParse(userId, out var userIntId);
+            var pendingDeposits = userIntId > 0
+                ? await dbContext.DepositRequests.AsNoTracking()
+                    .CountAsync(x => x.UserId == userIntId && (x.Status == "Pending" || x.Status == "PENDING"))
+                : 0;
  
             var flightRevenue = await dbContext.FlightReservations.AsNoTracking()
-                .Where(x => x.Status != "Cancelled" && x.UserId == userId)
+                .Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.UserId == userId)
                 .Select(x => (decimal?)x.TotalPriceInr)
                 .SumAsync();
             var busRevenue = await dbContext.BusReservations.AsNoTracking()
-                .Where(x => x.Status != "Cancelled" && x.UserId == userId)
+                .Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.UserId == userId)
                 .Select(x => (decimal?)x.TotalPriceInr)
                 .SumAsync();
  
@@ -247,9 +253,9 @@ namespace PickNBook.Api.Controllers
                 PendingActions = new DashboardPendingActionsDto
                 {
                     Cancellations = pendingCancellations,
-                    Deposits = 0,
+                    Deposits = pendingDeposits,
                     TravelerUpdates = pendingTravelerUpdates,
-                    Total = pendingCancellations + pendingTravelerUpdates
+                    Total = pendingCancellations + pendingDeposits + pendingTravelerUpdates
                 },
                 RevenueSnapshot = new DashboardRevenueSnapshotDto
                 {
@@ -283,7 +289,10 @@ namespace PickNBook.Api.Controllers
                     WalletPaymentUpdates = 0,
                     BankAddUpdates = 0
                 },
-                TopRoutes = new List<DashboardTopRouteDto>()
+                TopRoutes = topRoutes
+                    .OrderByDescending(x => x.Score)
+                    .Take(5)
+                    .ToList()
             };
 
             return Ok(response);

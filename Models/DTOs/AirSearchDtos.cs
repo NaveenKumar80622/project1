@@ -788,7 +788,17 @@ namespace PickNBook.Api.Models.DTOs
         public string FromCity { get; set; } = string.Empty;
         public string ToCity { get; set; } = string.Empty;
         public DateTime DepartureTime { get; set; }
+        public DateTime? ArrivalTime { get; set; }
+        public DateTime BookedAtUtc { get; set; }
+        public string? BookingTime { get; set; }
+        public string? Dates { get; set; }
+        public string? Airline { get; set; }
+        public string? AirlineCode { get; set; }
+        public string? FlightName { get; set; }
+        public string? FlightNumber { get; set; }
         public string Status { get; set; } = string.Empty;
+        public string BookingStatus { get; set; } = string.Empty; // "Upcoming", "Past", "Cancelled", "Payment Failed"
+        public string TripState { get; set; } = string.Empty;     // "Upcoming", "Completed", "Cancelled", "Payment Failed"
         public decimal TotalFare { get; set; }
 
         // Fields needed for Cancellation API

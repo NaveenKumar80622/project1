@@ -2812,7 +2812,7 @@ namespace PickNBook.Api.Controllers
 
             if (!string.IsNullOrWhiteSpace(status))
             {
-                var normalizedStatus = status.Trim().ToLower();
+                var normalizedStatus = status.Trim().ToLowerInvariant();
 
                 if (normalizedStatus == "all")
                 {
@@ -2820,15 +2820,19 @@ namespace PickNBook.Api.Controllers
                 }
                 else if (normalizedStatus == "upcoming")
                 {
-                    queryable = queryable.Where(x => x.Status == "Booked" && x.BusBooking.DepartureTime > DateTime.UtcNow);
+                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.BusBooking.DepartureTime > DateTime.UtcNow);
                 }
                 else if (normalizedStatus == "completed" || normalizedStatus == "past")
                 {
-                    queryable = queryable.Where(x => x.Status == "Booked" && x.BusBooking.DepartureTime <= DateTime.UtcNow);
+                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.BusBooking.DepartureTime <= DateTime.UtcNow);
                 }
                 else if (normalizedStatus == "cancelled")
                 {
-                    queryable = queryable.Where(x => x.Status == "Cancelled");
+                    queryable = queryable.Where(x => x.Status == "Cancelled" || x.Status == "Partially Cancelled");
+                }
+                else if (normalizedStatus == "payment failed" || normalizedStatus == "payment_failed" || normalizedStatus == "failed")
+                {
+                    queryable = queryable.Where(x => x.Status == "Failed" || x.Status == "FAILED" || (x.Status == "Pending" && (x.BusBooking.DepartureTime <= DateTime.UtcNow || x.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)));
                 }
                 else
                 {
@@ -2846,11 +2850,15 @@ namespace PickNBook.Api.Controllers
             var bookingRefs = bookings.Select(x => x.BookingReference).Where(r => !string.IsNullOrEmpty(r)).ToList();
 
             var payments = await dbContext.Payments.AsNoTracking()
-                .Where(p => (p.BookingType == "Bus" || p.BookingType.ToLower() == "bus") &&
-                            ((p.BookingId.HasValue && bookingIds.Contains(p.BookingId.Value)) ||
-                             (p.BookingReferenceId.HasValue && bookingIds.Contains(p.BookingReferenceId.Value)) ||
+                .Where(p => (bookingIds.Contains(p.BookingId ?? -1) ||
+                             bookingIds.Contains(p.BookingReferenceId ?? -1) ||
                              (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
                 .ToListAsync();
+
+            var walletTxMap = await dbContext.WalletTransactions.AsNoTracking()
+                .Where(w => bookingRefs.Contains(w.RefCode ?? ""))
+                .GroupBy(w => w.RefCode!)
+                .ToDictionaryAsync(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
 
             var paymentMapById = payments
                 .Where(p => p.BookingId.HasValue)
@@ -2929,6 +2937,9 @@ namespace PickNBook.Api.Controllers
                     decimal cancelCharges = cancel?.SupplierCancellationCharge ?? x.CancellationChargeInr ?? 0m;
                     decimal refundAmt = cancel?.CustomerRefundAmount ?? x.RefundAmountInr ?? (string.Equals(payment?.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) ? (payment?.FinalPayableAmount ?? x.TotalPriceInr) : 0m);
 
+                    walletTxMap.TryGetValue(x.BookingReference ?? "", out var walletTx);
+                    long? fallbackPaymentId = walletTx?.Id;
+
                     var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
                         "Bus",
                         x.Id,
@@ -2942,9 +2953,10 @@ namespace PickNBook.Api.Controllers
                         cancel,
                         x.TotalPriceInr,
                         cancelCharges,
-                        refundAmt);
+                        refundAmt,
+                        x.BusBooking.DepartureTime);
 
-                    return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle, payment);
+                    return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle, payment, fallbackPaymentId);
                 });
 
             return Ok(response);
@@ -2972,10 +2984,19 @@ namespace PickNBook.Api.Controllers
             }
 
             var payment = await dbContext.Payments.AsNoTracking()
-                .Where(p => (p.BookingType == "Bus" || p.BookingType.ToLower() == "bus") &&
-                            (p.BookingId == bookingId || p.BookingReferenceId == bookingId || p.PaymentReference == booking.BookingReference))
+                .Where(p => (p.BookingId == bookingId || p.BookingReferenceId == bookingId || (booking.BookingReference != null && p.PaymentReference == booking.BookingReference)))
                 .OrderByDescending(p => p.Id)
                 .FirstOrDefaultAsync();
+
+            long? fallbackPaymentId = null;
+            if (payment == null && !string.IsNullOrEmpty(booking.BookingReference))
+            {
+                var walletTx = await dbContext.WalletTransactions.AsNoTracking()
+                    .Where(w => w.RefCode == booking.BookingReference)
+                    .OrderByDescending(w => w.Id)
+                    .FirstOrDefaultAsync();
+                fallbackPaymentId = walletTx?.Id;
+            }
 
             var cancel = await dbContext.BookingCancellations.AsNoTracking()
                 .Where(c => (c.BookingType == "Bus" || c.BookingType.ToLower() == "bus") &&
@@ -3008,7 +3029,8 @@ namespace PickNBook.Api.Controllers
                 cancel,
                 booking.TotalPriceInr,
                 cancelCharges,
-                refundAmt);
+                refundAmt,
+                booking.BusBooking.DepartureTime);
 
             var passengers = await dbContext.BusReservationPassengers
                 .AsNoTracking()
@@ -3016,7 +3038,7 @@ namespace PickNBook.Api.Controllers
                 .OrderBy(x => x.Id)
                 .ToListAsync();
 
-            return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle, payment));
+            return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle, payment, fallbackPaymentId));
         }
 
 
@@ -3751,7 +3773,8 @@ namespace PickNBook.Api.Controllers
             BusBooking bus,
             IReadOnlyList<BusReservationPassenger> passengers,
             PickNBook.Api.Helpers.UserBookingLifecycleResult? lifecycle = null,
-            PickNBook.Api.Models.Payments.Payment? payment = null)
+            PickNBook.Api.Models.Payments.Payment? payment = null,
+            long? fallbackPaymentId = null)
         {
             var baseDto = new BookingResponseDto
             {
@@ -3796,6 +3819,38 @@ namespace PickNBook.Api.Controllers
             var maleCount = passengers.Count(x => x.Gender.Equals("Male", StringComparison.OrdinalIgnoreCase));
             var femaleCount = passengers.Count(x => x.Gender.Equals("Female", StringComparison.OrdinalIgnoreCase));
 
+            string bookingStatus;
+            if (reservation.Status == "Cancelled" || reservation.Status == "Partially Cancelled" || BusBookingStatus.IsCancelled(reservation.Status))
+            {
+                bookingStatus = "Cancelled";
+            }
+            else if (reservation.Status == "Failed" || reservation.Status == "FAILED" ||
+                     (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED")) ||
+                     ((reservation.Status == "Pending" || reservation.Status == "Initiated") && (bus.DepartureTime <= DateTime.UtcNow || reservation.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)))
+            {
+                bookingStatus = "Payment Failed";
+            }
+            else if (bus.DepartureTime <= DateTime.UtcNow && (reservation.Status == "Booked" || reservation.Status == "SUCCESS" || reservation.Status == "Confirmed" || BusBookingStatus.IsConfirmed(reservation.Status)))
+            {
+                bookingStatus = "Past";
+            }
+            else if (reservation.Status == "Booked" || reservation.Status == "SUCCESS" || reservation.Status == "Confirmed" || BusBookingStatus.IsConfirmed(reservation.Status))
+            {
+                bookingStatus = "Upcoming";
+            }
+            else
+            {
+                bookingStatus = reservation.Status;
+            }
+
+            int? pendingDays = null;
+            if (bookingStatus == "Pending" || bookingStatus == "Payment Failed" || reservation.Status == "Pending")
+            {
+                pendingDays = (int)Math.Max(0, (DateTime.UtcNow - reservation.BookedAtUtc).TotalDays);
+            }
+
+            long? effectivePaymentId = payment?.Id != null && payment.Id > 0 ? payment.Id : fallbackPaymentId;
+
             return new
             {
                 baseDto.BookingId,
@@ -3810,16 +3865,18 @@ namespace PickNBook.Api.Controllers
                 baseDto.DepartureTimeUtc,
                 baseDto.ArrivalTimeUtc,
                 baseDto.Status,
+                BookingStatus = bookingStatus,
                 CanCancel =
-        (BusBookingStatus.IsConfirmed(reservation.Status) || reservation.Status == "Booked") &&
+        (BusBookingStatus.IsConfirmed(reservation.Status) || reservation.Status == "Booked" || reservation.Status == "SUCCESS") &&
         bus.DepartureTime > DateTime.UtcNow,
 
                 TripState =
-        (BusBookingStatus.IsCancelled(reservation.Status) || reservation.Status == "Cancelled")
+        bookingStatus == "Cancelled"
             ? "Cancelled"
             : bus.DepartureTime <= DateTime.UtcNow
                 ? "Completed"
                 : "Upcoming",
+                PendingDays = pendingDays,
                 baseDto.PassengerName,
                 baseDto.PassengerPhone,
                 PhoneNumber = reservation.PassengerPhone,
@@ -3865,7 +3922,7 @@ namespace PickNBook.Api.Controllers
                 FemaleCount = femaleCount,
 
                 // Payment & Contact Identifiers
-                PaymentId = payment?.Id,
+                PaymentId = effectivePaymentId,
                 CashfreePaymentId = payment?.CashfreePaymentId,
                 CashfreeOrderId = payment?.CashfreeOrderId,
                 PaymentReference = payment?.PaymentReference,

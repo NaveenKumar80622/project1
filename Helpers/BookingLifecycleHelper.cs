@@ -63,7 +63,8 @@ namespace PickNBook.Api.Helpers
             BookingCancellation? cancel,
             decimal totalFare,
             decimal cancellationCharges,
-            decimal refundAmount)
+            decimal refundAmount,
+            DateTime? travelDepartureTime = null)
         {
             var stages = new List<UserLifecycleStageNodeDto>();
             var timeline = new List<UserBookingTimelineEventDto>();
@@ -73,6 +74,32 @@ namespace PickNBook.Api.Helpers
                 : totalFare;
             decimal walletUsed = payment?.WalletUsedAmount ?? 0m;
             decimal totalPaid = payment != null ? (payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount) : totalFare;
+
+            var nowUtc = DateTime.UtcNow;
+            double pendingDays = 0;
+            bool isPaymentExpiredOrTimedOut = false;
+
+            if (payment != null)
+            {
+                var paymentAge = nowUtc - payment.CreatedAt;
+                pendingDays = Math.Round(paymentAge.TotalDays, 1);
+
+                bool isPendingStatus = string.Equals(payment.Status, "Pending", StringComparison.OrdinalIgnoreCase) ||
+                                       string.Equals(payment.Status, "Created", StringComparison.OrdinalIgnoreCase);
+
+                if (isPendingStatus)
+                {
+                    if (paymentAge.TotalMinutes > 30 ||
+                        (travelDepartureTime.HasValue && travelDepartureTime.Value <= nowUtc))
+                    {
+                        isPaymentExpiredOrTimedOut = true;
+                    }
+                }
+                else if (string.Equals(payment.Status, "EXPIRED", StringComparison.OrdinalIgnoreCase))
+                {
+                    isPaymentExpiredOrTimedOut = true;
+                }
+            }
 
             // ----------------------------------------------------
             // Gate 0: GATEWAY_PAYMENT
@@ -85,21 +112,27 @@ namespace PickNBook.Api.Helpers
                    string.Equals(bookingStatus, "Confirmed", StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(bookingStatus, "Success", StringComparison.OrdinalIgnoreCase));
 
-            bool isPaymentFailed = payment != null &&
+            bool isPaymentFailed = (payment != null &&
                 (string.Equals(payment.Status, "FAILED", StringComparison.OrdinalIgnoreCase) ||
                  string.Equals(payment.Status, "USER_DROPPED", StringComparison.OrdinalIgnoreCase) ||
-                 string.Equals(payment.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase));
+                 string.Equals(payment.Status, "CANCELLED", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(payment.Status, "EXPIRED", StringComparison.OrdinalIgnoreCase))) ||
+                 isPaymentExpiredOrTimedOut;
 
             string stage0Status = isPaymentSuccess ? "COMPLETED" : (isPaymentFailed ? "FAILED" : "PENDING");
             DateTime? stage0Time = isPaymentSuccess
                 ? (payment?.PaidAt ?? payment?.UpdatedAt ?? bookingDate)
-                : (isPaymentFailed ? (payment?.UpdatedAt ?? bookingDate) : (payment?.CreatedAt ?? bookingDate));
+                : (isPaymentFailed ? (payment?.UpdatedAt ?? (payment?.CreatedAt.AddMinutes(30) ?? bookingDate)) : (payment?.CreatedAt ?? bookingDate));
 
             string stage0Summary = isPaymentSuccess
                 ? $"₹{totalPaid:F2} paid via {payment?.PaymentMethod ?? "Cashfree"} (Gateway: ₹{gwPaid:F2}, Wallet: ₹{walletUsed:F2})."
                 : (isPaymentFailed
-                    ? (payment?.FailureReason ?? payment?.LastError ?? "Payment declined or abandoned at gateway.")
-                    : $"Order #{payment?.CashfreeOrderId ?? bookingRef ?? bookingId.ToString()} created for ₹{totalPaid:F2}. Awaiting payment.");
+                    ? (isPaymentExpiredOrTimedOut
+                        ? (travelDepartureTime.HasValue && travelDepartureTime.Value <= nowUtc
+                            ? $"Payment cancelled: travel departure date has already passed (pending for {pendingDays} days)."
+                            : $"Payment cancelled: checkout timed out after pending for {pendingDays} day(s) (gateway session expired).")
+                        : (payment?.FailureReason ?? payment?.LastError ?? "Payment declined or abandoned at gateway."))
+                    : $"Order #{payment?.CashfreeOrderId ?? bookingRef ?? bookingId.ToString()} created for ₹{totalPaid:F2}. Awaiting payment (Pending for {pendingDays} day(s)).");
 
             stages.Add(new UserLifecycleStageNodeDto
             {
@@ -117,7 +150,9 @@ namespace PickNBook.Api.Helpers
                     { "gatewayPaid", gwPaid },
                     { "walletUsed", walletUsed },
                     { "method", payment?.PaymentMethod ?? "Cashfree" },
-                    { "isPaid", isPaymentSuccess }
+                    { "isPaid", isPaymentSuccess },
+                    { "pendingDays", pendingDays },
+                    { "isTimedOut", isPaymentExpiredOrTimedOut }
                 }
             });
 
@@ -287,6 +322,8 @@ namespace PickNBook.Api.Helpers
             DateTime? stage3Time = null;
             string stage3Summary;
 
+            bool isTravelCompleted = isConfirmed && !isCancelled && travelDepartureTime.HasValue && travelDepartureTime.Value <= nowUtc;
+
             if (!isPaymentSuccess || isFulfillFailed)
             {
                 stage3Status = "SKIPPED";
@@ -312,6 +349,21 @@ namespace PickNBook.Api.Helpers
                     Description = $"Booking cancellation recorded. Fee: ₹{cancellationCharges:F2}, Refund eligible: ₹{refundAmount:F2}."
                 });
             }
+            else if (isTravelCompleted)
+            {
+                stage3Status = "COMPLETED";
+                stage3Time = travelDepartureTime!.Value;
+                stage3Summary = $"Travel completed on {travelDepartureTime.Value:dd MMM yyyy}. Journey finished.";
+
+                timeline.Add(new UserBookingTimelineEventDto
+                {
+                    Timestamp = travelDepartureTime.Value,
+                    Stage = "TRAVEL_COMPLETED",
+                    Title = "Journey Completed",
+                    Status = "COMPLETED",
+                    Description = $"Travel completed on {travelDepartureTime.Value:dd MMM yyyy}."
+                });
+            }
             else
             {
                 stage3Status = "COMPLETED";
@@ -323,13 +375,14 @@ namespace PickNBook.Api.Helpers
             {
                 StageIndex = 3,
                 Key = "POST_BOOKING_LIFECYCLE",
-                Name = isCancelled ? "Booking Cancellation" : "Active Reservation",
+                Name = isCancelled ? "Booking Cancellation" : (isTravelCompleted ? "Completed Journey" : "Active Reservation"),
                 Status = stage3Status,
                 Timestamp = stage3Time,
                 Summary = stage3Summary,
                 Meta = new Dictionary<string, object?>
                 {
                     { "isCancelled", isCancelled },
+                    { "isTravelCompleted", isTravelCompleted },
                     { "cancellationCharges", cancellationCharges },
                     { "eligibleRefundAmount", refundAmount }
                 }
@@ -548,6 +601,16 @@ namespace PickNBook.Api.Helpers
                     isTerminal = false;
                     nextAction = "Queued for refund initiation";
                 }
+            }
+            else if (isTravelCompleted)
+            {
+                canonicalStatus = "TRAVEL_COMPLETED";
+                canonicalLabel = "Travel Completed";
+                currentStageIndex = 3;
+                currentStageKey = "POST_BOOKING_LIFECYCLE";
+                currentStageName = "Completed Journey";
+                isTerminal = true;
+                nextAction = "None (Travel completed successfully)";
             }
             else
             {

@@ -584,6 +584,7 @@ namespace PickNBook.Api.Services.Implementations
                         await _dbContext.SaveChangesAsync();
 
                         payment.BookingReferenceId = reservation.Id;
+                        payment.BookingId = reservation.Id;
                     }
                     catch (Exception pEx)
                     {
@@ -736,6 +737,7 @@ namespace PickNBook.Api.Services.Implementations
                 // Update payment success status
                 payment.FulfillmentStatus = "Success";
                 payment.BookingReferenceId = reservation.Id;
+                payment.BookingId = reservation.Id;
 
                 // Coupon Consumption
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Bus");
@@ -1489,6 +1491,7 @@ namespace PickNBook.Api.Services.Implementations
                         _dbContext.FlightReservations.Add(failedLccRes);
                         await _dbContext.SaveChangesAsync();
                         payment.BookingReferenceId = failedLccRes.Id;
+                        payment.BookingId = failedLccRes.Id;
                     }
                     catch (Exception pEx)
                     {
@@ -1579,12 +1582,50 @@ namespace PickNBook.Api.Services.Implementations
             }
             else
             {
+                // Extract itinerary fields from response if present
+                string flightAirline = "", flightAirlineCode = "", flightNum = "", fromCity = "", toCity = "";
+                DateTime depTime = DateTime.UtcNow, arrTime = DateTime.UtcNow;
+
+                if (resp.TryGetProperty("FlightItinerary", out var itinerary))
+                {
+                    if (itinerary.TryGetProperty("Segments", out var segs) && segs.ValueKind == JsonValueKind.Array && segs.GetArrayLength() > 0)
+                    {
+                        var firstSeg = segs[0];
+                        if (firstSeg.TryGetProperty("Airline", out var alNode))
+                        {
+                            flightAirlineCode = alNode.TryGetProperty("AirlineCode", out var alCodeNode) ? (alCodeNode.GetString() ?? "") : "";
+                            var rawName = alNode.TryGetProperty("AirlineName", out var alNameNode) ? (alNameNode.GetString() ?? "") : "";
+                            var lookupSvc = _serviceProvider.GetService<IAirlineLookupService>();
+                            flightAirline = lookupSvc != null ? lookupSvc.GetAirlineName(flightAirlineCode, rawName) : (!string.IsNullOrEmpty(rawName) ? rawName : flightAirlineCode);
+                            flightNum = alNode.TryGetProperty("FlightNumber", out var fnNode) ? (fnNode.ToString() ?? "") : "";
+                        }
+                        if (firstSeg.TryGetProperty("Origin", out var orig) && orig.TryGetProperty("CityCode", out var origCity))
+                            fromCity = origCity.ToString() ?? "";
+                        if (firstSeg.TryGetProperty("Destination", out var dest) && dest.TryGetProperty("CityCode", out var destCity))
+                            toCity = destCity.ToString() ?? "";
+                        if (firstSeg.TryGetProperty("DepTime", out var dTime) && DateTime.TryParse(dTime.ToString(), out var parsedDep))
+                            depTime = parsedDep;
+
+                        var lastSeg = segs[segs.GetArrayLength() - 1];
+                        if (lastSeg.TryGetProperty("Destination", out var dest2) && dest2.TryGetProperty("CityCode", out var destCity2))
+                            toCity = destCity2.ToString() ?? toCity;
+                        if (lastSeg.TryGetProperty("ArrTime", out var aTime) && DateTime.TryParse(aTime.ToString(), out var parsedArr))
+                            arrTime = parsedArr;
+                    }
+                }
+
                 // LCC: Create Reservation
                 reservation = new FlightReservation
                 {
                     BookingReference = $"FL-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}",
                     Pnr = pnr,
                     UserId = payment.UserId,
+                    Airline = flightAirline,
+                    FlightNumber = flightNum,
+                    FromCity = fromCity,
+                    ToCity = toCity,
+                    DepartureTime = depTime,
+                    ArrivalTime = arrTime,
                     Status = "Booked",
                     BookedAtUtc = DateTime.UtcNow,
                     TraceId = traceId,
@@ -1619,6 +1660,7 @@ namespace PickNBook.Api.Services.Implementations
             {
                 payment.FulfillmentStatus = "Success";
                 payment.BookingReferenceId = reservation.Id;
+                payment.BookingId = reservation.Id;
 
                 // Ensure passenger records with ticket numbers are populated
                 if (requestPassengers != null && requestPassengers.Any())
