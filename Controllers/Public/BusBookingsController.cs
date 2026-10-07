@@ -2832,7 +2832,7 @@ namespace PickNBook.Api.Controllers
                 }
                 else if (normalizedStatus == "payment failed" || normalizedStatus == "payment_failed" || normalizedStatus == "failed")
                 {
-                    queryable = queryable.Where(x => x.Status == "Failed" || x.Status == "FAILED" || (x.Status == "Pending" && (x.BusBooking.DepartureTime <= DateTime.UtcNow || x.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)));
+                    queryable = queryable.Where(x => x.Status == "Failed" || x.Status == "FAILED" || ((x.Status == "Pending" || x.Status == "Initiated" || x.Status == BusBookingStatus.BookingInProgress) && (x.BusBooking.DepartureTime <= DateTime.UtcNow || x.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)));
                 }
                 else
                 {
@@ -3825,8 +3825,9 @@ namespace PickNBook.Api.Controllers
                 bookingStatus = "Cancelled";
             }
             else if (reservation.Status == "Failed" || reservation.Status == "FAILED" ||
-                     (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED")) ||
-                     ((reservation.Status == "Pending" || reservation.Status == "Initiated") && (bus.DepartureTime <= DateTime.UtcNow || reservation.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)))
+                     (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
+                     ((reservation.Status == "Pending" || reservation.Status == "Initiated" || reservation.Status == "BOOKING_IN_PROGRESS" || reservation.Status == BusBookingStatus.BookingInProgress) &&
+                      (bus.DepartureTime <= DateTime.UtcNow || reservation.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
             {
                 bookingStatus = "Payment Failed";
             }
@@ -3844,7 +3845,7 @@ namespace PickNBook.Api.Controllers
             }
 
             int? pendingDays = null;
-            if (bookingStatus == "Pending" || bookingStatus == "Payment Failed" || reservation.Status == "Pending")
+            if (bookingStatus == "Pending" || bookingStatus == "Payment Failed" || reservation.Status == "Pending" || reservation.Status == BusBookingStatus.BookingInProgress)
             {
                 pendingDays = (int)Math.Max(0, (DateTime.UtcNow - reservation.BookedAtUtc).TotalDays);
             }
@@ -3870,12 +3871,12 @@ namespace PickNBook.Api.Controllers
         (BusBookingStatus.IsConfirmed(reservation.Status) || reservation.Status == "Booked" || reservation.Status == "SUCCESS") &&
         bus.DepartureTime > DateTime.UtcNow,
 
-                TripState =
-        bookingStatus == "Cancelled"
-            ? "Cancelled"
-            : bus.DepartureTime <= DateTime.UtcNow
-                ? "Completed"
-                : "Upcoming",
+                TripState = bookingStatus switch
+                {
+                    "Cancelled" => "Cancelled",
+                    "Payment Failed" or "Failed" => "Payment Failed",
+                    _ => bus.DepartureTime <= DateTime.UtcNow ? "Completed" : "Upcoming"
+                },
                 PendingDays = pendingDays,
                 baseDto.PassengerName,
                 baseDto.PassengerPhone,

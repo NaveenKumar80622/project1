@@ -3546,7 +3546,6 @@ namespace PickNBook.Api.Controllers.Public
         [HttpGet("/api/flight/my-bookings")]
         [HttpGet("/api/flight/bookings")]
         [HttpGet("/api/flight/srdv/bookings")]
-        [HttpGet("/api/flight/srdv/my-bookings")]
         public async Task<IActionResult> MyBookings([FromQuery] string? status = null)
         {
             try
@@ -3740,8 +3739,8 @@ namespace PickNBook.Api.Controllers.Public
                         bookingStatus = "Cancelled";
                     }
                     else if (booking.Status == "Failed" || booking.Status == "FAILED" ||
-                             (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED")) ||
-                             ((booking.Status == "Pending" || booking.Status == "Initiated") && (depTime <= DateTime.UtcNow || booking.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)))
+                             (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
+                             ((booking.Status == "Pending" || booking.Status == "Initiated") && (depTime <= DateTime.UtcNow || booking.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
                     {
                         bookingStatus = "Payment Failed";
                     }
@@ -3758,7 +3757,12 @@ namespace PickNBook.Api.Controllers.Public
                         bookingStatus = booking.Status;
                     }
 
-                    string tripState = bookingStatus == "Cancelled" ? "Cancelled" : (depTime <= DateTime.UtcNow ? "Completed" : "Upcoming");
+                    string tripState = bookingStatus switch
+                    {
+                        "Cancelled" => "Cancelled",
+                        "Payment Failed" or "Failed" => "Payment Failed",
+                        _ => depTime <= DateTime.UtcNow ? "Completed" : "Upcoming"
+                    };
                     string dates = depTime != default 
                         ? (arrTime != default && arrTime != depTime 
                             ? $"{depTime:dd MMM yyyy HH:mm} - {arrTime:dd MMM yyyy HH:mm}" 

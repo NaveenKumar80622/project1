@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models.Payments;
+using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
 
 namespace PickNBook.Api.Services.Implementations
@@ -421,50 +422,55 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     try
                     {
-                        if (status == PaymentStatus.Success && oldStatus != PaymentStatus.Success)
+                        string? validatedTargetUserId = (int.TryParse(payment.UserId, out int vUid) && await _dbContext.Users.AnyAsync(u => u.Id == vUid)) ? payment.UserId : null;
+
+                        if (validatedTargetUserId != null)
                         {
-                            await _inAppNotificationService.CreateNotificationAsync(
-                                type: "Payment",
-                                category: "Customer",
-                                title: "Payment Successful",
-                                message: $"Your payment of {payment.Currency} {payment.FinalPayableAmount:F2} for {payment.BookingType} booking ({payment.PaymentReference}) was successful.",
-                                severity: "Success",
-                                referenceType: "Payment",
-                                referenceId: payment.Id.ToString(),
-                                actionUrl: $"/bookings/{payment.PaymentReference}",
-                                idempotencyKey: $"PAY_SUCCESS_{payment.Id}",
-                                targetUserId: payment.UserId
-                            );
-                        }
-                        else if (status == PaymentStatus.Failed && oldStatus != PaymentStatus.Failed)
-                        {
-                            await _inAppNotificationService.CreateNotificationAsync(
-                                type: "Payment",
-                                category: "Customer",
-                                title: "Payment Failed",
-                                message: $"Your payment of {payment.Currency} {payment.FinalPayableAmount:F2} for {payment.BookingType} booking ({payment.PaymentReference}) failed: {cleanReason}.",
-                                severity: "Error",
-                                referenceType: "Payment",
-                                referenceId: payment.Id.ToString(),
-                                actionUrl: $"/payments/{payment.PaymentReference}",
-                                idempotencyKey: $"PAY_FAILED_{payment.Id}",
-                                targetUserId: payment.UserId
-                            );
-                        }
-                        else if ((status == PaymentStatus.Expired || status == PaymentStatus.Cancelled) && payment.Status != status)
-                        {
-                            await _inAppNotificationService.CreateNotificationAsync(
-                                type: "Payment",
-                                category: "Customer",
-                                title: status == PaymentStatus.Expired ? "Payment Expired" : "Payment Cancelled",
-                                message: $"Your payment session for {payment.BookingType} booking ({payment.PaymentReference}) has {status.ToLowerInvariant()}.",
-                                severity: "Warning",
-                                referenceType: "Payment",
-                                referenceId: payment.Id.ToString(),
-                                actionUrl: $"/bookings/{payment.PaymentReference}",
-                                idempotencyKey: $"PAY_{status.ToUpperInvariant()}_{payment.Id}",
-                                targetUserId: payment.UserId
-                            );
+                            if (status == PaymentStatus.Success && oldStatus != PaymentStatus.Success)
+                            {
+                                await _inAppNotificationService.CreateNotificationAsync(
+                                    type: "Payment",
+                                    category: "Customer",
+                                    title: "Payment Successful",
+                                    message: $"Your payment of {payment.Currency} {payment.FinalPayableAmount:F2} for {payment.BookingType} booking ({payment.PaymentReference}) was successful.",
+                                    severity: "Success",
+                                    referenceType: "Payment",
+                                    referenceId: payment.Id.ToString(),
+                                    actionUrl: $"/bookings/{payment.PaymentReference}",
+                                    idempotencyKey: $"PAY_SUCCESS_{payment.Id}",
+                                    targetUserId: validatedTargetUserId
+                                );
+                            }
+                            else if (status == PaymentStatus.Failed && oldStatus != PaymentStatus.Failed)
+                            {
+                                await _inAppNotificationService.CreateNotificationAsync(
+                                    type: "Payment",
+                                    category: "Customer",
+                                    title: "Payment Failed",
+                                    message: $"Your payment of {payment.Currency} {payment.FinalPayableAmount:F2} for {payment.BookingType} booking ({payment.PaymentReference}) failed: {cleanReason}.",
+                                    severity: "Error",
+                                    referenceType: "Payment",
+                                    referenceId: payment.Id.ToString(),
+                                    actionUrl: $"/payments/{payment.PaymentReference}",
+                                    idempotencyKey: $"PAY_FAILED_{payment.Id}",
+                                    targetUserId: validatedTargetUserId
+                                );
+                            }
+                            else if ((status == PaymentStatus.Expired || status == PaymentStatus.Cancelled) && payment.Status != status)
+                            {
+                                await _inAppNotificationService.CreateNotificationAsync(
+                                    type: "Payment",
+                                    category: "Customer",
+                                    title: status == PaymentStatus.Expired ? "Payment Expired" : "Payment Cancelled",
+                                    message: $"Your payment session for {payment.BookingType} booking ({payment.PaymentReference}) has {status.ToLowerInvariant()}.",
+                                    severity: "Warning",
+                                    referenceType: "Payment",
+                                    referenceId: payment.Id.ToString(),
+                                    actionUrl: $"/bookings/{payment.PaymentReference}",
+                                    idempotencyKey: $"PAY_{status.ToUpperInvariant()}_{payment.Id}",
+                                    targetUserId: validatedTargetUserId
+                                );
+                            }
                         }
                     }
                     catch (Exception inAppEx)
@@ -575,7 +581,7 @@ namespace PickNBook.Api.Services.Implementations
                             );
                         }
 
-                        if (status == PaymentStatus.Failed || status == PaymentStatus.Expired)
+                        if (status == PaymentStatus.Failed || status == PaymentStatus.Expired || status == PaymentStatus.Cancelled)
                         {
                             if (payment.BookingType == BookingType.Bus)
                             {
@@ -604,6 +610,55 @@ namespace PickNBook.Api.Services.Implementations
                                 {
                                     _logger.LogWarning(cEx, "Failed to release bus block key from cache for Payment {PaymentId}", payment.Id);
                                 }
+                            }
+
+                            // Synchronize any linked BusReservation, FlightReservation, HotelReservation, and PendingPaymentBooking
+                            try
+                            {
+                                var failureReasonToStore = cleanReason ?? "Payment failed or cancelled";
+
+                                var busRes = await _dbContext.BusReservations
+                                    .FirstOrDefaultAsync(b => (b.Id == payment.BookingId || b.Id == payment.BookingReferenceId || b.BookingReference == payment.PaymentReference) &&
+                                                              (b.Status == "Pending" || b.Status == "Initiated" || b.Status == "BOOKING_IN_PROGRESS" || b.Status == PickNBook.Api.Models.BusBookingStatus.BookingInProgress));
+                                if (busRes != null)
+                                {
+                                    busRes.Status = "Failed";
+                                    busRes.CancellationReason = failureReasonToStore;
+                                    busRes.CancelledAtUtc = DateTime.UtcNow;
+                                }
+
+                                var flRes = await _dbContext.FlightReservations
+                                    .FirstOrDefaultAsync(f => (f.Id == payment.BookingId || f.Id == payment.BookingReferenceId || f.BookingReference == payment.PaymentReference) &&
+                                                              (f.Status == "Pending" || f.Status == "Initiated"));
+                                if (flRes != null)
+                                {
+                                    flRes.Status = "Failed";
+                                    flRes.CancellationReason = failureReasonToStore;
+                                    flRes.CancelledAtUtc = DateTime.UtcNow;
+                                }
+
+                                var htRes = await _dbContext.HotelReservations
+                                    .FirstOrDefaultAsync(h => (h.Id == payment.BookingId || h.Id == payment.BookingReferenceId || h.BookingReference == payment.PaymentReference) &&
+                                                              (h.Status == "Pending" || h.Status == "Initiated"));
+                                if (htRes != null)
+                                {
+                                    htRes.Status = "Failed";
+                                    htRes.CancellationReason = failureReasonToStore;
+                                    htRes.CancelledAt = DateTime.UtcNow;
+                                }
+
+                                var pendingBk = await _dbContext.PendingPaymentBookings
+                                    .FirstOrDefaultAsync(p => p.PaymentId == payment.Id);
+                                if (pendingBk != null && pendingBk.Status != "Failed" && pendingBk.Status != "Expired")
+                                {
+                                    pendingBk.Status = "Failed";
+                                }
+
+                                await _dbContext.SaveChangesAsync();
+                            }
+                            catch (Exception syncEx)
+                            {
+                                _logger.LogWarning(syncEx, "Failed to synchronize reservation status for failed payment {PaymentId}", payment.Id);
                             }
                         }
                     }
@@ -753,6 +808,8 @@ namespace PickNBook.Api.Services.Implementations
             string? failureMsg = null;
             string? failedPaymentId = null;
             bool hasFailedAttempt = false;
+            bool hasPendingAttempt = false;
+            int totalAttempts = 0;
             decimal expectedAmount = payment.GatewayPaidAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount;
             
             try 
@@ -760,6 +817,7 @@ namespace PickNBook.Api.Services.Implementations
                 var paymentsArray = cfPaymentsResponse.RootElement.EnumerateArray();
                 foreach (var cfPayment in paymentsArray)
                 {
+                    totalAttempts++;
                     if (cfPayment.TryGetProperty("payment_status", out var statusEl))
                     {
                         var statusStr = statusEl.GetString();
@@ -790,6 +848,10 @@ namespace PickNBook.Api.Services.Implementations
                                 }
                             }
                         }
+                        else if (statusStr == "PENDING" || statusStr == "FLAGGED")
+                        {
+                            hasPendingAttempt = true;
+                        }
                         else if (statusStr == "FAILED" || statusStr == "CANCELLED" || statusStr == "USER_DROPPED")
                         {
                             hasFailedAttempt = true;
@@ -811,10 +873,23 @@ namespace PickNBook.Api.Services.Implementations
                 
                 EnqueueImmediateFulfillment(payment.Id);
             }
-            else if (!isSuccess && hasFailedAttempt && payment.Status != PaymentStatus.Success && payment.Status != PaymentStatus.Failed)
+            else if (!isSuccess && payment.Status != PaymentStatus.Success && payment.Status != PaymentStatus.Failed && payment.Status != PaymentStatus.Cancelled)
             {
-                await UpdatePaymentStatusAsync(payment.Id, PaymentStatus.Failed, failedPaymentId, null, failureMsg, DateTime.UtcNow);
-                payment = await _dbContext.Payments.FindAsync(payment.Id) ?? payment;
+                if (hasPendingAttempt)
+                {
+                    _logger.LogInformation("Cashfree order {OrderId} has a pending bank transaction. Keeping status as Pending.", cashfreeOrderId);
+                }
+                else if (hasFailedAttempt)
+                {
+                    await UpdatePaymentStatusAsync(payment.Id, PaymentStatus.Failed, failedPaymentId, null, failureMsg ?? "Payment failed or cancelled by user", DateTime.UtcNow);
+                    payment = await _dbContext.Payments.FindAsync(payment.Id) ?? payment;
+                }
+                else if (totalAttempts == 0)
+                {
+                    // User returned from gateway without initiating any transaction (dropped / abandoned)
+                    await UpdatePaymentStatusAsync(payment.Id, PaymentStatus.Failed, null, null, "Payment cancelled or abandoned by user", DateTime.UtcNow);
+                    payment = await _dbContext.Payments.FindAsync(payment.Id) ?? payment;
+                }
             }
 
             return new PaymentVerificationResponse

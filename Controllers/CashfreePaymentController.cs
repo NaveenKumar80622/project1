@@ -1244,5 +1244,45 @@ namespace PickNBook.Api.Controllers
                 return StatusCode(500, new { message = ex.Message });
             }
         }
+
+        [HttpPost("orders/{orderId}/cancel")]
+        [Authorize]
+        public async Task<IActionResult> CancelOrder(string orderId)
+        {
+            try
+            {
+                var payment = await _paymentService.GetPaymentByCashfreeOrderIdAsync(orderId);
+                if (payment == null)
+                {
+                    return NotFound(new { message = "Payment order not found." });
+                }
+
+                if (payment.Status == PaymentStatus.Success)
+                {
+                    return BadRequest(new { message = "Cannot cancel an already successful payment." });
+                }
+
+                await _paymentService.UpdatePaymentStatusAsync(
+                    payment.Id,
+                    PaymentStatus.Failed,
+                    failureReason: "Payment cancelled by user",
+                    webhookReceivedAt: DateTime.UtcNow);
+
+                var updatedPayment = await _paymentService.GetPaymentByCashfreeOrderIdAsync(orderId) ?? payment;
+
+                return Ok(new
+                {
+                    message = "Payment order successfully cancelled.",
+                    cashfreeOrderId = orderId,
+                    status = updatedPayment.Status,
+                    failureReason = updatedPayment.FailureReason
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to cancel Cashfree order {OrderId}", orderId);
+                return StatusCode(500, new { message = ex.Message });
+            }
+        }
     }
 }

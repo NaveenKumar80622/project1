@@ -1813,8 +1813,8 @@ namespace PickNBook.Api.Controllers
                         bookingStatus = "Cancelled";
                     }
                     else if (x.Status == "Failed" || x.Status == "FAILED" ||
-                             (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED")) ||
-                             ((x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow)))
+                             (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
+                             ((x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
                     {
                         bookingStatus = "Payment Failed";
                     }
@@ -1831,7 +1831,12 @@ namespace PickNBook.Api.Controllers
                         bookingStatus = x.Status;
                     }
 
-                    string tripState = bookingStatus == "Cancelled" ? "Cancelled" : (x.CheckInDate <= DateTime.UtcNow ? "Completed" : "Upcoming");
+                    string tripState = bookingStatus switch
+                    {
+                        "Cancelled" => "Cancelled",
+                        "Payment Failed" or "Failed" => "Payment Failed",
+                        _ => x.CheckInDate <= DateTime.UtcNow ? "Completed" : "Upcoming"
+                    };
 
                     var pnr = !string.IsNullOrWhiteSpace(x.ConfirmationNo) ? x.ConfirmationNo : (!string.IsNullOrWhiteSpace(x.ProviderBookingId) ? x.ProviderBookingId : exec?.SupplierReference);
                     var summary = !string.IsNullOrWhiteSpace(x.HotelName) ? $"{x.HotelName} ({x.CheckInDate:dd MMM} - {x.CheckOutDate:dd MMM})" : "Hotel Stay";
