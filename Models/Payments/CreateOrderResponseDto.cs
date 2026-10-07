@@ -15,5 +15,6 @@ namespace PickNBook.Api.Models.Payments
         public string? CfOrderId { get; set; }
         public string? OrderStatus { get; set; }
         public string? PaymentReference { get; set; }
+        public decimal? WalletBalance { get; set; }
     }
 }

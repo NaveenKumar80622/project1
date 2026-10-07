@@ -44,5 +44,16 @@ namespace PickNBook.Api.Models.Payments
         /// Backend calculates authoritative wallet and gateway portions.
         /// </summary>
         public bool UseWallet { get; set; } = false;
+
+        /// <summary>
+        /// Explicit payment method requested by customer: "Cashfree", "Wallet", or "Hybrid".
+        /// </summary>
+        public string? PaymentMethod { get; set; }
+
+        /// <summary>
+        /// Customer-selected wallet amount to apply toward the booking total.
+        /// If provided, the backend validates that 0 <= WalletAmount <= AvailableBalance and WalletAmount <= BookingTotal.
+        /// </summary>
+        public decimal? WalletAmount { get; set; }
     }
 }

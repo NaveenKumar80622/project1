@@ -45,23 +45,43 @@ public class TicketsController : BaseApiController
         var mobile = (request.Mobile ?? "").Trim();
         var email = (request.Email ?? "").Trim().ToLower();
         var type = (request.BookingType ?? "").Trim().ToLower();
-        var bookingRef = (request.BookingReference ?? "").Trim();
 
-        _logger.LogInformation("[TicketsController.Fetch] Request received: Mobile='{Mobile}', Email='{Email}', BookingType='{BookingType}' (normalized: '{Normalized}'), BookingRef='{BookingRef}', ActiveOnly={ActiveOnly}",
-            mobile, email, request.BookingType, type, bookingRef, request.ActiveOnly);
+        if (string.Equals(mobile, "string", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mobile, "null", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(mobile, "undefined", StringComparison.OrdinalIgnoreCase))
+        {
+            mobile = string.Empty;
+        }
+
+        if (string.Equals(email, "string", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(email, "null", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(email, "undefined", StringComparison.OrdinalIgnoreCase))
+        {
+            email = string.Empty;
+        }
+
+        if (string.Equals(type, "string", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(type, "null", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(type, "undefined", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(type))
+        {
+            type = "all";
+        }
+
+        _logger.LogInformation("[TicketsController.Fetch] Request received: Mobile='{Mobile}', Email='{Email}', BookingType='{BookingType}' (normalized: '{Normalized}'), ActiveOnly={ActiveOnly}",
+            mobile, email, request.BookingType, type, request.ActiveOnly);
 
         var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value 
                      ?? User.FindFirst("sub")?.Value;
 
         if (string.IsNullOrWhiteSpace(mobile) &&
             string.IsNullOrWhiteSpace(email) &&
-            string.IsNullOrWhiteSpace(bookingRef) &&
             string.IsNullOrWhiteSpace(userId))
         {
             return BadRequest(new
             {
                 success = false,
-                message = "Mobile, Email, or BookingReference is required"
+                message = "Mobile or Email is required"
             });
         }
 
@@ -88,7 +108,6 @@ public class TicketsController : BaseApiController
 
         bool hasPhone = phoneCandidates.Count > 0;
         bool hasEmail = !string.IsNullOrWhiteSpace(email);
-        bool hasRef = !string.IsNullOrWhiteSpace(bookingRef);
         bool hasUser = !string.IsNullOrWhiteSpace(userId);
 
         // Standardized confirmed statuses
@@ -108,11 +127,7 @@ public class TicketsController : BaseApiController
                 query = query.Where(x => x.BusBooking!.DepartureTime >= nowIst);
             }
 
-            if (hasRef)
-            {
-                query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef);
-            }
-            else if (hasUser)
+            if (hasUser)
             {
                 query = query.Where(x => x.UserId == userId);
             }
@@ -223,11 +238,7 @@ public class TicketsController : BaseApiController
                 query = query.Where(x => x.DepartureTime >= nowIst);
             }
 
-            if (hasRef)
-            {
-                query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef || x.GdsPnr == bookingRef);
-            }
-            else if (hasUser)
+            if (hasUser)
             {
                 query = query.Where(x => x.UserId == userId);
             }
@@ -323,11 +334,7 @@ public class TicketsController : BaseApiController
                 query = query.Where(x => x.CheckOutDate >= nowIst.Date);
             }
 
-            if (hasRef)
-            {
-                query = query.Where(x => x.BookingReference == bookingRef || x.ProviderBookingId == bookingRef || x.ConfirmationNo == bookingRef);
-            }
-            else if (hasUser)
+            if (hasUser)
             {
                 query = query.Where(x => x.UserId == userId);
             }
