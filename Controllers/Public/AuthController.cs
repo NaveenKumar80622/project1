@@ -2,11 +2,13 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using PickNBook.Api.Constants;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Services;
+using PickNBook.Api.Services.Implementations;
 using System.Security.Claims;
 using System.Security.Cryptography;
 
@@ -22,6 +24,7 @@ namespace PickNBook.Api.Controllers
         private readonly ISmsService _smsService;
         private readonly PickNBook.Api.Services.Notifications.Interfaces.IOtpService _otpService;
         private readonly PasswordHasher<User> _passwordHasher;
+        private readonly ILogger<AuthController>? _logger;
         private readonly int _adminOtpExpiryMinutes;
         private readonly int _adminMaxOtpAttempts;
         private const string AdminLoginOtpPurpose = "AdminLogin";
@@ -33,7 +36,8 @@ namespace PickNBook.Api.Controllers
             IEmailService emailService,
             ISmsService smsService,
             PickNBook.Api.Services.Notifications.Interfaces.IOtpService otpService,
-            IConfiguration configuration)
+            IConfiguration configuration,
+            ILogger<AuthController>? logger = null)
         {
             _context = context;
             _jwtService = jwtService;
@@ -41,6 +45,7 @@ namespace PickNBook.Api.Controllers
             _smsService = smsService;
             _otpService = otpService;
             _passwordHasher = new PasswordHasher<User>();
+            _logger = logger;
 
             _adminOtpExpiryMinutes = Math.Clamp(
                 configuration.GetValue<int?>("AdminAuth:OtpExpiryMinutes") ?? 5,
@@ -534,10 +539,285 @@ namespace PickNBook.Api.Controllers
             });
         }
 
+        // ---------------- LOCKOUT HELPERS ----------------
+        private string GetClientIp()
+        {
+            var forwarded = HttpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+            if (!string.IsNullOrEmpty(forwarded))
+            {
+                return forwarded.Split(',')[0].Trim();
+            }
+            return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown";
+        }
+
+        private async Task<(bool IsLocked, string LockMessage)> CheckAndHandleExistingLockAsync(User user, string ipAddress)
+        {
+            var now = DateTime.UtcNow;
+            var lockout = await _context.UserLockouts
+                .Where(l => l.UserId == user.Id.ToString() && l.Status == "Locked")
+                .OrderByDescending(l => l.LockedOn)
+                .FirstOrDefaultAsync();
+
+            if (lockout == null)
+            {
+                return (false, string.Empty);
+            }
+
+            if (lockout.UnlockAt <= now)
+            {
+                // Lock expired - auto-unlock
+                lockout.Status = "Unlocked";
+                lockout.FailedAttempts = 0;
+                await _context.SaveChangesAsync();
+                _logger?.LogInformation("User {UserId} ({Email}) account auto-unlocked after expiry.", user.Id, user.Email);
+                return (false, string.Empty);
+            }
+
+            // Lock is actively blocking
+            string message;
+            if ((lockout.UnlockAt - lockout.LockedOn).TotalMinutes > 30 || (lockout.Reason != null && lockout.Reason.Contains("24 hours")))
+            {
+                message = "Your account has been blocked due to multiple attempts. Try after 24 hours.";
+            }
+            else
+            {
+                message = "Your account has been blocked due to multiple attempts. Try after 15 minutes.";
+            }
+
+            return (true, message);
+        }
+
+        private async Task<IActionResult> HandleFailedAuthenticationAsync(
+            User user,
+            string failureType,
+            string ipAddress,
+            string? customErrorMessage = null)
+        {
+            var now = DateTime.UtcNow;
+            var istZone = DailyAdminSummaryService.GetIstTimeZoneStatic();
+            var istNow = TimeZoneInfo.ConvertTimeFromUtc(now, istZone);
+            var istStartOfDay = istNow.Date;
+            var utcStartOfDay = TimeZoneInfo.ConvertTimeToUtc(istStartOfDay, istZone);
+
+            // Fetch or create tracking lockout record
+            var tracker = await _context.UserLockouts
+                .Where(l => l.UserId == user.Id.ToString() && l.Status == "Unlocked")
+                .OrderByDescending(l => l.LockedOn)
+                .FirstOrDefaultAsync();
+
+            if (tracker == null)
+            {
+                tracker = new UserLockout
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    UserId = user.Id.ToString(),
+                    UserName = $"{user.FirstName} {user.LastName}".Trim(),
+                    Email = user.Email ?? string.Empty,
+                    FailedAttempts = 0,
+                    MaxAllowedAttempts = 3,
+                    Status = "Unlocked",
+                    LockedOn = now,
+                    UnlockAt = now,
+                    Reason = "Failed attempt tracker"
+                };
+                _context.UserLockouts.Add(tracker);
+            }
+
+            // If previous failed attempts occurred before today (IST), reset count
+            if (tracker.LockedOn < utcStartOfDay)
+            {
+                tracker.FailedAttempts = 0;
+            }
+
+            tracker.FailedAttempts++;
+            tracker.LockedOn = now;
+
+            if (tracker.FailedAttempts >= 3)
+            {
+                // Count prior lockouts today
+                var previousLocksToday = await _context.UserLockouts
+                    .CountAsync(l => l.UserId == user.Id.ToString() &&
+                                     l.LockedOn >= utcStartOfDay &&
+                                     (l.Reason.Contains("15 minutes") || l.Reason.Contains("24 hours")));
+
+                bool isSecondLock = previousLocksToday >= 1;
+                var lockDuration = isSecondLock ? TimeSpan.FromHours(24) : TimeSpan.FromMinutes(15);
+                var unlockAt = now.Add(lockDuration);
+
+                string lockReason = isSecondLock
+                    ? "Account blocked for 24 hours due to multiple failed attempts."
+                    : "Account blocked for 15 minutes due to multiple failed attempts.";
+
+                string lockMessage = isSecondLock
+                    ? "Your account has been blocked due to multiple attempts. Try after 24 hours."
+                    : "Your account has been blocked due to multiple attempts. Try after 15 minutes.";
+
+                string rawName = $"{user.FirstName} {user.LastName}".Trim();
+                string displayName = string.IsNullOrWhiteSpace(rawName) ? "Valued Customer" : rawName;
+                string encodedName = System.Net.WebUtility.HtmlEncode(displayName);
+                string durationText = isSecondLock ? "24 hours" : "15 minutes";
+                string formattedDate = now.ToString("dd MMMM yyyy, hh:mm tt 'UTC'");
+                int currentYear = now.Year;
+
+                string emailSubject = isSecondLock
+                    ? "Security Alert: Your Pick&book Account Has Been Blocked for 24 Hours"
+                    : "Security Alert: Your Pick&book Account Has Been Temporarily Blocked";
+
+                string emailBody = $@"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <style>
+        body {{ font-family: 'Segoe UI', Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px; }}
+        .container {{ max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.08); border: 1px solid #e2e8f0; }}
+        .header {{ background: linear-gradient(135deg, #991b1b 0%, #dc2626 100%); padding: 32px 24px; text-align: center; color: #ffffff; }}
+        .header h1 {{ margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px; }}
+        .header p {{ margin: 6px 0 0; font-size: 14px; opacity: 0.9; }}
+        .content {{ padding: 32px 24px; color: #334155; line-height: 1.6; font-size: 15px; }}
+        .greeting {{ font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #0f172a; }}
+        .card {{ background: #fef2f2; border: 1px solid #fee2e2; border-radius: 8px; padding: 20px; margin: 24px 0; }}
+        .card-title {{ font-weight: 700; color: #991b1b; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; }}
+        .table {{ width: 100%; border-collapse: collapse; }}
+        .table td {{ padding: 10px 0; border-bottom: 1px solid #fecaca; font-size: 14px; }}
+        .table tr:last-child td {{ border-bottom: none; }}
+        .table td:first-child {{ color: #7f1d1d; width: 40%; }}
+        .table td:last-child {{ text-align: right; font-weight: 600; color: #0f172a; }}
+        .status-badge {{ display: inline-block; background-color: #ef4444; color: #ffffff; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 700; }}
+        .btn-wrapper {{ text-align: center; margin: 30px 0; }}
+        .btn {{ display: inline-block; background: #dc2626; color: #ffffff !important; padding: 14px 32px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 15px; box-shadow: 0 4px 10px rgba(220,38,38,0.25); }}
+        .footer {{ padding: 24px; text-align: center; font-size: 12px; color: #94a3b8; background-color: #f8fafc; border-top: 1px solid #f1f5f9; line-height: 1.5; }}
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <div class='header'>
+            <h1>Pick&amp;book</h1>
+            <p>Account Security Notification</p>
+        </div>
+        <div class='content'>
+            <div class='greeting'>Hello {encodedName},</div>
+            <p>For your security, your Pick&amp;book account has been temporarily blocked after multiple unsuccessful login attempts.</p>
+            <p>Your account will remain blocked for <strong>{durationText}</strong>. After this period, you can try signing in again.</p>
+            
+            <div class='card'>
+                <div class='card-title'>Account Security Details</div>
+                <table class='table'>
+                    <tr>
+                        <td>Status</td>
+                        <td><span class='status-badge'>Temporarily Blocked</span></td>
+                    </tr>
+                    <tr>
+                        <td>Reason</td>
+                        <td>Multiple failed login attempts</td>
+                    </tr>
+                    <tr>
+                        <td>Lock Duration</td>
+                        <td>{durationText}</td>
+                    </tr>
+                    <tr>
+                        <td>Effective Date</td>
+                        <td>{formattedDate}</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class='btn-wrapper'>
+                <a href='https://picknbook.in/login' class='btn' target='_blank'>Sign In to Pick&amp;book</a>
+            </div>
+
+            <p style='font-size: 13px; color: #64748b; margin-top: 25px;'>
+                If you believe this activity was not performed by you, please contact Pick&amp;book Support immediately to safeguard your account.
+            </p>
+
+            <p style='margin-bottom: 0;'>
+                Best regards,<br>
+                <strong>Pick&amp;book Security Team</strong>
+            </p>
+        </div>
+        <div class='footer'>
+            &copy; {currentYear} Pick&amp;book. All rights reserved.<br>
+            This is an automated security notification. Please do not reply to this email.
+        </div>
+    </div>
+</body>
+</html>";
+
+                // Create the actual lockout record
+                var lockoutRecord = new UserLockout
+                {
+                    Id = Guid.NewGuid().ToString("N"),
+                    UserId = user.Id.ToString(),
+                    UserName = $"{user.FirstName} {user.LastName}".Trim(),
+                    Email = user.Email ?? string.Empty,
+                    FailedAttempts = tracker.FailedAttempts,
+                    MaxAllowedAttempts = 3,
+                    LockedOn = now,
+                    UnlockAt = unlockAt,
+                    Reason = lockReason,
+                    Status = "Locked"
+                };
+                _context.UserLockouts.Add(lockoutRecord);
+
+                // Reset tracker failed attempts
+                tracker.FailedAttempts = 0;
+                await _context.SaveChangesAsync();
+
+                _logger?.LogWarning("Account locked for User #{UserId} ({Email}). Lock type: {LockType}. IP: {Ip}",
+                    user.Id, user.Email, isSecondLock ? "24 Hours" : "15 Minutes", ipAddress);
+
+                // Send lockout notification email in try/catch (non-fatal)
+                if (!string.IsNullOrWhiteSpace(user.Email))
+                {
+                    try
+                    {
+                        await _emailService.SendEmailAsync(user.Email, emailSubject, emailBody);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogWarning(ex, "Failed to send account lockout email to {Email} for user #{UserId}. Non-fatal.",
+                            user.Email, user.Id);
+                    }
+                }
+
+                return StatusCode(StatusCodes.Status401Unauthorized, new
+                {
+                    success = false,
+                    message = lockMessage
+                });
+            }
+
+            // Not yet reached 3 attempts
+            await _context.SaveChangesAsync();
+
+            if (failureType == "FAILED_OTP")
+            {
+                return BadRequest(new { success = false, message = customErrorMessage ?? "Invalid OTP." });
+            }
+
+            return Unauthorized("Invalid credentials");
+        }
+
+        private async Task ResetFailedAttemptsOnSuccessAsync(User user)
+        {
+            var tracker = await _context.UserLockouts
+                .Where(l => l.UserId == user.Id.ToString() && l.Status == "Unlocked" && l.FailedAttempts > 0)
+                .OrderByDescending(l => l.LockedOn)
+                .FirstOrDefaultAsync();
+
+            if (tracker != null)
+            {
+                tracker.FailedAttempts = 0;
+                await _context.SaveChangesAsync();
+            }
+        }
+
         // ---------------- LOGIN ----------------
         [HttpPost("login")]
         public async Task<IActionResult> Login(LoginRequest request)
         {
+            var ip = GetClientIp();
             var normalizedEmail = request.Email.Trim().ToLowerInvariant();
 
             var user = await _context.Users
@@ -546,13 +826,23 @@ namespace PickNBook.Api.Controllers
             if (user == null)
                 return Unauthorized("Invalid credentials");
 
+            var lockCheck = await CheckAndHandleExistingLockAsync(user, ip);
+            if (lockCheck.IsLocked)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new { success = false, message = lockCheck.LockMessage });
+            }
+
             var result = _passwordHasher.VerifyHashedPassword(
                 user,
                 user.PasswordHash,
                 request.Password);
 
             if (result == PasswordVerificationResult.Failed)
-                return Unauthorized("Invalid credentials");
+            {
+                return await HandleFailedAuthenticationAsync(user, "FAILED_LOGIN", ip);
+            }
+
+            await ResetFailedAttemptsOnSuccessAsync(user);
 
             if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
             {
@@ -595,6 +885,7 @@ namespace PickNBook.Api.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
+            var ip = GetClientIp();
             var normalizedPhone = request.PhoneNumber.Trim();
 
             var user = await _context.Users
@@ -604,6 +895,12 @@ namespace PickNBook.Api.Controllers
 
             if (user == null)
                 return Unauthorized(new { success = false, message = "Mobile number not registered." });
+
+            var lockCheck = await CheckAndHandleExistingLockAsync(user, ip);
+            if (lockCheck.IsLocked)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, new { success = false, message = lockCheck.LockMessage });
+            }
 
             if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
                 return Unauthorized(new { success = false, message = "Your account is inactive. Please contact support." });
@@ -634,20 +931,38 @@ namespace PickNBook.Api.Controllers
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
 
+            var ip = GetClientIp();
             var normalizedPhone = request.PhoneNumber.Trim();
-
-            var (isValid, message) = await _otpService.VerifyOtpAsync(normalizedPhone, OtpPurposes.Login, request.Otp);
-
-            if (!isValid)
-                return BadRequest(new { success = false, message = message });
 
             var user = await _context.Users
      .FirstOrDefaultAsync(u =>
          u.PhoneNumber == normalizedPhone &&
          u.Role == "User");
 
+            if (user != null)
+            {
+                var lockCheck = await CheckAndHandleExistingLockAsync(user, ip);
+                if (lockCheck.IsLocked)
+                {
+                    return StatusCode(StatusCodes.Status401Unauthorized, new { success = false, message = lockCheck.LockMessage });
+                }
+            }
+
+            var (isValid, message) = await _otpService.VerifyOtpAsync(normalizedPhone, OtpPurposes.Login, request.Otp);
+
+            if (!isValid)
+            {
+                if (user != null)
+                {
+                    return await HandleFailedAuthenticationAsync(user, "FAILED_OTP", ip, message);
+                }
+                return BadRequest(new { success = false, message = message });
+            }
+
             if (user == null)
                 return Unauthorized(new { success = false, message = "User not found." });
+
+            await ResetFailedAttemptsOnSuccessAsync(user);
 
             if (string.Equals(user.Status, "Inactive", StringComparison.OrdinalIgnoreCase))
                 return Unauthorized(new { success = false, message = "Your account is inactive. Please contact support." });
