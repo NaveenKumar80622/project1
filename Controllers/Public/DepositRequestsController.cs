@@ -14,11 +14,16 @@ namespace PickNBook.Api.Controllers;
 public class DepositRequestsController : AdminApiController
 {
     private readonly AppDbContext _context;
+    private readonly PickNBook.Api.Services.Interfaces.IWalletService? _walletService;
     private readonly PickNBook.Api.Services.Interfaces.IInAppNotificationService? _inAppNotificationService;
 
-    public DepositRequestsController(AppDbContext context, PickNBook.Api.Services.Interfaces.IInAppNotificationService? inAppNotificationService = null)
+    public DepositRequestsController(
+        AppDbContext context,
+        PickNBook.Api.Services.Interfaces.IWalletService? walletService = null,
+        PickNBook.Api.Services.Interfaces.IInAppNotificationService? inAppNotificationService = null)
     {
         _context = context;
+        _walletService = walletService;
         _inAppNotificationService = inAppNotificationService;
     }
 
@@ -111,8 +116,38 @@ public class DepositRequestsController : AdminApiController
             !string.Equals(oldStatus, "Approved", StringComparison.OrdinalIgnoreCase) &&
             deposit.User != null)
         {
-            deposit.User.WalletBalance += deposit.Amount;
             deposit.User.WalletStatus = "Active"; // Ensure wallet becomes active
+
+            if (_walletService != null)
+            {
+                await _walletService.CreditAsync(
+                    deposit.User.Id,
+                    deposit.Amount,
+                    "DepositApproved",
+                    deposit.Id.ToString(),
+                    $"Bank deposit approved by Admin. Method: {deposit.Type}");
+            }
+            else
+            {
+                deposit.User.WalletBalance += deposit.Amount;
+
+                if (deposit.User.Role == AuthRoles.User)
+                {
+                    var tx = new PickNBook.Api.Models.Entities.WalletTransaction
+                    {
+                        UserId = deposit.User.Id,
+                        TransactionType = "Credit",
+                        Amount = deposit.Amount,
+                        RunningBalance = deposit.User.WalletBalance,
+                        ReferenceType = "DepositApproved",
+                        RefCode = deposit.Id.ToString(),
+                        Description = $"Bank deposit approved by Admin. Method: {deposit.Type}",
+                        Status = "Completed",
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    _context.WalletTransactions.Add(tx);
+                }
+            }
 
             // Add Ledger Entry if Agent
             if (deposit.User.Role == AuthRoles.Agent)
@@ -130,29 +165,49 @@ public class DepositRequestsController : AdminApiController
                 };
                 _context.AgentLedgerEntries.Add(ledger);
             }
-            else if (deposit.User.Role == AuthRoles.User)
-            {
-                var tx = new PickNBook.Api.Models.Entities.WalletTransaction
-                {
-                    UserId = deposit.User.Id,
-                    TransactionType = "Credit",
-                    Amount = deposit.Amount,
-                    RunningBalance = deposit.User.WalletBalance,
-                    ReferenceType = "DepositApproved",
-                    RefCode = deposit.Id.ToString(),
-                    Description = $"Bank deposit approved by Admin. Method: {deposit.Type}",
-                    Status = "Completed",
-                    CreatedAt = DateTime.UtcNow
-                };
-                _context.WalletTransactions.Add(tx);
-            }
         }
         // If transitioning away from Approved, deduct if it was previously approved
         else if (!string.Equals(newStatus, "Approved", StringComparison.OrdinalIgnoreCase) && 
                  string.Equals(oldStatus, "Approved", StringComparison.OrdinalIgnoreCase) &&
                  deposit.User != null)
         {
-            deposit.User.WalletBalance -= deposit.Amount;
+            if (_walletService != null)
+            {
+                try
+                {
+                    await _walletService.DebitAsync(
+                        deposit.User.Id,
+                        deposit.Amount,
+                        "DepositReversal",
+                        deposit.Id.ToString(),
+                        $"Deposit reversal by Admin. Status changed from Approved to {newStatus}");
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return BadRequest(new { message = $"Cannot revert deposit: {ex.Message}" });
+                }
+            }
+            else
+            {
+                deposit.User.WalletBalance -= deposit.Amount;
+
+                if (deposit.User.Role == AuthRoles.User)
+                {
+                    var tx = new PickNBook.Api.Models.Entities.WalletTransaction
+                    {
+                        UserId = deposit.User.Id,
+                        TransactionType = "Debit",
+                        Amount = deposit.Amount,
+                        RunningBalance = deposit.User.WalletBalance,
+                        ReferenceType = "DepositReversal",
+                        RefCode = deposit.Id.ToString(),
+                        Description = $"Deposit reversal by Admin. Status changed from Approved to {newStatus}",
+                        Status = "Completed",
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    _context.WalletTransactions.Add(tx);
+                }
+            }
 
             // Add Ledger Entry to log reversal if Agent
             if (deposit.User.Role == AuthRoles.Agent)
@@ -169,22 +224,6 @@ public class DepositRequestsController : AdminApiController
                     CreatedAtUtc = DateTime.UtcNow
                 };
                 _context.AgentLedgerEntries.Add(ledger);
-            }
-            else if (deposit.User.Role == AuthRoles.User)
-            {
-                var tx = new PickNBook.Api.Models.Entities.WalletTransaction
-                {
-                    UserId = deposit.User.Id,
-                    TransactionType = "Debit",
-                    Amount = deposit.Amount,
-                    RunningBalance = deposit.User.WalletBalance,
-                    ReferenceType = "DepositReversal",
-                    RefCode = deposit.Id.ToString(),
-                    Description = $"Deposit reversal by Admin. Status changed from Approved to {newStatus}",
-                    Status = "Completed",
-                    CreatedAt = DateTime.UtcNow
-                };
-                _context.WalletTransactions.Add(tx);
             }
         }
 

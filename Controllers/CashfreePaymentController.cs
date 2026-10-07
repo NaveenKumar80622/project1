@@ -843,13 +843,13 @@ namespace PickNBook.Api.Controllers
                         return BadRequest(new { message = "Customer wallet is not active." });
                     }
 
-                    decimal availableWalletBalance = Math.Max(0m, user.WalletBalance);
+                    decimal availableWalletBalance = Math.Round(Math.Max(0m, user.WalletBalance), 2, MidpointRounding.AwayFromZero);
                     currentCustomerWalletBalance = availableWalletBalance;
 
                     decimal requestedWalletAmount;
                     if (request.WalletAmount.HasValue)
                     {
-                        requestedWalletAmount = request.WalletAmount.Value;
+                        requestedWalletAmount = Math.Round(request.WalletAmount.Value, 2, MidpointRounding.AwayFromZero);
                     }
                     else if (string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase))
                     {
@@ -884,7 +884,17 @@ namespace PickNBook.Api.Controllers
                     }
 
                     // Rule 4: Cashfree amount must always be: CashfreeAmount = BookingTotal - WalletAmount
-                    decimal cashfreeAmount = calculatedTotalFare - requestedWalletAmount;
+                    decimal cashfreeAmount = Math.Round(calculatedTotalFare - requestedWalletAmount, 2, MidpointRounding.AwayFromZero);
+
+                    // Pre-flight Cashfree ₹1.00 threshold gate for hybrid payments
+                    if (requestedWalletAmount > 0m && cashfreeAmount > 0m && cashfreeAmount < 1.00m)
+                    {
+                        return BadRequest(new
+                        {
+                            success = false,
+                            message = "Remaining amount payable via gateway must be at least ₹1.00. Please adjust your wallet amount or pay the full balance via wallet."
+                        });
+                    }
 
                     // Rule 5: Total must always satisfy: WalletAmount + CashfreeAmount = BookingTotal
                     if (requestedWalletAmount + cashfreeAmount != calculatedTotalFare)
