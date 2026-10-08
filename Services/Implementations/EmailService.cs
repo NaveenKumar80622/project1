@@ -43,7 +43,10 @@ namespace PickNBook.Api.Services
                 From = new MailAddress(_settings.SenderEmail, _settings.SenderName),
                 Subject = subject,
                 Body = body,
-                IsBodyHtml = true
+                IsBodyHtml = true,
+                BodyEncoding = System.Text.Encoding.UTF8,
+                SubjectEncoding = System.Text.Encoding.UTF8,
+                HeadersEncoding = System.Text.Encoding.UTF8
             };
 
             message.To.Add(toEmail);

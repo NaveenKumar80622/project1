@@ -4495,10 +4495,12 @@ namespace PickNBook.Api.Controllers
                             Destination = _srdvBusService.MapCityCodeToName(booking.BusBooking.ToCity),
                             DepartureTime = booking.BusBooking.DepartureTime,
                             ArrivalTime = booking.BusBooking.ArrivalTime,
+                            BoardingPointTime = booking.BoardingPointTime ?? booking.BusBooking.DepartureTime,
+                            ArrivalPointTime = booking.BusBooking.ArrivalTime,
                             IsOvernightArrival = booking.BusBooking.ArrivalTime.Date > booking.BusBooking.DepartureTime.Date,
                             DurationMinutes = (int)(booking.BusBooking.ArrivalTime - booking.BusBooking.DepartureTime).TotalMinutes,
                             BoardingPoint = booking.BusBooking.BoardingPoint,
-                            ArrivalPoint = booking.BusBooking.ToCity,
+                            ArrivalPoint = !string.IsNullOrWhiteSpace(booking.BusBooking.DroppingPoint) ? booking.BusBooking.DroppingPoint : booking.BusBooking.ToCity,
 
                             // Fare breakdown
                             Price = booking.TotalPriceInr,

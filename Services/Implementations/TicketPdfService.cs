@@ -219,12 +219,12 @@ public class TicketPdfService : ITicketPdfService
         y += 21;
     }
 
-    public byte[] GenerateBusTicketPdf(SendBusTicketEmailRequest request)
+    public byte[] GenerateBusTicketPdf(SendBusTicketEmailRequest request, bool isCancelled = false, decimal refundAmount = 0m)
     {
         using var document = new PdfDocument();
-        document.Info.Title = $"Bus Ticket - {request.BookingReference}";
+        document.Info.Title = isCancelled ? $"Bus Ticket (CANCELLED) - {request.BookingReference}" : $"Bus Ticket - {request.BookingReference}";
 
-        BuildBusTicketPage(document, request);
+        BuildBusTicketPage(document, request, isCancelled, refundAmount);
         BuildBusTermsPage(document, request);
 
         using var stream = new MemoryStream();
@@ -234,7 +234,9 @@ public class TicketPdfService : ITicketPdfService
 
     private static void BuildBusTicketPage(
         PdfDocument document,
-        SendBusTicketEmailRequest req)
+        SendBusTicketEmailRequest req,
+        bool isCancelled = false,
+        decimal refundAmount = 0m)
     {
         var page = document.AddPage();
 
@@ -268,10 +270,14 @@ public class TicketPdfService : ITicketPdfService
         var fTinyB = new XFont("Arial", 7, XFontStyle.Bold);
         var fKicker = new XFont("Arial", 7, XFontStyle.Bold);
 
-        gfx.DrawRectangle(navyBrush, 0, 0, pageW, 56);
+        var headerBg = isCancelled 
+            ? new XSolidBrush(XColor.FromArgb(153, 27, 27)) 
+            : navyBrush;
+
+        gfx.DrawRectangle(headerBg, 0, 0, pageW, 56);
 
         gfx.DrawString(
-            $"{req.OperatorName.ToUpperInvariant()} - BUS TICKET",
+            $"{req.OperatorName.ToUpperInvariant()} - BUS TICKET{(isCancelled ? " (CANCELLED)" : "")}",
             fTiny,
             XBrushes.LightGray,
             new XRect(left, 9, mainW - left, 13),
@@ -286,19 +292,50 @@ public class TicketPdfService : ITicketPdfService
 
         double badgeX = sideX - 4;
 
-        gfx.DrawRectangle(
-            new XPen(XBrushes.White, 1.2),
-            badgeX,
-            16,
-            76,
-            22);
+        if (isCancelled)
+        {
+            var redBadgeBrush = new XSolidBrush(XColor.FromArgb(220, 38, 38));
+            gfx.DrawRectangle(
+                redBadgeBrush,
+                badgeX,
+                16,
+                82,
+                22);
 
-        gfx.DrawString(
-            "BOOKED",
-            new XFont("Arial", 9, XFontStyle.Bold),
-            XBrushes.White,
-            new XRect(badgeX, 16, 76, 22),
-            XStringFormats.Center);
+            gfx.DrawString(
+                "CANCELLED",
+                new XFont("Arial", 9, XFontStyle.Bold),
+                XBrushes.White,
+                new XRect(badgeX, 16, 82, 22),
+                XStringFormats.Center);
+        }
+        else
+        {
+            gfx.DrawRectangle(
+                new XPen(XBrushes.White, 1.2),
+                badgeX,
+                16,
+                76,
+                22);
+
+            gfx.DrawString(
+                "BOOKED",
+                new XFont("Arial", 9, XFontStyle.Bold),
+                XBrushes.White,
+                new XRect(badgeX, 16, 76, 22),
+                XStringFormats.Center);
+        }
+
+        if (isCancelled)
+        {
+            var watermarkFont = new XFont("Arial", 50, XFontStyle.Bold);
+            var watermarkBrush = new XSolidBrush(XColor.FromArgb(25, 220, 38, 38));
+            var state = gfx.Save();
+            gfx.TranslateTransform(pageW / 2 - 20, 260);
+            gfx.RotateTransform(-25);
+            gfx.DrawString("CANCELLED / VOID", watermarkFont, watermarkBrush, new XPoint(-200, 0));
+            gfx.Restore(state);
+        }
 
         double y = 72;
 
@@ -555,6 +592,28 @@ public class TicketPdfService : ITicketPdfService
 
         sY += 22;
 
+        if (isCancelled)
+        {
+            var greenRefundBrush = new XSolidBrush(XColor.FromArgb(22, 130, 72));
+            gfx.DrawString(
+                "REFUND AMOUNT",
+                fKicker,
+                greenRefundBrush,
+                sideX,
+                sY);
+
+            sY += 13;
+
+            gfx.DrawString(
+                $"{req.Currency} {refundAmount:0.00}",
+                fBold,
+                greenRefundBrush,
+                sideX,
+                sY);
+
+            sY += 22;
+        }
+
         gfx.DrawString(
             "GST INCLUDED",
             fKicker,
@@ -578,7 +637,7 @@ public class TicketPdfService : ITicketPdfService
             using var qrGenerator = new QRCodeGenerator();
 
             var qrData = qrGenerator.CreateQrCode(
-                req.BookingReference,
+                isCancelled ? $"{req.BookingReference}-CANCELLED" : req.BookingReference,
                 QRCodeGenerator.ECCLevel.Q);
 
             using var qrCode = new PngByteQRCode(qrData);
@@ -591,12 +650,23 @@ public class TicketPdfService : ITicketPdfService
 
             gfx.DrawImage(xImg, sideX, sY, qrSize, qrSize);
 
+            if (isCancelled)
+            {
+                var voidPen = new XPen(XColor.FromArgb(220, 38, 38), 2.0);
+                gfx.DrawRectangle(voidPen, sideX, sY, qrSize, qrSize);
+                var voidFont = new XFont("Arial", 11, XFontStyle.Bold);
+                var voidBrush = new XSolidBrush(XColor.FromArgb(220, 38, 38));
+                var voidBg = new XSolidBrush(XColor.FromArgb(235, 255, 255, 255));
+                gfx.DrawRectangle(voidBg, sideX + 5, sY + 34, qrSize - 10, 22);
+                gfx.DrawString("VOID", voidFont, voidBrush, new XRect(sideX, sY + 35, qrSize, 20), XStringFormats.Center);
+            }
+
             sY += qrSize + 6;
 
             gfx.DrawString(
-                "Show to conductor",
+                isCancelled ? "TICKET CANCELLED" : "Show to conductor",
                 fTiny,
-                grayBrush,
+                isCancelled ? new XSolidBrush(XColor.FromArgb(220, 38, 38)) : grayBrush,
                 new XRect(sideX, sY, sw, 12),
                 XStringFormats.TopCenter);
         }

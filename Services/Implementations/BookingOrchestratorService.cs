@@ -6,6 +6,7 @@ using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Models.Payments;
 using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
 
 namespace PickNBook.Api.Services.Implementations
@@ -742,13 +743,61 @@ namespace PickNBook.Api.Services.Implementations
                 // Coupon Consumption
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Bus");
 
-                await _notificationService.EnqueueAsync(
-                    eventType: "BusBookingSuccess",
-                    channel: "Email",
-                    recipient: reservation.PassengerEmail ?? payment.UserId,
-                    templateKey: "BUS_BOOKING_CONFIRMED",
-                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName, Amount = payment.FinalPayableAmount }
-                );
+                // Dispatch formatted e-ticket email with attached PDF ticket
+                if (!string.IsNullOrWhiteSpace(reservation.PassengerEmail))
+                {
+                    try
+                    {
+                        var ticketEmailService = _serviceProvider.GetRequiredService<ITicketEmailService>();
+                        var seatNumbers = string.Join(", ", dbPassengers.Select(p => p.SeatNumber).Where(s => !string.IsNullOrWhiteSpace(s)));
+                        if (string.IsNullOrWhiteSpace(seatNumbers)) seatNumbers = "N/A";
+
+                        var emailRequest = new SendBusTicketEmailRequest
+                        {
+                            ToEmail = reservation.PassengerEmail,
+                            PassengerName = reservation.PassengerName,
+                            BookingReference = reservation.BookingReference,
+                            Pnr = reservation.Pnr,
+                            OperatorName = bus.OperatorName,
+                            BusType = bus.BusType,
+                            Origin = srdvBusService.MapCityCodeToName(bus.FromCity),
+                            Destination = srdvBusService.MapCityCodeToName(bus.ToCity),
+                            DepartureTime = bus.DepartureTime,
+                            ArrivalTime = bus.ArrivalTime,
+                            IsOvernightArrival = bus.ArrivalTime.Date > bus.DepartureTime.Date,
+                            DurationMinutes = (int)(bus.ArrivalTime - bus.DepartureTime).TotalMinutes,
+                            BoardingPoint = !string.IsNullOrWhiteSpace(reservation.BoardingPointName) ? reservation.BoardingPointName : bus.BoardingPoint,
+                            BoardingPointTime = reservation.BoardingPointTime ?? bus.DepartureTime,
+                            ArrivalPoint = !string.IsNullOrWhiteSpace(reservation.DroppingPointName) ? reservation.DroppingPointName : bus.ToCity,
+                            ArrivalPointTime = reservation.DroppingPointTime ?? bus.ArrivalTime,
+                            Price = reservation.TotalPriceInr,
+                            BaseFare = reservation.BaseFareInr,
+                            Currency = "INR",
+                            NetFare = reservation.NetFareInr,
+                            AppliedPromotionCode = reservation.AppliedPromotionCode,
+                            AppliedPromotionType = reservation.AppliedPromotionType,
+                            DiscountSource = reservation.DiscountSource,
+                            DiscountAmount = reservation.DiscountAmountInr > 0 ? reservation.DiscountAmountInr : null,
+                            SeatNumber = seatNumbers,
+                            GstPercent = reservation.GstPercent,
+                            GstAmount = reservation.GstAmountInr,
+                            AutoDiscountAmount = reservation.AutoDiscountAmountInr,
+                            CouponDiscountAmount = reservation.CouponDiscountAmountInr,
+                            Passengers = dbPassengers.Select(p => new BusPassengerSeatDto
+                            {
+                                FullName = p.FullName,
+                                Gender = p.Gender,
+                                SeatNumber = p.SeatNumber ?? string.Empty
+                            }).ToList()
+                        };
+
+                        await ticketEmailService.SendBusTicketAsync(emailRequest);
+                    }
+                    catch (Exception mailEx)
+                    {
+                        _logger.LogError(mailEx, "Failed to dispatch bus ticket email for booking {BookingReference}", reservation.BookingReference);
+                    }
+                }
 
                 var boardingTime = reservation.BoardingPointTime ?? bus.DepartureTime;
                 string formattedTime = boardingTime.ToString("dd/MM/yyyy hh:mm tt");

@@ -508,7 +508,7 @@ public class TicketEmailService : ITicketEmailService
             ? string.Join(
                 "<br/>",
                 request.Passengers.Select((p, i) =>
-                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} â€” Seat <b>{p.SeatNumber}</b>"))
+                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} &mdash; Seat <b>{p.SeatNumber}</b>"))
             : $"Seats: {request.SeatNumber}";
 
         // =========================================
@@ -520,19 +520,19 @@ public class TicketEmailService : ITicketEmailService
         if (request.AutoDiscountAmount > 0)
         {
             discountSection += $@"
-            <p>
-                <b>Offer Discount:</b>
-                - â‚¹{request.AutoDiscountAmount:0.00}
-            </p>";
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">Offer Discount:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #16a34a; font-weight: 600;"">- &#8377;{request.AutoDiscountAmount:0.00}</td>
+            </tr>";
         }
 
         if (request.CouponDiscountAmount > 0)
         {
             discountSection += $@"
-            <p>
-                <b>Coupon Discount:</b>
-                - â‚¹{request.CouponDiscountAmount:0.00}
-            </p>";
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">Coupon Discount:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #16a34a; font-weight: 600;"">- &#8377;{request.CouponDiscountAmount:0.00}</td>
+            </tr>";
         }
 
         // BACKWARD COMPATIBILITY
@@ -540,10 +540,10 @@ public class TicketEmailService : ITicketEmailService
             request.DiscountAmount.GetValueOrDefault() > 0)
         {
             discountSection = $@"
-            <p>
-                <b>Discount:</b>
-                - â‚¹{request.DiscountAmount:0.00}
-            </p>";
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">Discount:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #16a34a; font-weight: 600;"">- &#8377;{request.DiscountAmount:0.00}</td>
+            </tr>";
         }
 
         // =========================================
@@ -552,56 +552,86 @@ public class TicketEmailService : ITicketEmailService
 
         var gstSection = request.GstAmount > 0 
             ? $@"
-        <p>
-            <b>GST:</b>
-            â‚¹{request.GstAmount:0.00}
-        </p>"
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">GST:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #1e293b;"">&#8377;{request.GstAmount:0.00}</td>
+            </tr>"
             : string.Empty;
 
+        var boardingTimeStr = ToIst(request.BoardingPointTime).ToString("ddd, dd MMM yyyy hh:mm tt");
+        var droppingTimeStr = ToIst(request.ArrivalPointTime).ToString("ddd, dd MMM yyyy hh:mm tt");
+
         var body = $@"
-        <p>Hi {request.PassengerName},</p>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset=""utf-8"">
+    <title>Your Bus Ticket - {request.BookingReference}</title>
+</head>
+<body style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 25px 15px; color: #1e293b;"">
+    <div style=""max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;"">
+        <div style=""background-color: #0f2459; color: #ffffff; padding: 24px 20px; text-align: center;"">
+            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;"">Pick&amp;book Bus Ticket Confirmation</h2>
+            <p style=""margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;"">Booking Reference: <b style=""color: #f8fafc;"">{request.BookingReference}</b></p>
+        </div>
+        <div style=""padding: 24px 20px;"">
+            <p style=""font-size: 16px; margin: 0 0 16px 0; color: #0f2459;"">Hi <b>{request.PassengerName}</b>,</p>
+            <p style=""font-size: 14px; margin: 0 0 20px 0; color: #475569; line-height: 1.5;"">Your bus booking is confirmed for <b>{request.Origin} &rarr; {request.Destination}</b>.</p>
+            
+            <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 13px;"">
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b; width: 40%;"">PNR / Ticket No</td>
+                    <td style=""padding: 10px 14px; font-weight: 700; color: #0f2459;"">{request.Pnr}</td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Operator</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;"">{request.OperatorName}</td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Bus Type</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;"">{request.BusType}</td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Boarding Point</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;""><b>{request.BoardingPoint}</b><br/><span style=""color: #64748b; font-size: 12px;"">{boardingTimeStr}</span></td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Dropping Point</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;""><b>{request.ArrivalPoint}</b><br/><span style=""color: #64748b; font-size: 12px;"">{droppingTimeStr}</span></td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Passenger(s)</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;"">{passengerLines}</td>
+                </tr>
+                <tr>
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Seat Number(s)</td>
+                    <td style=""padding: 10px 14px; font-weight: 700; color: #0f2459;"">{request.SeatNumber}</td>
+                </tr>
+            </table>
 
-        <p>
-            Your bus booking is confirmed for
-            <b>{request.Origin} â†’ {request.Destination}</b>.
-        </p>
+            <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px;"">
+                {discountSection}
+                {gstSection}
+                <tr style=""border-top: 1px solid #cbd5e1;"">
+                    <td style=""padding: 10px 12px; font-weight: 700; font-size: 15px; color: #0f2459;"">Total Fare</td>
+                    <td style=""padding: 10px 12px; text-align: right; font-weight: 700; font-size: 16px; color: #16a34a;"">&#8377;{request.Price:0.00}</td>
+                </tr>
+            </table>
 
-        <p>
-            <b>PNR / Ticket No:</b>
-            {request.Pnr}
-        </p>
+            <div style=""background-color: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 14px; border-radius: 4px; margin-bottom: 20px;"">
+                <p style=""margin: 0; font-size: 13px; color: #1e40af;"">
+                    <b>E-Ticket Attached:</b> Please find your official ticket PDF attached to this email. Have a safe journey!
+                </p>
+            </div>
 
-        <p>
-            <b>Boarding:</b>
-            {request.BoardingPoint} at {ToIst(request.BoardingPointTime):ddd, dd MMM yyyy HH:mm}
-        </p>
-        
-        <p>
-            <b>Dropping:</b>
-            {request.ArrivalPoint} at {ToIst(request.ArrivalPointTime):ddd, dd MMM yyyy HH:mm}
-        </p>
-
-        <p>
-            <b>Passengers:</b><br/>
-            {passengerLines}
-        </p>
-
-
-
-        {discountSection}
-        {gstSection}
-
-        <p>
-            <b>Total Fare:</b>
-            â‚¹{request.Price:0.00}
-        </p>
-
-        <p>
-            Please find your ticket PDF attached.
-            Have a safe journey!
-        </p>
-
-        <p>Team Pick&amp;book</p>";
+            <p style=""margin: 0; font-size: 13px; color: #64748b;"">Warm regards,<br/><b style=""color: #0f2459;"">Team Pick&amp;book</b></p>
+        </div>
+        <div style=""background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 12px; text-align: center; font-size: 11px; color: #94a3b8;"">
+            &copy; 2026 Pick&amp;book Travel Services. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>";
 
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
@@ -622,11 +652,11 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
 
         var passengerLines =
-            request.Passengers.Count > 0
+            request.Passengers?.Count > 0
             ? string.Join(
                 "<br/>",
                 request.Passengers.Select((p, i) =>
-                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} â€” Seat <b>{p.SeatNumber}</b>"))
+                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} &mdash; Seat <b>{p.SeatNumber}</b>"))
             : $"Seats: {request.SeatNumber}";
 
         // =========================================
@@ -638,19 +668,19 @@ public class TicketEmailService : ITicketEmailService
         if (request.AutoDiscountAmount > 0)
         {
             discountSection += $@"
-            <p>
-                <b>Offer Discount:</b>
-                - â‚¹{request.AutoDiscountAmount:0.00}
-            </p>";
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">Offer Discount:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #16a34a; font-weight: 600;"">- &#8377;{request.AutoDiscountAmount:0.00}</td>
+            </tr>";
         }
 
         if (request.CouponDiscountAmount > 0)
         {
             discountSection += $@"
-            <p>
-                <b>Coupon Discount:</b>
-                - â‚¹{request.CouponDiscountAmount:0.00}
-            </p>";
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">Coupon Discount:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #16a34a; font-weight: 600;"">- &#8377;{request.CouponDiscountAmount:0.00}</td>
+            </tr>";
         }
 
         // BACKWARD COMPATIBILITY
@@ -658,82 +688,135 @@ public class TicketEmailService : ITicketEmailService
             request.DiscountAmount.GetValueOrDefault() > 0)
         {
             discountSection = $@"
-            <p>
-                <b>Discount:</b>
-                - â‚¹{request.DiscountAmount:0.00}
-            </p>";
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">Discount:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #16a34a; font-weight: 600;"">- &#8377;{request.DiscountAmount:0.00}</td>
+            </tr>";
         }
+
+        var gstSection = request.GstAmount > 0 
+            ? $@"
+            <tr>
+                <td style=""padding: 8px 12px; color: #475569;"">GST:</td>
+                <td style=""padding: 8px 12px; text-align: right; color: #1e293b;"">&#8377;{request.GstAmount:0.00}</td>
+            </tr>"
+            : string.Empty;
+
+        var cancellationCharge = Math.Max(0m, request.Price - refundAmount);
+        var boardingTimeStr = request.BoardingPointTime != default 
+            ? ToIst(request.BoardingPointTime).ToString("ddd, dd MMM yyyy hh:mm tt")
+            : ToIst(request.DepartureTime).ToString("ddd, dd MMM yyyy hh:mm tt");
+        var droppingTimeStr = request.ArrivalPointTime != default
+            ? ToIst(request.ArrivalPointTime).ToString("ddd, dd MMM yyyy hh:mm tt")
+            : ToIst(request.ArrivalTime).ToString("ddd, dd MMM yyyy hh:mm tt");
 
         // =========================================
         // EMAIL BODY
         // =========================================
 
         var body = $@"
-        <p>Hi {request.PassengerName},</p>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset=""utf-8"">
+    <title>Bus Ticket Cancelled - {request.BookingReference}</title>
+</head>
+<body style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 25px 15px; color: #1e293b;"">
+    <div style=""max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #fee2e2;"">
+        <div style=""background-color: #991b1b; color: #ffffff; padding: 24px 20px; text-align: center;"">
+            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;"">Pick&amp;book Bus Ticket Cancellation</h2>
+            <p style=""margin: 6px 0 0 0; font-size: 13px; color: #fecaca;"">Booking Reference: <b style=""color: #ffffff;"">{request.BookingReference}</b></p>
+        </div>
+        <div style=""padding: 24px 20px;"">
+            <p style=""font-size: 16px; margin: 0 0 16px 0; color: #991b1b;"">Hi <b>{request.PassengerName}</b>,</p>
+            
+            <div style=""background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 14px 16px; border-radius: 4px; margin-bottom: 20px;"">
+                <h3 style=""margin: 0 0 6px 0; color: #991b1b; font-size: 15px; font-weight: 700;"">Booking Successfully Cancelled</h3>
+                <p style=""margin: 0; font-size: 13px; color: #7f1d1d; line-height: 1.5;"">
+                    Your bus booking for <b>{request.Origin} &rarr; {request.Destination}</b> has been cancelled.
+                </p>
+            </div>
+            
+            <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 13px;"">
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b; width: 40%;"">PNR / Ticket No</td>
+                    <td style=""padding: 10px 14px; font-weight: 700; color: #0f2459;"">{request.Pnr}</td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Operator</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;"">{request.OperatorName}</td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Bus Type</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;"">{request.BusType}</td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Boarding Point</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;""><b>{request.BoardingPoint}</b><br/><span style=""color: #64748b; font-size: 12px;"">{boardingTimeStr}</span></td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Dropping Point</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;""><b>{request.ArrivalPoint}</b><br/><span style=""color: #64748b; font-size: 12px;"">{droppingTimeStr}</span></td>
+                </tr>
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Cancelled Passenger(s)</td>
+                    <td style=""padding: 10px 14px; color: #1e293b;"">{passengerLines}</td>
+                </tr>
+                <tr>
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Seat Number(s)</td>
+                    <td style=""padding: 10px 14px; font-weight: 700; color: #0f2459;"">{request.SeatNumber}</td>
+                </tr>
+            </table>
 
-        <p>
-            Your bus ticket for
-            <b>{request.Origin} â†’ {request.Destination}</b>
-            has been
-            <b style='color:red;'>cancelled</b>.
-        </p>
+            <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px;"">
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 8px 12px; color: #475569;"">Original Paid Fare:</td>
+                    <td style=""padding: 8px 12px; text-align: right; color: #1e293b; font-weight: 600;"">&#8377;{request.Price:0.00}</td>
+                </tr>
+                {discountSection}
+                {gstSection}
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 8px 12px; color: #dc2626;"">Cancellation Charges:</td>
+                    <td style=""padding: 8px 12px; text-align: right; color: #dc2626; font-weight: 600;"">&#8377;{cancellationCharge:0.00}</td>
+                </tr>
+                <tr style=""border-top: 2px solid #cbd5e1; background-color: #f0fdf4;"">
+                    <td style=""padding: 12px 12px; font-weight: 700; font-size: 15px; color: #166534;"">Total Refund Amount:</td>
+                    <td style=""padding: 12px 12px; text-align: right; font-weight: 700; font-size: 17px; color: #16a34a;"">&#8377;{refundAmount:0.00}</td>
+                </tr>
+            </table>
 
-        <p>
-            <b>PNR / Ticket No:</b>
-            {request.Pnr}
-        </p>
+            <div style=""background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 14px 16px; margin-bottom: 20px;"">
+                <p style=""margin: 0 0 4px 0; font-weight: 700; color: #166534; font-size: 13px;"">Refund Crediting Timeline</p>
+                <p style=""margin: 0; font-size: 13px; color: #15803d; line-height: 1.5;"">
+                    Your refund of <b>&#8377;{refundAmount:0.00}</b> will be credited back to your original payment method (or wallet) within <b>5&ndash;7 working days</b>.
+                </p>
+            </div>
 
-        <p>
-            <b>Passengers:</b><br/>
-            {passengerLines}
-        </p>
+            <div style=""background-color: #eff6ff; border-left: 4px solid #2563eb; padding: 12px 14px; border-radius: 4px; margin-bottom: 20px;"">
+                <p style=""margin: 0; font-size: 13px; color: #1e40af;"">
+                    <b>Voided Ticket Attached:</b> A copy of your cancelled e-ticket with cancellation status is attached for your records.
+                </p>
+            </div>
 
-        <p>
-            <b>Original Fare:</b>
-            â‚¹{request.NetFare:0.00}
-        </p>
+            <p style=""font-size: 12px; color: #64748b; line-height: 1.5; margin-bottom: 20px;"">
+                If you did not initiate this cancellation or have any inquiries, please contact our support team immediately.
+            </p>
 
-        {discountSection}
-
-        <p>
-            <b>GST:</b>
-            â‚¹{request.GstAmount:0.00}
-        </p>
-
-
-
-        <p>
-            <b>Total Fare:</b>
-            â‚¹{request.Price:0.00}
-        </p>
-
-        <p>
-            <b>Refund Amount:</b>
-            â‚¹{refundAmount:0.00}
-        </p>
-
-        <p>
-            The refund will be processed to your
-            original payment method within
-            5â€“7 working days.
-        </p>
-
-        <p>
-            If you did not initiate this cancellation,
-            please contact support immediately.
-        </p>
-
-        <p>
-            Regards,<br/>
-            Team Pick&amp;book
-        </p>";
+            <p style=""margin: 0; font-size: 13px; color: #64748b;"">Warm regards,<br/><b style=""color: #0f2459;"">Team Pick&amp;book</b></p>
+        </div>
+        <div style=""background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 12px; text-align: center; font-size: 11px; color: #94a3b8;"">
+            &copy; 2026 Pick&amp;book Travel Services. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>";
 
         // =========================================
-        // PDF
+        // PDF (Voided / Cancelled)
         // =========================================
 
         var pdfBytes =
-            _ticketPdfService.GenerateBusTicketPdf(request);
+            _ticketPdfService.GenerateBusTicketPdf(request, isCancelled: true, refundAmount: refundAmount);
 
         var attachment = new EmailAttachment
         {
@@ -764,11 +847,11 @@ public class TicketEmailService : ITicketEmailService
         {
             passengerLines = "<p><b>Cancelled Passengers:</b><br/>" +
                 string.Join("<br/>", cancelledPaxs.Select((p, i) =>
-                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} â€” Seat <b>{p.SeatNumber ?? "N/A"}</b>")) + "</p>";
+                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} &mdash; Seat <b>{p.SeatNumber ?? "N/A"}</b>")) + "</p>";
         }
         else
         {
-            passengerLines = $"<p><b>Passenger:</b> {request.PassengerName} â€” Seat <b>{request.SeatNumber ?? "N/A"}</b></p>";
+            passengerLines = $"<p><b>Passenger:</b> {request.PassengerName} &mdash; Seat <b>{request.SeatNumber ?? "N/A"}</b></p>";
         }
 
         var segmentLines = string.Empty;
@@ -800,18 +883,18 @@ public class TicketEmailService : ITicketEmailService
 
         <p>
             <b>Original Fare:</b>
-            â‚¹{request.Price:0.00}
+            &#8377;{request.Price:0.00}
         </p>
 
         <p>
             <b>Refund Amount:</b>
-            â‚¹{refundAmount:0.00}
+            &#8377;{refundAmount:0.00}
         </p>
 
         <p>
             The refund will be processed to your
             original payment method within
-            5â€“7 working days.
+            5&ndash;7 working days.
         </p>
 
         <p>
@@ -830,14 +913,14 @@ public class TicketEmailService : ITicketEmailService
             body);
     }
 
-    private static DateTime ToIst(DateTime utc)
+    private static DateTime ToIst(DateTime dt)
     {
-        return DateTime.SpecifyKind(
-            utc,
-            DateTimeKind.Utc
-        ).AddHours(5.5);
+        if (dt.Kind == DateTimeKind.Local)
+        {
+            return dt;
+        }
+        return DateTime.SpecifyKind(dt, DateTimeKind.Utc).AddHours(5.5);
     }
-
     private static string GetCityName(string airportCode)
     {
         if (string.IsNullOrWhiteSpace(airportCode)) return string.Empty;

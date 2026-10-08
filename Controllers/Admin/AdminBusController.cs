@@ -20,7 +20,8 @@ namespace PickNBook.Api.Controllers
         AppDbContext dbContext, 
         PickNBook.Api.Services.ISrdvBusService srdvBusService, 
         IMemoryCache cache,
-        PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService) : AdminApiController
+        PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
+        ITicketEmailService ticketEmailService) : AdminApiController
     {
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static readonly string[] AllowedDiscountTypes = ["Percentage", "Fixed"];
@@ -194,9 +195,12 @@ namespace PickNBook.Api.Controllers
                 catch { }
             }
 
+            List<BusReservationPassenger> activePassengers = [];
+            decimal thisRefund = 0m;
+
             try
             {
-                var activePassengers = passengers.Where(p => !p.IsCancelled).ToList();
+                activePassengers = passengers.Where(p => !p.IsCancelled).ToList();
                 int initialActiveCount = activePassengers.Count;
 
                 if (request.PassengerIdsToCancel != null && request.PassengerIdsToCancel.Any())
@@ -269,7 +273,7 @@ namespace PickNBook.Api.Controllers
 
                 // Calculate refund proportionally
                 decimal totalFareOfCancelled = (reservation.CustomerFareInr / Math.Max(1, passengers.Count)) * activePassengers.Count;
-                decimal thisRefund = Math.Max(0m, totalFareOfCancelled - request.CancellationCharges);
+                thisRefund = Math.Max(0m, totalFareOfCancelled - request.CancellationCharges);
                 
                 reservation.CancellationChargeInr = (reservation.CancellationChargeInr ?? 0m) + request.CancellationCharges;
                 reservation.RefundAmountInr = (reservation.RefundAmountInr ?? 0m) + thisRefund;
@@ -326,6 +330,65 @@ namespace PickNBook.Api.Controllers
             }
 
             await dbContext.SaveChangesAsync();
+
+            if (!string.IsNullOrWhiteSpace(reservation.PassengerEmail))
+            {
+                try
+                {
+                    var newlyCancelledSeatNumbers = string.Join(", ", activePassengers
+                        .Select(x => x.SeatNumber)
+                        .Where(x => !string.IsNullOrWhiteSpace(x)));
+
+                    await ticketEmailService.SendBusCancellationAsync(
+                        new SendBusTicketEmailRequest
+                        {
+                            ToEmail = reservation.PassengerEmail,
+                            PassengerName = reservation.PassengerName,
+                            BookingReference = reservation.BookingReference,
+                            Pnr = reservation.Pnr,
+                            OperatorName = reservation.BusBooking.OperatorName,
+                            BusType = reservation.BusBooking.BusType,
+                            Origin = srdvBusService.MapCityCodeToName(reservation.BusBooking.FromCity),
+                            Destination = srdvBusService.MapCityCodeToName(reservation.BusBooking.ToCity),
+                            DepartureTime = reservation.BusBooking.DepartureTime,
+                            ArrivalTime = reservation.BusBooking.ArrivalTime,
+                            BoardingPointTime = reservation.BoardingPointTime ?? reservation.BusBooking.DepartureTime,
+                            ArrivalPointTime = reservation.BusBooking.ArrivalTime,
+                            IsOvernightArrival = reservation.BusBooking.ArrivalTime.Date > reservation.BusBooking.DepartureTime.Date,
+                            DurationMinutes = (int)(reservation.BusBooking.ArrivalTime - reservation.BusBooking.DepartureTime).TotalMinutes,
+                            BoardingPoint = reservation.BusBooking.BoardingPoint,
+                            ArrivalPoint = !string.IsNullOrWhiteSpace(reservation.BusBooking.DroppingPoint) ? reservation.BusBooking.DroppingPoint : reservation.BusBooking.ToCity,
+
+                            // Fare breakdown
+                            Price = reservation.TotalPriceInr,
+                            BaseFare = reservation.BaseFareInr,
+                            Currency = "INR",
+                            NetFare = reservation.NetFareInr,
+                            GstPercent = reservation.GstPercent,
+                            GstAmount = reservation.GstAmountInr,
+                            AppliedPromotionCode = reservation.AppliedPromotionCode,
+                            AppliedPromotionType = reservation.AppliedPromotionType,
+                            DiscountSource = reservation.DiscountSource,
+                            DiscountAmount = reservation.DiscountAmountInr > 0 ? reservation.DiscountAmountInr : null,
+                            SeatNumber = !string.IsNullOrWhiteSpace(newlyCancelledSeatNumbers) ? newlyCancelledSeatNumbers : "N/A",
+                            AutoDiscountAmount = reservation.AutoDiscountAmountInr,
+                            CouponDiscountAmount = reservation.CouponDiscountAmountInr,
+
+                            Passengers = activePassengers.Select(p => new BusPassengerSeatDto
+                            {
+                                FullName = p.FullName,
+                                Gender = p.Gender,
+                                SeatNumber = p.SeatNumber ?? string.Empty
+                            }).ToList()
+                        },
+                        thisRefund
+                    );
+                }
+                catch
+                {
+                    // Best-effort dispatch
+                }
+            }
 
             return Ok(new
             {
