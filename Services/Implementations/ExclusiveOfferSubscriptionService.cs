@@ -242,7 +242,7 @@ namespace PickNBook.Api.Services
 
             // Header banner
             sb.AppendLine("<tr><td style='background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%);padding:28px 32px;text-align:center;'>");
-            sb.AppendLine("<h1 style='margin:0;color:#ffffff;font-size:26px;font-weight:800;letter-spacing:-0.5px;'>Pick<span style='color:#ef4444;'>&amp;</span>book</h1>");
+            sb.AppendLine("<div style='background:#ffffff;display:inline-block;padding:7px 22px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.22);margin-bottom:10px;'><img src='https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png' alt='Pick&amp;book' style='height:30px;width:auto;display:block;border:0;' /></div>");
             sb.AppendLine("<p style='margin:6px 0 0;color:#cbd5e1;font-size:14px;letter-spacing:0.3px;'>Exclusive Travel Offers &amp; Secret Deals</p>");
             sb.AppendLine("</td></tr>");
 

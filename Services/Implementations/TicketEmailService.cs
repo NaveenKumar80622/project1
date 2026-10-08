@@ -445,10 +445,12 @@ public class TicketEmailService : ITicketEmailService
         var body = $@"
 <div style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6fa; padding: 30px 20px; max-width: 850px; margin: 0 auto; border-radius: 12px;"">
     
-    <div style=""text-align: center; margin-bottom: 25px;"">
-        <h2 style=""color: #0f2459; margin: 0 0 5px 0; font-size: 24px;"">Your Boarding Pass is Ready!</h2>
-        <p style=""color: #0f2459; margin: 0 0 10px 0; font-size: 16px; font-weight: bold;"">Congratulations on your booking! Your flight reservation is confirmed.</p>
-        <p style=""color: #5a6578; margin: 0; font-size: 14px;"">Please find your flight booking confirmation and boarding passes attached below.</p>
+    <div style=""background: linear-gradient(135deg, #0f2459 0%, #1e3a8a 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"">
+        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
+            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
+        </div>
+        <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Flight Booking Confirmed!</h2>
+        <p style=""margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;"">Booking Reference: <b style=""color: #f8fafc;"">{request.BookingReference}</b></p>
     </div>
 
     {boardingPassesHtml}
@@ -570,8 +572,11 @@ public class TicketEmailService : ITicketEmailService
 </head>
 <body style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 25px 15px; color: #1e293b;"">
     <div style=""max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;"">
-        <div style=""background-color: #0f2459; color: #ffffff; padding: 24px 20px; text-align: center;"">
-            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;"">Pick&amp;book Bus Ticket Confirmation</h2>
+        <div style=""background: linear-gradient(135deg, #0f2459 0%, #1e3a8a 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px 12px 0 0;"">
+            <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
+                <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
+            </div>
+            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Pick&amp;book Bus Ticket Confirmation</h2>
             <p style=""margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;"">Booking Reference: <b style=""color: #f8fafc;"">{request.BookingReference}</b></p>
         </div>
         <div style=""padding: 24px 20px;"">
@@ -723,8 +728,11 @@ public class TicketEmailService : ITicketEmailService
 </head>
 <body style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 25px 15px; color: #1e293b;"">
     <div style=""max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #fee2e2;"">
-        <div style=""background-color: #991b1b; color: #ffffff; padding: 24px 20px; text-align: center;"">
-            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;"">Pick&amp;book Bus Ticket Cancellation</h2>
+        <div style=""background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px 12px 0 0;"">
+            <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
+                <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
+            </div>
+            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Pick&amp;book Bus Ticket Cancellation</h2>
             <p style=""margin: 6px 0 0 0; font-size: 13px; color: #fecaca;"">Booking Reference: <b style=""color: #ffffff;"">{request.BookingReference}</b></p>
         </div>
         <div style=""padding: 24px 20px;"">
@@ -865,47 +873,64 @@ public class TicketEmailService : ITicketEmailService
         var cancellationText = request.IsPartialCancellation ? "partially <b style='color:red;'>cancelled</b> (see details below)" : "<b style='color:red;'>cancelled</b>";
 
         var body = $@"
-        <p>Hi {request.PassengerName},</p>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset=""utf-8"">
+    <title>Flight Booking Cancelled - {request.BookingReference}</title>
+</head>
+<body style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 25px 15px; color: #1e293b;"">
+    <div style=""max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #fee2e2;"">
+        <div style=""background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px 12px 0 0;"">
+            <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
+                <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
+            </div>
+            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Pick&amp;book Flight Cancellation</h2>
+            <p style=""margin: 6px 0 0 0; font-size: 13px; color: #fecaca;"">Booking Reference: <b style=""color: #ffffff;"">{request.BookingReference}</b></p>
+        </div>
+        <div style=""padding: 24px 20px;"">
+            <p style=""font-size: 16px; margin: 0 0 16px 0; color: #991b1b;"">Hi <b>{request.PassengerName}</b>,</p>
+            
+            <div style=""background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 14px 16px; border-radius: 4px; margin-bottom: 20px;"">
+                <h3 style=""margin: 0 0 6px 0; color: #991b1b; font-size: 15px; font-weight: 700;"">Booking Successfully Cancelled</h3>
+                <p style=""margin: 0; font-size: 13px; color: #7f1d1d; line-height: 1.5;"">
+                    Your flight ticket for <b>{request.Origin} &rarr; {request.Destination}</b> has been {cancellationText}.
+                </p>
+            </div>
 
-        <p>
-            Your flight ticket for
-            <b>{request.Origin} to {request.Destination}</b>
-            has been {cancellationText}.
-        </p>
+            {segmentLines}
+            {passengerLines}
 
-        <p>
-            <b>Booking Reference:</b>
-            {request.BookingReference}
-        </p>
+            <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 13px;"">
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b; width: 40%;"">Original Fare</td>
+                    <td style=""padding: 10px 14px; font-weight: 700; color: #0f2459;"">&#8377;{request.Price:0.00}</td>
+                </tr>
+                <tr>
+                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Refund Amount</td>
+                    <td style=""padding: 10px 14px; font-weight: 700; color: #16a34a; font-size: 15px;"">&#8377;{refundAmount:0.00}</td>
+                </tr>
+            </table>
 
-        {segmentLines}
-        {passengerLines}
+            <div style=""background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; margin-bottom: 20px; font-size: 13px; color: #1e40af; line-height: 1.5;"">
+                &#9432; The refund will be processed to your original payment method within <b>5&ndash;7 working days</b>.
+            </div>
 
-        <p>
-            <b>Original Fare:</b>
-            &#8377;{request.Price:0.00}
-        </p>
+            <p style=""font-size: 12px; color: #64748b; margin: 0 0 16px 0;"">
+                If you did not initiate this cancellation, please contact support immediately.
+            </p>
 
-        <p>
-            <b>Refund Amount:</b>
-            &#8377;{refundAmount:0.00}
-        </p>
-
-        <p>
-            The refund will be processed to your
-            original payment method within
-            5&ndash;7 working days.
-        </p>
-
-        <p>
-            If you did not initiate this cancellation,
-            please contact support immediately.
-        </p>
-
-        <p>
-            Regards,<br/>
-            Team Pick&amp;book
-        </p>";
+            <p style=""margin: 0; font-size: 13px; color: #475569;"">
+                Regards,<br/>
+                <b>Team Pick&amp;book</b>
+            </p>
+        </div>
+        <div style=""background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 20px; text-align: center; font-size: 11px; color: #94a3b8;"">
+            &copy; 2026 Pick&amp;book Travel Services. All rights reserved.
+        </div>
+    </div>
+</body>
+</html>";
 
         await _emailService.SendEmailAsync(
             request.ToEmail,
@@ -965,9 +990,12 @@ public class TicketEmailService : ITicketEmailService
 
         var body = $@"
 <div style=""font-family: Arial, sans-serif; background-color: #f4f6fa; padding: 30px 20px; max-width: 600px; margin: 0 auto; border-radius: 12px;"">
-    <div style=""text-align: center; margin-bottom: 25px;"">
-        <h2 style=""color: #0f2459; margin: 0 0 5px 0;"">Hotel Booking Confirmed!</h2>
-        <p style=""color: #5a6578; margin: 0; font-size: 14px;"">Your hotel is booked. Please find your ticket and details below.</p>
+    <div style=""background: linear-gradient(135deg, #0f2459 0%, #1e3a8a 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"">
+        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
+            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
+        </div>
+        <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Hotel Booking Confirmed!</h2>
+        <p style=""margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;"">Booking Reference: <b style=""color: #f8fafc;"">{reservation.BookingReference}</b></p>
     </div>
 
     <div style=""background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(15, 36, 89, 0.08);"">
@@ -1106,9 +1134,12 @@ public class TicketEmailService : ITicketEmailService
 
         var body = $@"
 <div style=""font-family: Arial, sans-serif; background-color: #f4f6fa; padding: 30px 20px; max-width: 600px; margin: 0 auto; border-radius: 12px;"">
-    <div style=""text-align: center; margin-bottom: 25px;"">
-        <h2 style=""color: #d9251c; margin: 0 0 5px 0;"">Hotel Booking Cancelled</h2>
-        <p style=""color: #5a6578; margin: 0; font-size: 14px;"">Your hotel booking has been cancelled. Please find details below.</p>
+    <div style=""background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"">
+        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
+            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
+        </div>
+        <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Hotel Booking Cancelled</h2>
+        <p style=""margin: 6px 0 0 0; font-size: 13px; color: #fecaca;"">Booking Reference: <b style=""color: #ffffff;"">{reservation.BookingReference}</b></p>
     </div>
 
     <div style=""background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(15, 36, 89, 0.08);"">

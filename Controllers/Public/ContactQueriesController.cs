@@ -117,8 +117,12 @@ namespace PickNBook.Api.Controllers
                 var encodedReply = System.Net.WebUtility.HtmlEncode(query.ReplyMessage);
                 
                 var body = $@"<div style=""font-family: Arial, sans-serif; line-height: 1.5; color: #333;"">
-    <h1 style=""color: #0056b3;"">Pick&amp;book</h1>
-    <p style=""font-weight: bold; color: #555;"">SUPPORT &amp; RESOLUTIONS</p>
+    <div style=""background: linear-gradient(135deg, #0f2459 0%, #1e3a8a 100%); padding: 24px 20px; border-radius: 8px; text-align: center; margin-bottom: 24px;"">
+        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 8px;"">
+            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 30px; width: auto; display: block; border: 0;"" />
+        </div>
+        <p style=""margin: 0; font-size: 13px; color: #94a3b8; font-weight: 700; letter-spacing: 0.5px;"">SUPPORT &amp; RESOLUTIONS</p>
+    </div>
 
     <p>Hello {encodedName},</p>
 

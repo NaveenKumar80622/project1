@@ -696,8 +696,10 @@ namespace PickNBook.Api.Controllers
 <body>
     <div class='container'>
         <div class='header'>
-            <h1>Pick&amp;book</h1>
-            <p>Account Security Notification</p>
+            <div style='background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;'>
+                <img src='https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png' alt='Pick&amp;book' style='height: 32px; width: auto; display: block; border: 0;' />
+            </div>
+            <p style='margin: 0; font-size: 15px; font-weight: 600;'>Account Security Notification</p>
         </div>
         <div class='content'>
             <div class='greeting'>Hello {encodedName},</div>
