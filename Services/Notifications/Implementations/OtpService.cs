@@ -28,8 +28,8 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             string challengeId = Guid.NewGuid().ToString("N");
             string hash = HashOtp(otpCode);
 
-            // User OTP expiry: 2 minutes for user auth flows (Login, Registration, PasswordReset); 5 mins for AdminLogin
-            int expiryMinutes = purpose == "AdminLogin" ? 5 : 2;
+            // User OTP expiry: 2 minutes for user auth flows (Login, Registration, PasswordReset); 5 mins for AdminLogin/AdminPasswordReset
+            int expiryMinutes = (purpose == "AdminLogin" || purpose == "AdminPasswordReset") ? 5 : 2;
 
             var otpRecord = new PickNBook.Api.Models.OTP
             {
@@ -53,47 +53,41 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             _dbContext.OTPs.Add(otpRecord);
             await _dbContext.SaveChangesAsync();
 
-            object payload;
-            if (purpose == "Registration")
+            // Resolve recipient name for personalization
+            string displayName = purpose.StartsWith("Admin", StringComparison.OrdinalIgnoreCase) ? "Administrator" : "Customer";
+            if (userId.HasValue)
             {
-                payload = new
+                var user = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == userId.Value);
+                if (user != null)
                 {
-                    OtpCode = otpCode,
-                    ExpiryMinutes = expiryMinutes,
-                    Var1 = otpCode, // DLT ${var1}: OTP code
-                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (2 minutes)
-                };
+                    var name = $"{user.FirstName} {user.LastName}".Trim();
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        displayName = name;
+                    }
+                }
             }
-            else if (purpose == "Login" && channel == "SMS")
+            else if (!string.IsNullOrWhiteSpace(recipient))
             {
-                payload = new
+                var user = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Email == recipient || u.PhoneNumber == recipient);
+                if (user != null)
                 {
-                    OtpCode = otpCode, // kept for backward compat / email channel
-                    ExpiryMinutes = expiryMinutes,
-                    Var1 = otpCode, // DLT ${var1}: OTP code
-                    Var2 = expiryMinutes // DLT ${var2}: validity in minutes (2 minutes)
-                };
+                    var name = $"{user.FirstName} {user.LastName}".Trim();
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        displayName = name;
+                    }
+                }
             }
-            else if (purpose == "PasswordReset" || purpose == "B2BPasswordReset")
+
+            object payload = new
             {
-                payload = new
-                {
-                    OtpCode = otpCode,
-                    ExpiryMinutes = expiryMinutes,
-                    Var1 = otpCode,
-                    Var2 = expiryMinutes
-                };
-            }
-            else
-            {
-                payload = new 
-                { 
-                    OtpCode = otpCode,
-                    ExpiryMinutes = expiryMinutes,
-                    Var1 = otpCode,
-                    Var2 = expiryMinutes
-                };
-            }
+                OtpCode = otpCode,
+                ExpiryMinutes = expiryMinutes,
+                Name = displayName,
+                Var1 = otpCode, // DLT ${var1}: OTP code
+                Var2 = expiryMinutes // DLT ${var2}: validity in minutes
+            };
 
             // Determine template based on purpose
             string templateKey = purpose switch
@@ -103,6 +97,7 @@ namespace PickNBook.Api.Services.Notifications.Implementations
                 "PasswordReset" => "PASSWORD_RESET_OTP",
                 "B2BPasswordReset" => "PASSWORD_RESET_OTP",
                 "AdminLogin" => "ADMIN_OTP",
+                "AdminPasswordReset" => "ADMIN_PASSWORD_RESET_OTP",
                 _ => "GENERIC_OTP"
             };
 

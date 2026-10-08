@@ -50,19 +50,14 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 
 ### 1.3 Password Reset OTP (User & B2B)
 **TemplateKey**: `PASSWORD_RESET_OTP`
-**Variables**: `{OtpCode}`, `{ExpiryMinutes}` (or `${var1}`, `${var2}`)
+**Variables**: `{Name}`, `{OtpCode}`, `{ExpiryMinutes}` (or `${var1}`, `${var2}`)
 **Header / SenderId**: `PICNBK`
 **DLT Content ID**: `1777178972177543618`
 **Provider Template**: `NewPassword Reset` (ID: `1562930`)
 
 **Email Template**
-*Subject*: PickNBook Password Reset Request
-*Body*:
-```html
-<h3>Password Reset</h3>
-<p>You requested to reset your password. Your OTP is: <strong>{OtpCode}</strong></p>
-<p>If you did not request this, ignore this email.</p>
-```
+*Subject*: `PickNBook: Password Reset Verification Code`
+*Body*: Branded responsive HTML template with greeting `Hello {Name},`, highlight OTP box `{OtpCode}`, expiry indicator `{ExpiryMinutes} minutes`, and security guidelines.
 
 **SMS Template**
 *Body*: `Your Pick&Book password reset OTP is {OtpCode}. It is valid for {ExpiryMinutes} minutes. Do not share this OTP.`
@@ -70,21 +65,24 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 
 ---
 
-### 1.4 Admin OTP (Login/Reset)
-**TemplateKey**: `ADMIN_OTP`
-**Variables**: `{OtpCode}`
+### 1.4 Admin Password Reset OTP
+**TemplateKey**: `ADMIN_PASSWORD_RESET_OTP`
+**Variables**: `{Name}`, `{OtpCode}`, `{ExpiryMinutes}`
 
 **Email Template**
-*Subject*: PickNBook Admin Authorization
-*Body*:
-```html
-<h3>Admin Verification</h3>
-<p>Your admin authorization code is: <h2 style='color:#2d89ef'>{OtpCode}</h2></p>
-<p>This OTP expires in 5 minutes.</p>
-```
+*Subject*: `PickNBook Admin Portal: Password Reset Code`
+*Body*: High-security admin portal HTML template with greeting `Hello {Name},`, `Administrator Authentication` badge, security code card `{OtpCode}`, and critical security alert.
 
-**SMS/WhatsApp Template**
-*Body*: `PickNBook Admin OTP: {OtpCode}. Valid for 5 mins.`
+---
+
+### 1.5 Password Reset Confirmation Notices
+**TemplateKeys**: `PASSWORD_RESET_SUCCESS` (User), `ADMIN_PASSWORD_RESET_SUCCESS` (Admin)
+**Variables**: `{Name}`, `{Timestamp}`
+
+**Email Templates**
+*User Subject*: `Security Alert: Your PickNBook Password Was Changed`
+*Admin Subject*: `CRITICAL: PickNBook Administrator Password Changed`
+*Body*: Timestamped security audit notification dispatched upon password update.
 
 ---
 

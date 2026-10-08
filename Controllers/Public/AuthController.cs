@@ -23,6 +23,7 @@ namespace PickNBook.Api.Controllers
         private readonly IEmailService _emailService;
         private readonly ISmsService _smsService;
         private readonly PickNBook.Api.Services.Notifications.Interfaces.IOtpService _otpService;
+        private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
         private readonly PasswordHasher<User> _passwordHasher;
         private readonly ILogger<AuthController>? _logger;
         private readonly int _adminOtpExpiryMinutes;
@@ -36,6 +37,7 @@ namespace PickNBook.Api.Controllers
             IEmailService emailService,
             ISmsService smsService,
             PickNBook.Api.Services.Notifications.Interfaces.IOtpService otpService,
+            PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
             IConfiguration configuration,
             ILogger<AuthController>? logger = null)
         {
@@ -44,6 +46,7 @@ namespace PickNBook.Api.Controllers
             _emailService = emailService;
             _smsService = smsService;
             _otpService = otpService;
+            _notificationService = notificationService;
             _passwordHasher = new PasswordHasher<User>();
             _logger = logger;
 
@@ -1171,6 +1174,19 @@ namespace PickNBook.Api.Controllers
                 .ExecuteUpdateAsync(setters => setters
                     .SetProperty(o => o.IsUsed, true));
 
+            var adminName = string.IsNullOrWhiteSpace(user.FirstName) ? "Administrator" : $"{user.FirstName} {user.LastName}".Trim();
+            var timestampStr = DateTime.UtcNow.ToString("dd MMMM yyyy, hh:mm tt 'UTC'");
+            _ = _notificationService.SendImmediateAsync(
+                eventType: "AdminPasswordResetSuccess",
+                channel: "Email",
+                recipient: user.Email,
+                templateKey: "ADMIN_PASSWORD_RESET_SUCCESS",
+                payload: new
+                {
+                    Name = adminName,
+                    Timestamp = timestampStr
+                });
+
             return Ok(new { success = true, message = "Admin password reset successful. You may now log in with your new password." });
         }
 
@@ -1444,6 +1460,22 @@ namespace PickNBook.Api.Controllers
                 .ExecuteUpdateAsync(setters => setters.SetProperty(x => x.IsUsed, true));
 
             await _context.SaveChangesAsync();
+
+            if (!string.IsNullOrWhiteSpace(user.Email))
+            {
+                var customerName = string.IsNullOrWhiteSpace(user.FirstName) ? "Valued Customer" : $"{user.FirstName} {user.LastName}".Trim();
+                var timestampStr = DateTime.UtcNow.ToString("dd MMMM yyyy, hh:mm tt 'UTC'");
+                _ = _notificationService.SendImmediateAsync(
+                    eventType: "PasswordResetSuccess",
+                    channel: "Email",
+                    recipient: user.Email,
+                    templateKey: "PASSWORD_RESET_SUCCESS",
+                    payload: new
+                    {
+                        Name = customerName,
+                        Timestamp = timestampStr
+                    });
+            }
 
             return Ok(new
             {

@@ -55,6 +55,10 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             if (template != null)
             {
                 content = ReplaceVariables(template.Body, payload);
+                if (!string.IsNullOrEmpty(subject))
+                {
+                    subject = ReplaceVariables(subject, payload);
+                }
             }
 
             INotificationProvider? provider = null;
