@@ -44,6 +44,8 @@ namespace PickNBook.Api.Models
         public string ArrivalTime { get; set; } = string.Empty;
         public string DepartDate { get; set; } = string.Empty;
         public bool BpDpSeatLayout { get; set; }
+        public string? CancellationPoliciesJson { get; set; }
+        public bool PartialCancellationAllowed { get; set; }
     }
 
     public class BusSeatLayoutItemContext

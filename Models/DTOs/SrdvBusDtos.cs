@@ -301,6 +301,7 @@ namespace PickNBook.Api.Models.DTOs
         public string? SupplierCancelId { get; set; }
         public decimal RefundAmount { get; set; }
         public decimal CancellationCharge { get; set; }
+        public decimal ServiceCharge { get; set; }
         public string? RefundStatus { get; set; }
         public int ErrorCode { get; set; }
         public string? ErrorMessage { get; set; }

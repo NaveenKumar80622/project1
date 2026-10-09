@@ -1169,7 +1169,9 @@ namespace PickNBook.Api.Services
                     status = statusProp.GetString();
                 }
 
-                if (root.TryGetProperty("CancelId", out var cidProp))
+                var targetElem = root.TryGetProperty("Result", out var resObj) && resObj.ValueKind == JsonValueKind.Object ? resObj : root;
+
+                if (root.TryGetProperty("CancelId", out var cidProp) || targetElem.TryGetProperty("CancelId", out cidProp))
                 {
                     if (cidProp.ValueKind == JsonValueKind.Number)
                         cancelId = cidProp.GetInt64();
@@ -1178,7 +1180,7 @@ namespace PickNBook.Api.Services
                 }
 
                 string? supplierCancelId = null;
-                if (root.TryGetProperty("SupplierCancelId", out var scidProp))
+                if (root.TryGetProperty("SupplierCancelId", out var scidProp) || targetElem.TryGetProperty("SupplierCancelId", out scidProp))
                 {
                     supplierCancelId = scidProp.ValueKind == JsonValueKind.String ? scidProp.GetString() : scidProp.ToString();
                 }
@@ -1205,13 +1207,13 @@ namespace PickNBook.Api.Services
                     }
                 }
 
-                if (root.TryGetProperty("CancellationCharge", out var ccProp))
+                if (root.TryGetProperty("CancellationCharge", out var ccProp) || targetElem.TryGetProperty("CancellationCharge", out ccProp))
                 {
                     if (ccProp.ValueKind == JsonValueKind.Number) cancellationCharge = ccProp.GetDecimal();
                     else if (ccProp.ValueKind == JsonValueKind.String && decimal.TryParse(ccProp.GetString(), out var cc)) cancellationCharge = cc;
                 }
 
-                if (root.TryGetProperty("RefundAmount", out var raProp))
+                if (root.TryGetProperty("RefundAmount", out var raProp) || targetElem.TryGetProperty("RefundAmount", out raProp))
                 {
                     if (raProp.ValueKind == JsonValueKind.Number) refundAmount = raProp.GetDecimal();
                     else if (raProp.ValueKind == JsonValueKind.String && decimal.TryParse(raProp.GetString(), out var ra)) refundAmount = ra;

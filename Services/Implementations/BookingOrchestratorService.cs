@@ -408,6 +408,25 @@ namespace PickNBook.Api.Services.Implementations
 
                 var depTime = DateTime.Parse(request.DepartureTime).ToUniversalTime();
                 var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : DateTime.Parse(request.ArrivalTime).ToUniversalTime();
+                if (arrTime <= depTime)
+                {
+                    arrTime = arrTime.AddDays(1);
+                    while (arrTime < depTime)
+                    {
+                        arrTime = arrTime.AddDays(1);
+                    }
+                }
+
+                BusSearchItemContext? busCtx = null;
+                if (!string.IsNullOrEmpty(request.TraceId) && !string.IsNullOrEmpty(request.ResultIndex))
+                {
+                    var compositeResultIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex.ToString());
+                    _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out busCtx);
+                    if (busCtx == null)
+                    {
+                        _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
+                    }
+                }
 
                 // 1. Create DB Booking Tracking Record
                 var bus = new BusBooking
@@ -429,7 +448,7 @@ namespace PickNBook.Api.Services.Implementations
                     ResultIndex = request.ResultIndex,
                     SrdvIndex = request.SrdvIndex,
                     OperatorId = "",
-                    CancellationPoliciesJson = null,
+                    CancellationPoliciesJson = busCtx?.CancellationPoliciesJson,
                     IsIdProofRequired = false
                 };
 
@@ -470,9 +489,10 @@ namespace PickNBook.Api.Services.Implementations
                     Status = "Booked",
                     BookedAtUtc = DateTime.UtcNow,
                     BoardingPointName = request.BoardingPointName,
-                    BoardingPointTime = request.BoardingPointTime,
+                    BoardingPointTime = request.BoardingPointTime ?? depTime,
                     DroppingPointName = request.DroppingPointName,
-                    DroppingPointTime = request.DroppingPointTime
+                    DroppingPointTime = request.DroppingPointTime ?? arrTime,
+                    CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                 };
 
                 var dbPassengers = new List<BusReservationPassenger>();
@@ -788,14 +808,33 @@ namespace PickNBook.Api.Services.Implementations
                                 FullName = p.FullName,
                                 Gender = p.Gender,
                                 SeatNumber = p.SeatNumber ?? string.Empty
-                            }).ToList()
+                            }).ToList(),
+                            CancellationPoliciesJson = !string.IsNullOrWhiteSpace(reservation.CancellationPolicyJson) 
+                                ? reservation.CancellationPolicyJson 
+                                : bus.CancellationPoliciesJson
                         };
 
-                        await ticketEmailService.SendBusTicketAsync(emailRequest);
+                        try
+                        {
+                            await ticketEmailService.SendBusTicketAsync(emailRequest);
+                        }
+                        catch (Exception firstEx)
+                        {
+                            _logger.LogWarning(firstEx, "First attempt to dispatch bus ticket email failed for {BookingReference}. Retrying in 2 seconds...", reservation.BookingReference);
+                            try
+                            {
+                                await Task.Delay(2000);
+                                await ticketEmailService.SendBusTicketAsync(emailRequest);
+                            }
+                            catch (Exception retryEx)
+                            {
+                                _logger.LogError(retryEx, "Failed to dispatch bus ticket email on retry for booking {BookingReference}", reservation.BookingReference);
+                            }
+                        }
                     }
-                    catch (Exception mailEx)
+                    catch (Exception prepEx)
                     {
-                        _logger.LogError(mailEx, "Failed to dispatch bus ticket email for booking {BookingReference}", reservation.BookingReference);
+                        _logger.LogError(prepEx, "Error preparing bus ticket email request for booking {BookingReference}", reservation.BookingReference);
                     }
                 }
 

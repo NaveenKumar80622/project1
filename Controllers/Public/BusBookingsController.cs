@@ -235,6 +235,15 @@ namespace PickNBook.Api.Controllers
                             var srdvIdx = long.TryParse(busNode["SrdvIndex"]?.ToString(), out var si) ? si : 0L;
                             var bpDpSeatLayout = busNode["BpDpSeatLayout"]?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
 
+                            var cancellationPoliciesNode = busNode["CancellationPolicies"];
+                            string? cancellationPoliciesJson = cancellationPoliciesNode != null ? cancellationPoliciesNode.ToJsonString() : null;
+                            if (string.IsNullOrWhiteSpace(cancellationPoliciesJson) && busNode["CancellationPolicy"] != null)
+                            {
+                                cancellationPoliciesJson = busNode["CancellationPolicy"]?.ToString();
+                            }
+
+                            bool partialCancellationAllowed = busNode["PartialCancellationAllowed"]?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true;
+
                             var busCtx = new BusSearchItemContext
                             {
                                 TraceId = searchTraceId,
@@ -247,7 +256,9 @@ namespace PickNBook.Api.Controllers
                                 DepartureTime = busNode["DepartureTime"]?.ToString() ?? string.Empty,
                                 ArrivalTime = busNode["ArrivalTime"]?.ToString() ?? string.Empty,
                                 DepartDate = request.DepartDate,
-                                BpDpSeatLayout = bpDpSeatLayout
+                                BpDpSeatLayout = bpDpSeatLayout,
+                                CancellationPoliciesJson = cancellationPoliciesJson,
+                                PartialCancellationAllowed = partialCancellationAllowed
                             };
                             _cache.Set($"bus_ctx_{searchTraceId}_{resIdx}", busCtx, TimeSpan.FromHours(1));
 
@@ -1354,20 +1365,20 @@ namespace PickNBook.Api.Controllers
             public int ErrorCode { get; } = errorCode;
         }
 
-        private static (bool IsConfirmed, decimal CancellationCharge, decimal RefundAmount) TryReconcileCancellationFromDetails(
+        private static (bool IsConfirmed, decimal CancellationCharge, decimal RefundAmount, string RefundStatus, string Status) TryReconcileCancellationFromDetails(
             SrdvBusBookingDetailsResponseDto? details,
             IEnumerable<string> targetSeatNumbers,
             long? targetCancelId = null)
         {
             if (details == null || !details.Success || details.Result == null)
             {
-                return (false, 0m, 0m);
+                return (false, 0m, 0m, "NOT_STARTED", "PENDING");
             }
 
             var seatsSet = new HashSet<string>(targetSeatNumbers.Where(s => !string.IsNullOrWhiteSpace(s)), StringComparer.OrdinalIgnoreCase);
             if (seatsSet.Count == 0 && (!targetCancelId.HasValue || targetCancelId.Value <= 0))
             {
-                return (false, 0m, 0m);
+                return (false, 0m, 0m, "NOT_STARTED", "PENDING");
             }
 
             if (details.Result.Cancellations != null && details.Result.Cancellations.Any())
@@ -1401,8 +1412,15 @@ namespace PickNBook.Api.Controllers
 
                 if (matchingCancellation != null)
                 {
-                    // Strict correlation to this specific cancellation operation; never sum historical records
-                    return (true, matchingCancellation.CancellationCharge, matchingCancellation.RefundAmount);
+                    bool isConfirmed = string.Equals(matchingCancellation.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(matchingCancellation.Status, "Success", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(matchingCancellation.Status, "Completed", StringComparison.OrdinalIgnoreCase)
+                        || !string.IsNullOrWhiteSpace(matchingCancellation.SupplierCancelId);
+
+                    string rStatus = matchingCancellation.RefundStatus?.ToUpperInvariant() ?? "MANUAL_PENDING";
+                    string cStatus = matchingCancellation.Status?.ToUpperInvariant() ?? (isConfirmed ? "CANCELLED" : "PENDING");
+
+                    return (isConfirmed, matchingCancellation.CancellationCharge, matchingCancellation.RefundAmount, rStatus, cStatus);
                 }
             }
 
@@ -1417,12 +1435,12 @@ namespace PickNBook.Api.Controllers
 
                 if (cancelledPax.Count == seatsSet.Count)
                 {
-                    // Confirmed cancelled on provider, but without a dedicated correlated cancellation financial record
-                    return (true, 0m, 0m);
+                    // Confirmed cancelled on operator, but supplier refund settlement is still pending (MANUAL_PENDING)
+                    return (true, 0m, 0m, "MANUAL_PENDING", "CANCELLED");
                 }
             }
 
-            return (false, 0m, 0m);
+            return (false, 0m, 0m, "NOT_STARTED", "PENDING");
         }
 
         [HttpPost("v9/Book")]
@@ -2066,7 +2084,7 @@ namespace PickNBook.Api.Controllers
                             ResultIndex = request.ResultIndex,
                             SrdvIndex = request.SrdvIndex,
                             OperatorId = "",
-                            CancellationPoliciesJson = null,
+                            CancellationPoliciesJson = busCtx?.CancellationPoliciesJson,
                             IsIdProofRequired = false
                         };
 
@@ -2194,7 +2212,8 @@ namespace PickNBook.Api.Controllers
                             BoardingPointName = request.BoardingPointName,
                             BoardingPointTime = request.BoardingPointTime,
                             DroppingPointName = request.DroppingPointName,
-                            DroppingPointTime = request.DroppingPointTime
+                            DroppingPointTime = request.DroppingPointTime,
+                            CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                         };
 
                         dbContext.BusReservations.Add(reservation);
@@ -2688,12 +2707,12 @@ namespace PickNBook.Api.Controllers
                                         Destination = scopedSrdvBusService.MapCityCodeToName(b.ToCity),
                                         DepartureTime = b.DepartureTime,
                                         ArrivalTime = b.ArrivalTime,
-                                        IsOvernightArrival = b.ArrivalTime.Date > b.DepartureTime.Date,
-                                        DurationMinutes = (int)(b.ArrivalTime - b.DepartureTime).TotalMinutes,
+                                        IsOvernightArrival = b.ArrivalTime.Date > b.DepartureTime.Date || b.ArrivalTime <= b.DepartureTime,
+                                        DurationMinutes = b.ArrivalTime > b.DepartureTime ? (int)(b.ArrivalTime - b.DepartureTime).TotalMinutes : Math.Max(60, (int)(b.ArrivalTime.AddDays(1) - b.DepartureTime).TotalMinutes),
                                         BoardingPoint = !string.IsNullOrWhiteSpace(res.BoardingPointName) ? res.BoardingPointName : b.BoardingPoint,
                                         BoardingPointTime = res.BoardingPointTime ?? b.DepartureTime,
                                         ArrivalPoint = !string.IsNullOrWhiteSpace(res.DroppingPointName) ? res.DroppingPointName : b.ToCity,
-                                        ArrivalPointTime = res.DroppingPointTime ?? b.ArrivalTime,
+                                        ArrivalPointTime = res.DroppingPointTime ?? (b.ArrivalTime > b.DepartureTime ? b.ArrivalTime : b.ArrivalTime.AddDays(1)),
                                         Price = res.TotalPriceInr,
                                         BaseFare = res.BaseFareInr,
                                         Currency = "INR",
@@ -2713,7 +2732,9 @@ namespace PickNBook.Api.Controllers
                                             Gender = p.Gender,
                                             SeatNumber = p.SeatNumber ?? string.Empty
                                         }).ToList(),
-                                        CancellationPoliciesJson = b.CancellationPoliciesJson
+                                        CancellationPoliciesJson = !string.IsNullOrWhiteSpace(b.CancellationPoliciesJson) 
+                                            ? b.CancellationPoliciesJson 
+                                            : res.CancellationPolicyJson
                                     });
                                 }
                                 catch (Exception ex)
@@ -3069,6 +3090,9 @@ namespace PickNBook.Api.Controllers
                 if (booking.Status == "Cancelled" || booking.Status == BusBookingStatus.Cancelled)
                     return BadRequest("Already cancelled.");
 
+                if (booking.Status == BusBookingStatus.CancelInProcess || booking.Status == "CancelInProcess")
+                    return BadRequest("A cancellation request is already in progress for this booking.");
+
                 // Prevent cancellation after departure
                 if (booking.BusBooking.DepartureTime <= DateTime.UtcNow)
                 {
@@ -3091,6 +3115,7 @@ namespace PickNBook.Api.Controllers
 
                 decimal srdvCancellationCharge = 0m;
                 decimal srdvRefundAmount = 0m;
+                string srdvRefundStatus = "PENDING";
                 bool requiresManualReview = false;
                 bool cancellationConfirmed = false;
                 long? cancelTraceId = null;
@@ -3122,14 +3147,16 @@ namespace PickNBook.Api.Controllers
                                 if (reconciled.IsConfirmed)
                                 {
                                     cancellationConfirmed = true;
-                                    logger.LogInformation("BookingDetails confirmed full cancellation for seats {Seats}, TraceId {TraceId}.", string.Join(",", seatNumbers), actualTraceId);
+                                    logger.LogInformation("BookingDetails confirmed full cancellation for seats {Seats}, TraceId {TraceId}, RefundStatus {RefundStatus}.", string.Join(",", seatNumbers), actualTraceId, reconciled.RefundStatus);
                                     srdvCancellationCharge = reconciled.CancellationCharge;
                                     srdvRefundAmount = reconciled.RefundAmount;
+                                    srdvRefundStatus = reconciled.RefundStatus;
                                 }
                                 else
                                 {
                                     srdvCancellationCharge = v9Result.CancellationCharge;
                                     srdvRefundAmount = v9Result.RefundAmount;
+                                    srdvRefundStatus = (string.Equals(v9Result.Status, "Success", StringComparison.OrdinalIgnoreCase) && v9Result.RefundAmount > 0) ? "REFUNDED" : "MANUAL_PENDING";
                                 }
                             }
                             catch (Exception detailsEx)
@@ -3137,6 +3164,7 @@ namespace PickNBook.Api.Controllers
                                 logger.LogWarning(detailsEx, "BookingDetails reconciliation lookup failed after successful cancel initiation for TraceId {TraceId}.", actualTraceId);
                                 srdvCancellationCharge = v9Result.CancellationCharge;
                                 srdvRefundAmount = v9Result.RefundAmount;
+                                srdvRefundStatus = (string.Equals(v9Result.Status, "Success", StringComparison.OrdinalIgnoreCase) && v9Result.RefundAmount > 0) ? "REFUNDED" : "MANUAL_PENDING";
                             }
                         }
                         else if (v9Result.IsExplicitSupplierRejection)
@@ -3157,6 +3185,7 @@ namespace PickNBook.Api.Controllers
                                     cancellationConfirmed = true;
                                     srdvCancellationCharge = reconciled.CancellationCharge;
                                     srdvRefundAmount = reconciled.RefundAmount;
+                                    srdvRefundStatus = reconciled.RefundStatus;
                                     logger.LogInformation("BookingDetails confirmed full cancellation following ambiguous cancel for TraceId {TraceId}.", actualTraceId);
                                 }
                             }
@@ -3175,6 +3204,7 @@ namespace PickNBook.Api.Controllers
                 else
                 {
                     cancellationConfirmed = true;
+                    srdvRefundStatus = "REFUNDED";
                 }
 
                 var strategy = dbContext.Database.CreateExecutionStrategy();
@@ -3196,6 +3226,28 @@ namespace PickNBook.Api.Controllers
                     var curActive = curPassengers.Where(x => !x.IsCancelled).ToList();
 
                     // Dynamic SRDV Cancellation Policy
+                    if (cancellationConfirmed && srdvRefundAmount <= 0m)
+                    {
+                        var policyFallback = CalculateSrdvRefund(
+                            curBooking.BusBooking,
+                            curActive,
+                            curBooking.NetFareInr,
+                            curPassengers.Count,
+                            curBooking.CancellationPolicyJson);
+
+                        if (policyFallback.RefundAmount > 0m || policyFallback.CancellationCharge > 0m)
+                        {
+                            srdvRefundAmount = policyFallback.RefundAmount;
+                            srdvCancellationCharge = policyFallback.CancellationCharge;
+                            logger.LogInformation("Applied booked cancellation policy for Reservation {BookingRef}: Refund={Refund}, Charge={Charge}",
+                                curBooking.BookingReference, srdvRefundAmount, srdvCancellationCharge);
+                        }
+                        else if (srdvCancellationCharge > 0m && curBooking.NetFareInr > srdvCancellationCharge)
+                        {
+                            srdvRefundAmount = curBooking.NetFareInr - srdvCancellationCharge;
+                        }
+                    }
+
                     var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
                     {
                         OriginalCustomerPaid = curBooking.TotalPriceInr,
@@ -3208,6 +3260,8 @@ namespace PickNBook.Api.Controllers
                     };
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);
+
+                    bool isSupplierRefundSettled = string.Equals(srdvRefundStatus, "REFUNDED", StringComparison.OrdinalIgnoreCase) && srdvRefundAmount > 0;
 
                     if (requiresManualReview)
                     {
@@ -3227,9 +3281,18 @@ namespace PickNBook.Api.Controllers
                             ? "Cancelled by user"
                             : reason.Trim();
 
-                        curBooking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                        curBooking.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
-                        curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
+                        if (isSupplierRefundSettled)
+                        {
+                            curBooking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                            curBooking.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
+                            curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
+                        }
+                        else
+                        {
+                            // Option A: Zero Financial Risk. Do not debit merchant wallet/Cashfree until supplier credits wallet.
+                            curBooking.FinancialStatus = "AWAITING_SUPPLIER_REFUND";
+                            curBooking.RefundAmountInr = 0m;
+                        }
 
                         var usage = await dbContext.BusCouponUsages
                             .FirstOrDefaultAsync(x => x.BusReservationId == curBooking.Id);
@@ -3266,13 +3329,17 @@ namespace PickNBook.Api.Controllers
                     string auditStatus = requiresManualReview
                         ? "MANUAL_CHECK_REQUIRED"
                         : (cancellationConfirmed
-                            ? ((calculatedRefund.FinalCustomerRefundAmount > 0) ? "PendingReview" : "Completed")
+                            ? (isSupplierRefundSettled
+                                ? ((calculatedRefund.FinalCustomerRefundAmount > 0) ? "PendingReview" : "Completed")
+                                : "AwaitingSupplierRefund")
                             : "CANCEL_IN_PROCESS");
 
                     string refundAuditStatus = requiresManualReview
                         ? "MANUAL_CHECK_REQUIRED"
                         : (cancellationConfirmed
-                            ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
+                            ? (isSupplierRefundSettled
+                                ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
+                                : "AWAITING_SUPPLIER")
                             : "PENDING");
 
                     var activeSeatNames = curActive
@@ -3304,13 +3371,14 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = curBooking.CouponDiscountAmountInr + curBooking.AutoDiscountAmountInr + curBooking.FeaturedOfferDiscountAmount,
                         SupplierRefundAmount = srdvRefundAmount,
                         SupplierCancellationCharge = srdvCancellationCharge,
-                        MarkupRefunded = calculatedRefund.MarkupRefunded,
-                        FeeRefunded = calculatedRefund.FeeRefunded,
-                        CouponForfeited = calculatedRefund.CouponForfeited,
-                        CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
+                        MarkupRefunded = isSupplierRefundSettled ? calculatedRefund.MarkupRefunded : 0m,
+                        FeeRefunded = isSupplierRefundSettled ? calculatedRefund.FeeRefunded : 0m,
+                        CouponForfeited = isSupplierRefundSettled ? calculatedRefund.CouponForfeited : 0m,
+                        CustomerRefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                         Status = auditStatus,
                         CancellationType = calculatedCancellationType,
                         RefundStatus = refundAuditStatus,
+                        SrdvStatus = srdvRefundStatus,
                         TraceId = cancelTraceId,
                         ProviderCancelId = v9Result?.CancelId,
                         SupplierCancelId = v9Result?.SupplierCancelId,
@@ -3321,7 +3389,7 @@ namespace PickNBook.Api.Controllers
                     dbContext.BookingCancellations.Add(cancellationAudit);
                     await dbContext.SaveChangesAsync();
 
-                    if (cancellationConfirmed && calculatedRefund.FinalCustomerRefundAmount > 0 && int.TryParse(curBooking.UserId, out int uId))
+                    if (cancellationConfirmed && isSupplierRefundSettled && calculatedRefund.FinalCustomerRefundAmount > 0 && int.TryParse(curBooking.UserId, out int uId))
                     {
                         var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == curBooking.UserId && p.BookingReferenceId == curBooking.Id && p.BookingType == "Bus");
                         var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
@@ -3360,7 +3428,7 @@ namespace PickNBook.Api.Controllers
                     {
                         Result = mapped,
                         CancelledIds = cancellationConfirmed ? curActive.Select(x => x.Id).ToList() : new List<int>(),
-                        RefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m
+                        RefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m
                     };
                 });
 
@@ -3403,6 +3471,9 @@ namespace PickNBook.Api.Controllers
                 if (booking.Status == "Cancelled" || booking.Status == BusBookingStatus.Cancelled)
                     return BadRequest("Already cancelled.");
 
+                if (booking.Status == BusBookingStatus.CancelInProcess || booking.Status == "CancelInProcess")
+                    return BadRequest("A cancellation request is already in progress for this booking.");
+
                 // Prevent cancellation after departure
                 if (booking.BusBooking.DepartureTime <= DateTime.UtcNow)
                 {
@@ -3435,6 +3506,7 @@ namespace PickNBook.Api.Controllers
 
                 decimal srdvCancellationCharge = 0m;
                 decimal srdvRefundAmount = 0m;
+                string srdvRefundStatus = "PENDING";
                 bool requiresManualReview = false;
                 bool cancellationConfirmed = false;
                 long? cancelTraceId = null;
@@ -3502,14 +3574,16 @@ namespace PickNBook.Api.Controllers
                                     if (reconciled.IsConfirmed)
                                     {
                                         cancellationConfirmed = true;
-                                        logger.LogInformation("BookingDetails confirmed partial cancellation for seats {Seats}, TraceId {TraceId}.", string.Join(",", targetSeats), actualTraceId);
+                                        logger.LogInformation("BookingDetails confirmed partial cancellation for seats {Seats}, TraceId {TraceId}, RefundStatus {RefundStatus}.", string.Join(",", targetSeats), actualTraceId, reconciled.RefundStatus);
                                         srdvCancellationCharge = reconciled.CancellationCharge;
                                         srdvRefundAmount = reconciled.RefundAmount;
+                                        srdvRefundStatus = reconciled.RefundStatus;
                                     }
                                     else
                                     {
                                         srdvCancellationCharge = v9Result.CancellationCharge;
                                         srdvRefundAmount = v9Result.RefundAmount;
+                                        srdvRefundStatus = (string.Equals(v9Result.Status, "Success", StringComparison.OrdinalIgnoreCase) && v9Result.RefundAmount > 0) ? "REFUNDED" : "MANUAL_PENDING";
                                     }
                                 }
                                 catch (Exception detailsEx)
@@ -3517,6 +3591,7 @@ namespace PickNBook.Api.Controllers
                                     logger.LogWarning(detailsEx, "BookingDetails reconciliation failed for partial cancel, TraceId {TraceId}.", actualTraceId);
                                     srdvCancellationCharge = v9Result.CancellationCharge;
                                     srdvRefundAmount = v9Result.RefundAmount;
+                                    srdvRefundStatus = (string.Equals(v9Result.Status, "Success", StringComparison.OrdinalIgnoreCase) && v9Result.RefundAmount > 0) ? "REFUNDED" : "MANUAL_PENDING";
                                 }
                             }
                             else if (v9Result.IsExplicitSupplierRejection)
@@ -3537,6 +3612,7 @@ namespace PickNBook.Api.Controllers
                                         cancellationConfirmed = true;
                                         srdvCancellationCharge = reconciled.CancellationCharge;
                                         srdvRefundAmount = reconciled.RefundAmount;
+                                        srdvRefundStatus = reconciled.RefundStatus;
                                         logger.LogInformation("BookingDetails confirmed partial cancellation following ambiguous outcome for TraceId {TraceId}.", actualTraceId);
                                     }
                                 }
@@ -3555,11 +3631,13 @@ namespace PickNBook.Api.Controllers
                     else
                     {
                         cancellationConfirmed = true;
+                        srdvRefundStatus = "REFUNDED";
                     }
                 }
                 else
                 {
                     cancellationConfirmed = true;
+                    srdvRefundStatus = "REFUNDED";
                 }
 
                 var strategy = dbContext.Database.CreateExecutionStrategy();
@@ -3596,6 +3674,28 @@ namespace PickNBook.Api.Controllers
                     // ── Dynamic SRDV Cancellation Policy ──
                     decimal proportion = (decimal)curTarget.Count / (curBooking.SeatsBooked > 0 ? curBooking.SeatsBooked : 1);
 
+                    if (cancellationConfirmed && srdvRefundAmount <= 0m)
+                    {
+                        var policyFallback = CalculateSrdvRefund(
+                            curBooking.BusBooking,
+                            curTarget,
+                            curBooking.NetFareInr,
+                            curPassengers.Count,
+                            curBooking.CancellationPolicyJson);
+
+                        if (policyFallback.RefundAmount > 0m || policyFallback.CancellationCharge > 0m)
+                        {
+                            srdvRefundAmount = policyFallback.RefundAmount;
+                            srdvCancellationCharge = policyFallback.CancellationCharge;
+                            logger.LogInformation("Applied booked cancellation policy for partial cancellation {BookingRef}: Refund={Refund}, Charge={Charge}",
+                                curBooking.BookingReference, srdvRefundAmount, srdvCancellationCharge);
+                        }
+                        else if (srdvCancellationCharge > 0m && (curBooking.NetFareInr * proportion) > srdvCancellationCharge)
+                        {
+                            srdvRefundAmount = (curBooking.NetFareInr * proportion) - srdvCancellationCharge;
+                        }
+                    }
+
                     var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
                     {
                         OriginalCustomerPaid = curBooking.TotalPriceInr * proportion,
@@ -3609,11 +3709,21 @@ namespace PickNBook.Api.Controllers
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);
 
+                    bool isSupplierRefundSettled = string.Equals(srdvRefundStatus, "REFUNDED", StringComparison.OrdinalIgnoreCase) && srdvRefundAmount > 0;
+
                     if (cancellationConfirmed)
                     {
-                        curBooking.CancellationChargeInr = (curBooking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                        curBooking.RefundAmountInr = (curBooking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
-                        curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
+                        if (isSupplierRefundSettled)
+                        {
+                            curBooking.CancellationChargeInr = (curBooking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                            curBooking.RefundAmountInr = (curBooking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
+                            curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
+                        }
+                        else
+                        {
+                            // Option A: Zero Financial Risk. Wait for background poller to confirm supplier refund
+                            curBooking.FinancialStatus = "AWAITING_SUPPLIER_REFUND";
+                        }
                     }
 
                     if (v9Result != null)
@@ -3639,13 +3749,17 @@ namespace PickNBook.Api.Controllers
                     string refundAuditStatus = requiresManualReview
                         ? "MANUAL_CHECK_REQUIRED"
                         : (cancellationConfirmed
-                            ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
+                            ? (isSupplierRefundSettled
+                                ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
+                                : "AWAITING_SUPPLIER")
                             : "PENDING");
 
                     string auditStatus = requiresManualReview
                         ? "PendingReview"
                         : (cancellationConfirmed
-                            ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PendingReview" : "Completed")
+                            ? (isSupplierRefundSettled
+                                ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PendingReview" : "Completed")
+                                : "AwaitingSupplierRefund")
                             : "CANCEL_IN_PROCESS");
 
                     var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
@@ -3661,13 +3775,14 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = refundInput.DiscountAmount,
                         SupplierRefundAmount = srdvRefundAmount,
                         SupplierCancellationCharge = srdvCancellationCharge,
-                        MarkupRefunded = calculatedRefund.MarkupRefunded,
-                        FeeRefunded = calculatedRefund.FeeRefunded,
-                        CouponForfeited = calculatedRefund.CouponForfeited,
-                        CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
+                        MarkupRefunded = isSupplierRefundSettled ? calculatedRefund.MarkupRefunded : 0m,
+                        FeeRefunded = isSupplierRefundSettled ? calculatedRefund.FeeRefunded : 0m,
+                        CouponForfeited = isSupplierRefundSettled ? calculatedRefund.CouponForfeited : 0m,
+                        CustomerRefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                         Status = auditStatus,
                         CancellationType = cancellationType,
                         RefundStatus = refundAuditStatus,
+                        SrdvStatus = srdvRefundStatus,
                         TraceId = cancelTraceId,
                         ProviderCancelId = v9Result?.CancelId,
                         SupplierCancelId = v9Result?.SupplierCancelId,
@@ -3737,7 +3852,7 @@ namespace PickNBook.Api.Controllers
                     {
                         Result = mapped,
                         CancelledIds = cancellationConfirmed ? curTarget.Select(x => x.Id).ToList() : new List<int>(),
-                        RefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m
+                        RefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m
                     };
                 });
 
@@ -4695,7 +4810,9 @@ Refund: ₹{currentRefundAmount}
                         SeatNumber = seatNumbers,
                         GstPercent = reservation.GstPercent,
                         GstAmount = reservation.GstAmountInr,
-                        CancellationPoliciesJson = bus.CancellationPoliciesJson,
+                        CancellationPoliciesJson = !string.IsNullOrWhiteSpace(bus.CancellationPoliciesJson) 
+                            ? bus.CancellationPoliciesJson 
+                            : reservation.CancellationPolicyJson,
 
                         AutoDiscountAmount =
     reservation.AutoDiscountAmountInr,
@@ -4736,22 +4853,50 @@ Refund: ₹{currentRefundAmount}
             if (!sent)
                 logger.LogWarning("WhatsApp booking failed: {Message}", msg);
         }
-        private (decimal RefundAmount, decimal CancellationCharge) CalculateSrdvRefund(BusBooking bus, IReadOnlyList<BusReservationPassenger> cancelledPassengers, decimal netFareInr, int totalBookedSeats)
+        public static (decimal RefundAmount, decimal CancellationCharge) CalculateSrdvRefund(
+            BusBooking bus, 
+            IReadOnlyList<BusReservationPassenger> cancelledPassengers, 
+            decimal netFareInr, 
+            int totalBookedSeats,
+            string? policyJsonOverride = null)
         {
             var cancelledSeats = cancelledPassengers.Count;
             var refundablePool = netFareInr;
             var proportionalPrice = totalBookedSeats > 0 ? (refundablePool / totalBookedSeats) * cancelledSeats : 0m;
-            var cancelledBaseFare = cancelledPassengers.Sum(p => p.BaseFareInr);
 
-            if (string.IsNullOrEmpty(bus.CancellationPoliciesJson))
+            var rawPolicy = !string.IsNullOrWhiteSpace(policyJsonOverride)
+                ? policyJsonOverride.Trim()
+                : bus?.CancellationPoliciesJson?.Trim();
+
+            if (string.IsNullOrEmpty(rawPolicy))
             {
-                // Fallback to no refund if we don't have policy
                 return (0m, proportionalPrice);
             }
 
             try
             {
-                var policies = System.Text.Json.JsonSerializer.Deserialize<List<SrdvCancellationPolicyDto>>(bus.CancellationPoliciesJson);
+                if (rawPolicy.StartsWith("\"") && rawPolicy.EndsWith("\""))
+                {
+                    try
+                    {
+                        var unescaped = System.Text.Json.JsonSerializer.Deserialize<string>(rawPolicy);
+                        if (!string.IsNullOrWhiteSpace(unescaped)) rawPolicy = unescaped.Trim();
+                    }
+                    catch { }
+                }
+
+                var jsonOpts = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                List<SrdvCancellationPolicyDto>? policies = null;
+                if (rawPolicy.StartsWith("["))
+                {
+                    policies = System.Text.Json.JsonSerializer.Deserialize<List<SrdvCancellationPolicyDto>>(rawPolicy, jsonOpts);
+                }
+                else if (rawPolicy.StartsWith("{"))
+                {
+                    var single = System.Text.Json.JsonSerializer.Deserialize<SrdvCancellationPolicyDto>(rawPolicy, jsonOpts);
+                    if (single != null) policies = new List<SrdvCancellationPolicyDto> { single };
+                }
+
                 if (policies == null || !policies.Any()) return (0m, proportionalPrice);
 
                 var istNow = DateTime.UtcNow.Add(IndiaOffset);
@@ -4765,7 +4910,7 @@ Refund: ₹{currentRefundAmount}
                     .OrderBy(x => x.Hours < 0 ? double.MaxValue : x.Hours)
                     .ToList();
 
-                decimal matchedCharge = 0m; // Default to 0% penalty for early cancellations
+                decimal matchedCharge = 0m;
                 string chargeType = "Percentage";
 
                 foreach (var tier in orderedPolicies)
@@ -4784,14 +4929,16 @@ Refund: ₹{currentRefundAmount}
                     }
                 }
 
+                var cancelledBaseFare = cancelledPassengers.Sum(p => p.BaseFareInr);
+                var fareForPercentage = cancelledBaseFare > 0 ? cancelledBaseFare : proportionalPrice;
+
                 decimal cancellationCharge = 0m;
                 if (chargeType.Equals("Percentage", StringComparison.OrdinalIgnoreCase))
                 {
-                    cancellationCharge = (cancelledBaseFare * matchedCharge) / 100m;
+                    cancellationCharge = (fareForPercentage * matchedCharge) / 100m;
                 }
                 else
                 {
-                    // Fixed amount per seat
                     cancellationCharge = matchedCharge * cancelledSeats;
                 }
 
@@ -4805,7 +4952,6 @@ Refund: ₹{currentRefundAmount}
             }
             catch
             {
-                // Fallback to no refund on parse error
                 return (0m, proportionalPrice);
             }
         }
@@ -5126,6 +5272,20 @@ Refund: ₹{currentRefundAmount}
                 });
             }
 
+            if (booking.Status == BusBookingStatus.CancelInProcess || booking.Status == "CancelInProcess")
+            {
+                return BadRequest(new
+                {
+                    Error = new
+                    {
+                        ErrorCode = "7034",
+                        ErrorMessage = "A cancellation request is already in progress for this booking."
+                    },
+                    TraceId = traceIdStr,
+                    Result = (object?)null
+                });
+            }
+
             if (booking.BusBooking.DepartureTime <= DateTime.UtcNow)
             {
                 return BadRequest(new
@@ -5251,6 +5411,7 @@ Refund: ₹{currentRefundAmount}
             // Attempt reconciliation via BookingDetails
             decimal srdvCancellationCharge = v9Result?.CancellationCharge ?? 0m;
             decimal srdvRefundAmount = v9Result?.RefundAmount ?? 0m;
+            string srdvRefundStatus = (string.Equals(v9Result?.Status, "Success", StringComparison.OrdinalIgnoreCase) && (v9Result?.RefundAmount ?? 0m) > 0) ? "REFUNDED" : "MANUAL_PENDING";
             bool cancellationConfirmed = false;
 
             try
@@ -5262,6 +5423,7 @@ Refund: ₹{currentRefundAmount}
                     cancellationConfirmed = true;
                     srdvCancellationCharge = reconciled.CancellationCharge;
                     srdvRefundAmount = reconciled.RefundAmount;
+                    srdvRefundStatus = reconciled.RefundStatus;
                 }
             }
             catch (Exception dEx)
@@ -5363,6 +5525,28 @@ Refund: ₹{currentRefundAmount}
             var totalSeats = passengers.Count > 0 ? passengers.Count : 1;
             decimal proportion = (decimal)targetPassengers.Count / totalSeats;
 
+            if (cancellationConfirmed && srdvRefundAmount <= 0m)
+            {
+                var policyFallback = CalculateSrdvRefund(
+                    booking.BusBooking,
+                    targetPassengers,
+                    booking.NetFareInr,
+                    passengers.Count,
+                    booking.CancellationPolicyJson);
+
+                if (policyFallback.RefundAmount > 0m || policyFallback.CancellationCharge > 0m)
+                {
+                    srdvRefundAmount = policyFallback.RefundAmount;
+                    srdvCancellationCharge = policyFallback.CancellationCharge;
+                    logger.LogInformation("Applied booked cancellation policy for V9 cancel {BookingRef}: Refund={Refund}, Charge={Charge}",
+                        booking.BookingReference, srdvRefundAmount, srdvCancellationCharge);
+                }
+                else if (srdvCancellationCharge > 0m && (booking.NetFareInr * proportion) > srdvCancellationCharge)
+                {
+                    srdvRefundAmount = (booking.NetFareInr * proportion) - srdvCancellationCharge;
+                }
+            }
+
             var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
             {
                 OriginalCustomerPaid = booking.TotalPriceInr * proportion,
@@ -5375,16 +5559,28 @@ Refund: ₹{currentRefundAmount}
             };
             var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);
 
+            bool isSupplierRefundSettled = string.Equals(srdvRefundStatus, "REFUNDED", StringComparison.OrdinalIgnoreCase) && srdvRefundAmount > 0;
+
             if (cancellationConfirmed)
             {
-                booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                booking.RefundAmountInr = (booking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
-                booking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
+                if (isSupplierRefundSettled)
+                {
+                    booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                    booking.RefundAmountInr = (booking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
+                    booking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
+                }
+                else
+                {
+                    // Option A: Zero Financial Risk. Wait for background poller to confirm supplier refund
+                    booking.FinancialStatus = "AWAITING_SUPPLIER_REFUND";
+                }
             }
 
-            var auditStatus = cancellationConfirmed ? "PendingReview" : "CANCEL_IN_PROCESS";
+            var auditStatus = cancellationConfirmed
+                ? (isSupplierRefundSettled ? "PendingReview" : "AwaitingSupplierRefund")
+                : "CANCEL_IN_PROCESS";
             string refundAuditStatus = cancellationConfirmed
-                ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
+                ? (isSupplierRefundSettled ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED") : "AWAITING_SUPPLIER")
                 : "PENDING";
 
             var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
@@ -5400,13 +5596,14 @@ Refund: ₹{currentRefundAmount}
                 DiscountAmount = refundInput.DiscountAmount,
                 SupplierRefundAmount = srdvRefundAmount,
                 SupplierCancellationCharge = srdvCancellationCharge,
-                MarkupRefunded = calculatedRefund.MarkupRefunded,
-                FeeRefunded = calculatedRefund.FeeRefunded,
-                CouponForfeited = calculatedRefund.CouponForfeited,
-                CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
+                MarkupRefunded = isSupplierRefundSettled ? calculatedRefund.MarkupRefunded : 0m,
+                FeeRefunded = isSupplierRefundSettled ? calculatedRefund.FeeRefunded : 0m,
+                CouponForfeited = isSupplierRefundSettled ? calculatedRefund.CouponForfeited : 0m,
+                CustomerRefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                 Status = auditStatus,
                 CancellationType = cancellationType,
                 RefundStatus = refundAuditStatus,
+                SrdvStatus = srdvRefundStatus,
                 TraceId = request.TraceId,
                 ProviderCancelId = cancelId > 0 ? cancelId : null,
                 SupplierCancelId = supplierCancelId,
