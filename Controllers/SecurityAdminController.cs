@@ -22,16 +22,22 @@ namespace PickNBook.Api.Controllers
     {
         private readonly AppDbContext _context;
         private readonly ISecurityService _securityService;
-
         private readonly IEmailTemplateService _templateService;
         private readonly IConfiguration _config;
+        private readonly IEmailService _emailService;
 
-        public SecurityAdminController(AppDbContext context, ISecurityService securityService, IEmailTemplateService templateService, IConfiguration config)
+        public SecurityAdminController(
+            AppDbContext context,
+            ISecurityService securityService,
+            IEmailTemplateService templateService,
+            IConfiguration config,
+            IEmailService emailService)
         {
             _context = context;
             _securityService = securityService;
             _templateService = templateService;
             _config = config;
+            _emailService = emailService;
         }
 
         [HttpGet("metrics")]
@@ -354,10 +360,70 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("locked-accounts")]
-        public async Task<IActionResult> GetLockedAccounts()
+        public async Task<IActionResult> GetLockedAccounts([FromQuery] string? search = null)
         {
-            var items = await _context.UserLockouts.Where(x => x.Status == "Locked").ToListAsync();
-            return Ok(new { success = true, data = items });
+            var now = DateTime.UtcNow;
+
+            // 1. Auto-expire past locks
+            var expiredLocks = await _context.UserLockouts
+                .Where(x => x.Status == "Locked" && x.UnlockAt <= now)
+                .ToListAsync();
+
+            if (expiredLocks.Any())
+            {
+                foreach (var lck in expiredLocks)
+                {
+                    lck.Status = "Unlocked";
+                    lck.FailedAttempts = 0;
+                }
+                await _context.SaveChangesAsync();
+
+                foreach (var lck in expiredLocks)
+                {
+                    await _securityService.LogAuditAsync("ACCOUNT_AUTO_UNLOCKED", "Auto Expire Lock", "Success", "", userId: lck.UserId, reason: "Lock duration expired.");
+                }
+            }
+
+            // 2. Query active locks
+            var query = _context.UserLockouts
+                .AsNoTracking()
+                .Where(x => x.Status == "Locked" && x.UnlockAt > now);
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var term = search.Trim().ToLower();
+                query = query.Where(x =>
+                    (x.Email != null && x.Email.ToLower().Contains(term)) ||
+                    (x.UserName != null && x.UserName.ToLower().Contains(term)) ||
+                    (x.UserId != null && x.UserId.Contains(term)));
+            }
+
+            var activeLocks = await query
+                .OrderByDescending(x => x.LockedOn)
+                .ToListAsync();
+
+            var result = activeLocks.Select(x => new
+            {
+                x.Id,
+                x.UserId,
+                x.UserName,
+                x.Email,
+                x.FailedAttempts,
+                x.MaxAllowedAttempts,
+                x.LockedOn,
+                x.UnlockAt,
+                RemainingMinutes = Math.Max(0, (int)Math.Ceiling((x.UnlockAt - now).TotalMinutes)),
+                LockType = (x.UnlockAt - x.LockedOn).TotalMinutes > 30 ? "24 Hours" : "15 Minutes",
+                x.Reason,
+                x.Status
+            }).ToList();
+
+            return Ok(new
+            {
+                success = true,
+                count = activeLocks.Count,
+                data = result
+            });
         }
 
         [HttpPost("account-locks")]
@@ -394,38 +460,144 @@ namespace PickNBook.Api.Controllers
             await _context.SaveChangesAsync();
             await _securityService.LogAuditAsync("ACCOUNT_LOCKED", "Manual Account Lock", "Success", "", userId: req.AccountId, reason: lockout.Reason);
 
+            // Send Notification Email to Security Admin
+            var adminSubject = $"[Security Notice] Manual Account Lock: {lockout.Email ?? lockout.UserName ?? lockout.UserId}";
+            var adminBody = $@"
+<!DOCTYPE html>
+<html>
+<body style='font-family: Arial, sans-serif; background-color: #f8fafc; padding: 20px;'>
+    <div style='max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; padding: 24px;'>
+        <h2 style='color: #dc2626; margin-top: 0;'>🔒 Manual Account Lock</h2>
+        <p>An administrator has manually locked an account.</p>
+        <table style='width: 100%; border-collapse: collapse; margin: 16px 0;'>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User ID</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{lockout.UserId}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Email</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{lockout.Email}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User Name</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{lockout.UserName}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Reason</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{lockout.Reason}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Locked At (UTC)</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{lockout.LockedOn:yyyy-MM-dd HH:mm:ss} UTC</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Unlock At (UTC)</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{lockout.UnlockAt:yyyy-MM-dd HH:mm:ss} UTC</td></tr>
+        </table>
+        <p style='font-size: 13px; color: #64748b; margin-bottom: 0;'>Pick&amp;book Security Management</p>
+    </div>
+</body>
+</html>";
+            await SendSecurityAdminEmailAsync(adminSubject, adminBody);
+
             return Ok(new { success = true, data = lockout });
         }
 
         [HttpPost("locked-accounts/{id}/unlock")]
+        [HttpPost("unlock-account/{id}")]
         public async Task<IActionResult> UnlockAccount(string id)
         {
-            var acc = await _context.UserLockouts.FindAsync(id);
-            if (acc == null) return NotFound();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return BadRequest(new { success = false, message = "Lockout ID or User ID is required." });
+            }
+
+            var cleanId = id.Trim();
+            var acc = await _context.UserLockouts
+                .Where(x => x.Id == cleanId || x.UserId == cleanId)
+                .OrderByDescending(x => x.LockedOn)
+                .FirstOrDefaultAsync();
+
+            if (acc == null)
+            {
+                return NotFound(new { success = false, message = "No lockout record found for the specified ID or User ID." });
+            }
 
             acc.Status = "Unlocked";
+            acc.FailedAttempts = 0;
+            acc.UnlockAt = DateTime.UtcNow;
+
             await _context.SaveChangesAsync();
             
-            await _securityService.LogAuditAsync("ACCOUNT_UNLOCKED", "Unlock Account", "Success", "", userId: acc.UserId);
+            await _securityService.LogAuditAsync("ACCOUNT_UNLOCKED", "Unlock Account", "Success", "", userId: acc.UserId, reason: $"Unlocked by admin for {acc.Email ?? acc.UserName}");
 
-            // Send Email
+            // Send Email to User
+            User? user = null;
             if (int.TryParse(acc.UserId, out int uIdInt))
             {
-                var user = await _context.Users.FindAsync(uIdInt);
-                if (user != null && !string.IsNullOrWhiteSpace(user.Email))
+                user = await _context.Users.FindAsync(uIdInt);
+            }
+            if (user == null && !string.IsNullOrWhiteSpace(acc.Email))
+            {
+                user = await _context.Users.FirstOrDefaultAsync(u => u.Email == acc.Email);
+            }
+
+            if (user != null && !string.IsNullOrWhiteSpace(user.Email))
+            {
+                try
                 {
-                    try
-                    {
-                        await _templateService.SendSecurityEmailAsync("ACCOUNT_UNLOCKED", user, "", "Your account has been successfully unlocked.");
-                    }
-                    catch (Exception ex)
-                    {
-                        await _securityService.LogAuditAsync("SECURITY_EMAIL_FAILED", "Send Unlock Email", "Failed", "", email: user.Email, reason: ex.Message);
-                    }
+                    await _templateService.SendSecurityEmailAsync("ACCOUNT_UNLOCKED", user, "", "Your account has been successfully unlocked.");
+                }
+                catch (Exception ex)
+                {
+                    await _securityService.LogAuditAsync("SECURITY_EMAIL_FAILED", "Send Unlock Email", "Failed", "", email: user.Email, reason: ex.Message);
                 }
             }
 
-            return Ok(new { success = true });
+            // Send Notification Email to Security Admin
+            var adminSubject = $"[Security Notice] Account Unlocked: {acc.Email ?? acc.UserName ?? acc.UserId}";
+            var adminBody = $@"
+<!DOCTYPE html>
+<html>
+<body style='font-family: Arial, sans-serif; background-color: #f8fafc; padding: 20px;'>
+    <div style='max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; padding: 24px;'>
+        <h2 style='color: #16a34a; margin-top: 0;'>🔓 Account Unlocked</h2>
+        <p>A locked user account has been successfully unlocked by the administrator.</p>
+        <table style='width: 100%; border-collapse: collapse; margin: 16px 0;'>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User ID</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{acc.UserId}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Email</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{acc.Email}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User Name</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{acc.UserName}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Unlocked At (UTC)</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Status</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>Unlocked</td></tr>
+        </table>
+        <p style='font-size: 13px; color: #64748b; margin-bottom: 0;'>Pick&amp;book Security Management</p>
+    </div>
+</body>
+</html>";
+            await SendSecurityAdminEmailAsync(adminSubject, adminBody);
+
+            return Ok(new
+            {
+                success = true,
+                message = $"Account for {acc.Email ?? acc.UserName} has been unlocked successfully.",
+                data = new
+                {
+                    acc.Id,
+                    acc.UserId,
+                    acc.UserName,
+                    acc.Email,
+                    acc.Status
+                }
+            });
+        }
+
+        private async Task SendSecurityAdminEmailAsync(string subject, string htmlContent)
+        {
+            try
+            {
+                var adminEmails = _config.GetSection("SecurityAlerts:AdminEmails").Get<List<string>>()
+                    ?? _config.GetSection("SrdvWalletMonitoring:AdminAlertEmails").Get<List<string>>()
+                    ?? new List<string> { _config["EmailSettings:SenderEmail"] ?? "nakkasaisarath@gmail.com" };
+
+                foreach (var email in adminEmails.Where(e => !string.IsNullOrWhiteSpace(e)).Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        await _emailService.SendEmailAsync(email.Trim(), subject, htmlContent);
+                    }
+                    catch (Exception ex)
+                    {
+                        await _securityService.LogAuditAsync("SECURITY_EMAIL_FAILED", "Send Admin Alert", "Failed", "", email: email, reason: ex.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                await _securityService.LogAuditAsync("SECURITY_EMAIL_FAILED", "Security Admin Notification", "Failed", "", reason: ex.Message);
+            }
         }
 
         [HttpGet("audit-logs")]

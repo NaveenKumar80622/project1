@@ -26,6 +26,7 @@ namespace PickNBook.Api.Controllers
         private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
         private readonly PasswordHasher<User> _passwordHasher;
         private readonly ILogger<AuthController>? _logger;
+        private readonly IConfiguration _configuration;
         private readonly int _adminOtpExpiryMinutes;
         private readonly int _adminMaxOtpAttempts;
         private const string AdminLoginOtpPurpose = "AdminLogin";
@@ -47,6 +48,7 @@ namespace PickNBook.Api.Controllers
             _smsService = smsService;
             _otpService = otpService;
             _notificationService = notificationService;
+            _configuration = configuration;
             _passwordHasher = new PasswordHasher<User>();
             _logger = logger;
 
@@ -786,6 +788,23 @@ namespace PickNBook.Api.Controllers
                     }
                 }
 
+                // Send Security Admin notification email
+                try
+                {
+                    await SendSecurityAdminLockoutAlertAsync(
+                        user,
+                        ipAddress,
+                        lockReason,
+                        durationText,
+                        now,
+                        unlockAt,
+                        tracker.FailedAttempts);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to send security admin lockout alert email for user #{UserId}. Non-fatal.", user.Id);
+                }
+
                 return StatusCode(StatusCodes.Status401Unauthorized, new
                 {
                     success = false,
@@ -802,6 +821,65 @@ namespace PickNBook.Api.Controllers
             }
 
             return Unauthorized("Invalid credentials");
+        }
+
+        private async Task SendSecurityAdminLockoutAlertAsync(
+            User user,
+            string ipAddress,
+            string lockReason,
+            string durationText,
+            DateTime lockedOn,
+            DateTime unlockAt,
+            int failedAttempts)
+        {
+            var adminEmails = _configuration.GetSection("SecurityAlerts:AdminEmails").Get<List<string>>()
+                ?? _configuration.GetSection("SrdvWalletMonitoring:AdminAlertEmails").Get<List<string>>()
+                ?? new List<string> { _configuration["EmailSettings:SenderEmail"] ?? "nakkasaisarath@gmail.com" };
+
+            var rawName = $"{user.FirstName} {user.LastName}".Trim();
+            var displayName = string.IsNullOrWhiteSpace(rawName) ? (user.Email ?? "Unknown User") : rawName;
+            var subject = $"[Security Alert] User Account Locked: {user.Email ?? user.Id.ToString()} ({durationText})";
+
+            var htmlBody = $@"
+<!DOCTYPE html>
+<html>
+<body style='font-family: Arial, sans-serif; background-color: #f8fafc; padding: 20px; color: #1e293b;'>
+    <div style='max-width: 600px; margin: 0 auto; background: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.05);'>
+        <div style='background-color: #dc2626; color: #ffffff; padding: 16px 24px;'>
+            <h2 style='margin: 0; font-size: 20px;'>⚠️ Security Alert: User Account Locked</h2>
+        </div>
+        <div style='padding: 24px;'>
+            <p style='margin-top: 0; font-size: 15px;'>A user account has been automatically locked due to multiple consecutive failed authentication attempts.</p>
+            <table style='width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px;'>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold; width: 35%;'>User ID</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{user.Id}</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Email</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{user.Email}</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Full Name</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{displayName}</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Client IP</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{ipAddress}</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Duration / Type</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{durationText}</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Reason</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{lockReason}</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Locked On (UTC)</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{lockedOn:yyyy-MM-dd HH:mm:ss} UTC</td></tr>
+                <tr><td style='padding: 8px; border-bottom: 1px solid #f1f5f9; font-weight: bold;'>Unlock At (UTC)</td><td style='padding: 8px; border-bottom: 1px solid #f1f5f9;'>{unlockAt:yyyy-MM-dd HH:mm:ss} UTC</td></tr>
+            </table>
+            <p style='font-size: 13px; color: #64748b; margin-bottom: 0;'>This notification is automatically sent to designated security administrators. You can manage or unlock this account via the Pick&amp;book Admin Security Portal.</p>
+        </div>
+        <div style='background-color: #f1f5f9; padding: 12px 24px; font-size: 12px; color: #64748b; text-align: center;'>
+            &copy; {DateTime.UtcNow.Year} Pick&amp;book Security System
+        </div>
+    </div>
+</body>
+</html>";
+
+            foreach (var email in adminEmails.Where(e => !string.IsNullOrWhiteSpace(e)).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    await _emailService.SendEmailAsync(email.Trim(), subject, htmlBody);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to send security alert to admin {Email}. Non-fatal.", email);
+                }
+            }
         }
 
         private async Task ResetFailedAttemptsOnSuccessAsync(User user)

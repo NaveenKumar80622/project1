@@ -47,6 +47,15 @@ namespace PickNBook.Api.Controllers
             var sql = "SELECT * FROM v_BusBookingSummary WHERE 1=1";
             var parameters = new Dapper.DynamicParameters();
 
+            if (!string.IsNullOrWhiteSpace(status))
+            {
+                sql += " AND Status = @Status";
+                parameters.Add("Status", status.Trim());
+            }
+            else
+            {
+                sql += " AND Status = 'Booked'";
+            }
 
             if (!string.IsNullOrWhiteSpace(pnr))
             {
@@ -135,7 +144,7 @@ namespace PickNBook.Api.Controllers
             })
             .Where(x => !string.IsNullOrWhiteSpace(status)
                 ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
-                : (x.Status == "Booked" || x.Status == "Cancelled"))
+                : x.Status == "Booked")
             .ToList();
 
             return Ok(response);
@@ -2016,6 +2025,10 @@ namespace PickNBook.Api.Controllers
                 queryable = queryable.Where(x =>
                     EF.Functions.Like(x.Status, normalizedStatus));
             }
+            else
+            {
+                queryable = queryable.Where(x => x.Status == "Booked");
+            }
 
             var bookings = await queryable
                 .OrderByDescending(x => x.BookedAtUtc)
@@ -2119,7 +2132,11 @@ namespace PickNBook.Api.Controllers
                             p.Age
                         })
                     };
-                });
+                })
+                .Where(x => !string.IsNullOrWhiteSpace(status)
+                    ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
+                    : x.Status == "Booked")
+                .ToList();
 
             return Ok(response);
         }
