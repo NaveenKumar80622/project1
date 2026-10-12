@@ -315,6 +315,7 @@ namespace PickNBook.Api.Services
                         primaryRoot = node;
                     }
 
+                    var currentTraceId = node["TraceId"]?.ToString() ?? string.Empty;
                     if (node["Result"] is JsonArray busArray)
                     {
                         foreach (var bus in busArray)
@@ -332,7 +333,12 @@ namespace PickNBook.Api.Services
 
                             if (!string.IsNullOrEmpty(dedupeKey) && seenKeys.Add(dedupeKey))
                             {
-                                mergedBuses.Add(JsonNode.Parse(bus.ToJsonString())!);
+                                var busNode = JsonNode.Parse(bus.ToJsonString())!;
+                                if (!string.IsNullOrEmpty(currentTraceId))
+                                {
+                                    busNode["TraceId"] = currentTraceId;
+                                }
+                                mergedBuses.Add(busNode);
                             }
                         }
                     }
