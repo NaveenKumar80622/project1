@@ -2975,7 +2975,8 @@ namespace PickNBook.Api.Controllers
                         x.TotalPriceInr,
                         cancelCharges,
                         refundAmt,
-                        x.BusBooking.DepartureTime);
+                        x.BusBooking.DepartureTime,
+                        x.CancellationReason);
 
                     return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle, payment, fallbackPaymentId);
                 });
@@ -3051,7 +3052,8 @@ namespace PickNBook.Api.Controllers
                 booking.TotalPriceInr,
                 cancelCharges,
                 refundAmt,
-                booking.BusBooking.DepartureTime);
+                booking.BusBooking.DepartureTime,
+                booking.CancellationReason);
 
             var passengers = await dbContext.BusReservationPassengers
                 .AsNoTracking()
@@ -4061,6 +4063,7 @@ namespace PickNBook.Api.Controllers
                 reservation.RefundAmountInr,
                 baseDto.BookedAtUtc,
                 baseDto.CancelledAtUtc,
+                CancellationReason = reservation.CancellationReason,
                 Passengers = passengerDtos,
                 MaleCount = maleCount,
                 FemaleCount = femaleCount,
@@ -4069,6 +4072,8 @@ namespace PickNBook.Api.Controllers
                 PaymentId = effectivePaymentId,
                 CashfreePaymentId = payment?.CashfreePaymentId,
                 CashfreeOrderId = payment?.CashfreeOrderId,
+                RefundId = payment?.RefundId ?? (lifecycle?.Hierarchy?.Stages?.FirstOrDefault(s => s.Key == "REFUND_SETTLEMENT")?.Meta?.TryGetValue("refundId", out var rVal) == true ? rVal?.ToString() : null),
+                CashfreeRefundId = payment?.RefundId ?? (lifecycle?.Hierarchy?.Stages?.FirstOrDefault(s => s.Key == "REFUND_SETTLEMENT")?.Meta?.TryGetValue("refundId", out var cfVal) == true ? cfVal?.ToString() : null),
                 PaymentReference = payment?.PaymentReference,
 
                 // Lifecycle Hierarchy & State Tracing

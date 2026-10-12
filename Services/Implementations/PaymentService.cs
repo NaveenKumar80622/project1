@@ -1100,7 +1100,22 @@ namespace PickNBook.Api.Services.Implementations
                         }
                     }
                     refundRecord.Status = "Completed";
+                    refundRecord.RefundStatus = "COMPLETED";
+                    refundRecord.CashfreeRefundId = cashfreeRefundId;
                     refundRecord.CompletedAtUtc = DateTime.UtcNow;
+
+                    if (refundRecord.PaymentId > 0)
+                    {
+                        var assocPayment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.Id == refundRecord.PaymentId);
+                        if (assocPayment != null)
+                        {
+                            assocPayment.RefundStatus = "Refunded";
+                            assocPayment.Status = "REFUNDED";
+                            assocPayment.RefundId = cashfreeRefundId;
+                            assocPayment.UpdatedAt = DateTime.UtcNow;
+                            assocPayment.LastError = null;
+                        }
+                    }
                 }
                 else if (refundStatus.Equals("FAILED", StringComparison.OrdinalIgnoreCase) || refundStatus.Equals("CANCELLED", StringComparison.OrdinalIgnoreCase))
                 {
@@ -1203,8 +1218,20 @@ namespace PickNBook.Api.Services.Implementations
                 {
                     paymentRecord.RefundStatus = "Refunded";
                     paymentRecord.Status = "REFUNDED";
+                    paymentRecord.RefundId = cashfreeRefundId;
                     paymentRecord.UpdatedAt = DateTime.UtcNow;
                     paymentRecord.LastError = null;
+
+                    var assocCancel = await _dbContext.BookingCancellations.FirstOrDefaultAsync(c =>
+                        (c.PaymentId > 0 && c.PaymentId == paymentRecord.Id) ||
+                        (!string.IsNullOrEmpty(paymentRecord.PaymentReference) && c.BookingReference == paymentRecord.PaymentReference));
+                    if (assocCancel != null)
+                    {
+                        assocCancel.CashfreeRefundId = cashfreeRefundId;
+                        assocCancel.RefundStatus = "COMPLETED";
+                        assocCancel.Status = "Completed";
+                        assocCancel.CompletedAtUtc = DateTime.UtcNow;
+                    }
 
                     await _notificationService.EnqueueAsync(
                         eventType: "RefundCompleted",

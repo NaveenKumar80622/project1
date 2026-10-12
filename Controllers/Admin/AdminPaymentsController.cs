@@ -282,6 +282,7 @@ namespace PickNBook.Api.Controllers.Admin
 
                 decimal cancelCharges = cancel?.SupplierCancellationCharge ?? curHotel?.CancellationCharges ?? curBus?.CancellationChargeInr ?? curFlight?.CancellationChargeInr ?? 0m;
                 decimal refundAmt = cancel?.CustomerRefundAmount ?? curHotel?.RefundAmount ?? curBus?.RefundAmountInr ?? curFlight?.RefundAmountInr ?? (string.Equals(p.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) || string.Equals(p.Status, "REFUNDED", StringComparison.OrdinalIgnoreCase) ? p.FinalPayableAmount : 0m);
+                string? cancelReason = cancel?.FailureReason ?? curHotel?.CancellationReason ?? curBus?.CancellationReason ?? curFlight?.CancellationReason ?? p.RefundReason;
 
                 var hierarchy = BuildLifecycleHierarchy(p, exec, cancel, curHotel, curBus, curFlight, bookingRef, pnr, srdvStatus, isCancelled, cancelCharges, refundAmt);
 
@@ -319,7 +320,9 @@ namespace PickNBook.Api.Controllers.Admin
                     IsCancelled = isCancelled,
                     CancellationCharges = cancelCharges,
                     CustomerRefundAmount = refundAmt,
+                    CancellationReason = isCancelled ? cancelReason : null,
                     RefundId = p.RefundId ?? cancel?.CashfreeRefundId,
+                    CashfreeRefundId = cancel?.CashfreeRefundId ?? p.RefundId,
                     p.CreatedAt,
                     p.PaidAt,
                     p.FailureReason,
@@ -575,6 +578,8 @@ namespace PickNBook.Api.Controllers.Admin
                     SrdvBookingStatus = srdvStatus,
                     payment.RefundStatus,
                     payment.RefundId,
+                    CashfreeRefundId = cancel?.CashfreeRefundId ?? payment.RefundId,
+                    CancellationReason = cancel?.FailureReason ?? hotel?.CancellationReason ?? bus?.CancellationReason ?? flight?.CancellationReason ?? payment.RefundReason,
                     payment.RefundReason,
                     payment.RefundAttempts,
                     payment.LastError,
@@ -617,8 +622,10 @@ namespace PickNBook.Api.Controllers.Admin
                         IsCancelled = isCancelled,
                         CancellationCharges = cancelCharges,
                         CustomerRefundAmount = refundAmt,
+                        CancellationReason = cancel?.FailureReason ?? hotel?.CancellationReason ?? bus?.CancellationReason ?? flight?.CancellationReason ?? payment.RefundReason,
                         SrdvStatus = cancel?.SrdvStatus ?? (isCancelled ? "Success" : "Pending"),
                         RefundStatus = cancel?.RefundStatus ?? payment.RefundStatus,
+                        RefundId = cancel?.CashfreeRefundId ?? payment.RefundId,
                         CashfreeRefundId = cancel?.CashfreeRefundId ?? payment.RefundId,
                         RefundPreference = cancel?.RefundPreference ?? "OriginalMethod",
                         WalletRefundAmount = cancel?.WalletRefundAmount ?? 0m,
@@ -664,42 +671,88 @@ namespace PickNBook.Api.Controllers.Admin
                 ? req.RefundReason.Trim()
                 : (payment.RefundReason ?? "Admin initiated refund");
 
-            string refundId = payment.RefundId ?? $"REF-{payment.CashfreeOrderId}";
-
             try
             {
-                System.Text.Json.JsonDocument? refundResponse = null;
+                string? resolvedRefundId = payment.RefundId;
+                string cashfreeRefundStatus = "PENDING";
+                string? statusDescription = null;
+
+                // 1. Check if Cashfree already has settled/processed refunds for this order
                 try
                 {
-                    refundResponse = await _cashfreeService.InitiateRefundAsync(
-                        payment.CashfreeOrderId,
-                        refundAmount,
-                        refundId,
-                        refundReason);
+                    var existingRefundsDoc = await _cashfreeService.GetRefundsForOrderAsync(payment.CashfreeOrderId);
+                    if (existingRefundsDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && existingRefundsDoc.RootElement.GetArrayLength() > 0)
+                    {
+                        var latestRefund = existingRefundsDoc.RootElement.EnumerateArray().Last();
+                        if (latestRefund.TryGetProperty("refund_id", out var rIdEl))
+                        {
+                            resolvedRefundId = rIdEl.GetString();
+                        }
+                        if (latestRefund.TryGetProperty("refund_status", out var rStEl))
+                        {
+                            cashfreeRefundStatus = rStEl.GetString() ?? "PENDING";
+                        }
+                        if (latestRefund.TryGetProperty("status_description", out var rDescEl))
+                        {
+                            statusDescription = rDescEl.GetString();
+                        }
+                    }
                 }
-                catch (Exception initEx)
+                catch (Exception preCheckEx)
                 {
-                    _logger.LogWarning(initEx, "InitiateRefund on Cashfree returned error, attempting to check live refund status for order {OrderId}", payment.CashfreeOrderId);
+                    _logger.LogWarning(preCheckEx, "Could not pre-fetch order refunds for {OrderId}", payment.CashfreeOrderId);
+                }
+
+                // 2. If no settled refund found on Cashfree, initiate refund
+                if (string.IsNullOrEmpty(resolvedRefundId) || (!cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) && !cashfreeRefundStatus.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string targetRefundId = payment.RefundId ?? $"REF-{payment.CashfreeOrderId}";
                     try
                     {
-                        refundResponse = await _cashfreeService.GetRefundStatusAsync(payment.CashfreeOrderId, refundId);
+                        var refundResponse = await _cashfreeService.InitiateRefundAsync(
+                            payment.CashfreeOrderId,
+                            refundAmount,
+                            targetRefundId,
+                            refundReason);
+
+                        resolvedRefundId = targetRefundId;
+                        if (refundResponse.RootElement.TryGetProperty("refund_status", out var stEl))
+                        {
+                            cashfreeRefundStatus = stEl.GetString() ?? "PENDING";
+                        }
+                        if (refundResponse.RootElement.TryGetProperty("status_description", out var descEl))
+                        {
+                            statusDescription = descEl.GetString();
+                        }
                     }
-                    catch
+                    catch (Exception initEx)
                     {
-                        throw initEx;
+                        _logger.LogWarning(initEx, "InitiateRefund on Cashfree returned error, checking live order refunds for {OrderId}", payment.CashfreeOrderId);
+                        var liveRefundsDoc = await _cashfreeService.GetRefundsForOrderAsync(payment.CashfreeOrderId);
+                        if (liveRefundsDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && liveRefundsDoc.RootElement.GetArrayLength() > 0)
+                        {
+                            var latestRefund = liveRefundsDoc.RootElement.EnumerateArray().Last();
+                            if (latestRefund.TryGetProperty("refund_id", out var rIdEl))
+                            {
+                                resolvedRefundId = rIdEl.GetString();
+                            }
+                            if (latestRefund.TryGetProperty("refund_status", out var rStEl))
+                            {
+                                cashfreeRefundStatus = rStEl.GetString() ?? "PENDING";
+                            }
+                            if (latestRefund.TryGetProperty("status_description", out var rDescEl))
+                            {
+                                statusDescription = rDescEl.GetString();
+                            }
+                        }
+                        else
+                        {
+                            throw;
+                        }
                     }
                 }
 
-                string cashfreeRefundStatus = "PENDING";
-                string? statusDescription = null;
-                if (refundResponse.RootElement.TryGetProperty("refund_status", out var stEl))
-                {
-                    cashfreeRefundStatus = stEl.GetString() ?? "PENDING";
-                }
-                if (refundResponse.RootElement.TryGetProperty("status_description", out var descEl))
-                {
-                    statusDescription = descEl.GetString();
-                }
+                string refundId = resolvedRefundId ?? payment.RefundId ?? $"REF-{payment.CashfreeOrderId}";
 
                 payment.RefundId = refundId;
                 payment.RefundReason = refundReason;

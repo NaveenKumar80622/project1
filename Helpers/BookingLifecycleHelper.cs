@@ -64,8 +64,10 @@ namespace PickNBook.Api.Helpers
             decimal totalFare,
             decimal cancellationCharges,
             decimal refundAmount,
-            DateTime? travelDepartureTime = null)
+            DateTime? travelDepartureTime = null,
+            string? cancellationReason = null)
         {
+            string? effectiveCancelReason = cancel?.FailureReason ?? cancellationReason ?? payment?.RefundReason;
             var stages = new List<UserLifecycleStageNodeDto>();
             var timeline = new List<UserBookingTimelineEventDto>();
 
@@ -384,7 +386,8 @@ namespace PickNBook.Api.Helpers
                     { "isCancelled", isCancelled },
                     { "isTravelCompleted", isTravelCompleted },
                     { "cancellationCharges", cancellationCharges },
-                    { "eligibleRefundAmount", refundAmount }
+                    { "eligibleRefundAmount", refundAmount },
+                    { "cancellationReason", effectiveCancelReason }
                 }
             });
 
@@ -400,8 +403,7 @@ namespace PickNBook.Api.Helpers
                                   (cancel != null && string.Equals(cancel.RefundStatus, "ON_HOLD", StringComparison.OrdinalIgnoreCase));
 
             bool isRefundProcessing = (payment != null && (string.Equals(payment.RefundStatus, "RefundProcessing", StringComparison.OrdinalIgnoreCase) ||
-                                                          string.Equals(payment.RefundStatus, "PROCESSING", StringComparison.OrdinalIgnoreCase) ||
-                                                          string.Equals(payment.RefundStatus, "Pending", StringComparison.OrdinalIgnoreCase))) ||
+                                                          string.Equals(payment.RefundStatus, "PROCESSING", StringComparison.OrdinalIgnoreCase))) ||
                                       (cancel != null && string.Equals(cancel.RefundStatus, "PROCESSING", StringComparison.OrdinalIgnoreCase));
 
             bool isRefundFailed = (payment != null && string.Equals(payment.RefundStatus, "RefundFailed", StringComparison.OrdinalIgnoreCase)) ||
@@ -492,8 +494,10 @@ namespace PickNBook.Api.Helpers
                 Meta = new Dictionary<string, object?>
                 {
                     { "refundId", payment?.RefundId ?? cancel?.CashfreeRefundId },
+                    { "cashfreeRefundId", cancel?.CashfreeRefundId ?? payment?.RefundId },
                     { "refundStatus", payment?.RefundStatus ?? cancel?.RefundStatus },
-                    { "refundAmount", refundAmount > 0 ? refundAmount : (isRefundDone ? totalPaid : 0m) }
+                    { "refundAmount", refundAmount > 0 ? refundAmount : (isRefundDone ? totalPaid : 0m) },
+                    { "cancellationReason", effectiveCancelReason }
                 }
             });
 
@@ -659,6 +663,8 @@ namespace PickNBook.Api.Helpers
                 PaymentReference = payment?.PaymentReference ?? bookingRef,
                 CashfreeOrderId = payment?.CashfreeOrderId,
                 CashfreePaymentId = payment?.CashfreePaymentId,
+                RefundId = payment?.RefundId ?? cancel?.CashfreeRefundId,
+                CashfreeRefundId = cancel?.CashfreeRefundId ?? payment?.RefundId,
                 PaidAt = payment?.PaidAt
             };
 
@@ -668,7 +674,9 @@ namespace PickNBook.Api.Helpers
                 CancellationCharges = cancellationCharges,
                 CustomerRefundAmount = refundAmount,
                 RefundStatus = cancel?.RefundStatus ?? payment?.RefundStatus,
+                RefundId = cancel?.CashfreeRefundId ?? payment?.RefundId,
                 CashfreeRefundId = cancel?.CashfreeRefundId ?? payment?.RefundId,
+                CancellationReason = effectiveCancelReason,
                 CancelledAt = cancel?.CreatedAtUtc
             } : null;
 
