@@ -172,13 +172,26 @@ namespace PickNBook.Api.Controllers.Admin
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
 
             // 2. Batch fetch cancellations
+            var paymentRefs = paymentsPage
+                .Where(p => !string.IsNullOrEmpty(p.PaymentReference))
+                .Select(p => p.PaymentReference!)
+                .Distinct()
+                .ToList();
+
             var cancellations = await _dbContext.BookingCancellations
                 .AsNoTracking()
-                .Where(c => paymentIds.Contains(c.PaymentId))
+                .Where(c => paymentIds.Contains(c.PaymentId) || paymentRefs.Contains(c.BookingReference))
                 .ToListAsync();
-            var cancellationMap = cancellations
+
+            var cancellationByPaymentId = cancellations
+                .Where(c => c.PaymentId > 0)
                 .GroupBy(c => c.PaymentId)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault());
+
+            var cancellationByRef = cancellations
+                .Where(c => !string.IsNullOrEmpty(c.BookingReference))
+                .GroupBy(c => c.BookingReference, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.Id).FirstOrDefault(), StringComparer.OrdinalIgnoreCase);
 
             // 3. Batch fetch reservations for current page
             var hotelIds = paymentsPage
@@ -219,15 +232,16 @@ namespace PickNBook.Api.Controllers.Admin
             var items = paymentsPage.Select(p =>
             {
                 executionMap.TryGetValue(p.Id, out var exec);
-                cancellationMap.TryGetValue(p.Id, out var cancel);
+                cancellationByPaymentId.TryGetValue(p.Id, out var cancel);
+                if (cancel == null && !string.IsNullOrEmpty(p.PaymentReference))
+                {
+                    cancellationByRef.TryGetValue(p.PaymentReference, out cancel);
+                }
 
                 string? bookingRef = null;
                 string? pnr = exec?.SupplierReference;
                 string srdvStatus = exec?.SupplierBookingStatus ?? p.FulfillmentStatus;
                 string summary = p.BookingType;
-                bool isCancelled = cancel != null;
-                decimal cancelCharges = cancel?.SupplierCancellationCharge ?? 0m;
-                decimal refundAmt = cancel?.CustomerRefundAmount ?? (string.Equals(p.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) || string.Equals(p.Status, "REFUNDED", StringComparison.OrdinalIgnoreCase) ? p.FinalPayableAmount : 0m);
 
                 HotelReservation? curHotel = null;
                 BusReservation? curBus = null;
@@ -239,9 +253,6 @@ namespace PickNBook.Api.Controllers.Admin
                     pnr = !string.IsNullOrWhiteSpace(curHotel.ConfirmationNo) ? curHotel.ConfirmationNo : (!string.IsNullOrWhiteSpace(curHotel.ProviderBookingId) ? curHotel.ProviderBookingId : pnr);
                     if (!string.IsNullOrWhiteSpace(curHotel.Status)) srdvStatus = curHotel.Status;
                     summary = !string.IsNullOrWhiteSpace(curHotel.HotelName) ? $"{curHotel.HotelName} ({curHotel.CheckInDate:dd MMM} - {curHotel.CheckOutDate:dd MMM})" : "Hotel Stay";
-                    if (string.Equals(curHotel.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
-                    if (cancelCharges == 0 && curHotel.CancellationCharges > 0) cancelCharges = curHotel.CancellationCharges;
-                    if (refundAmt == 0 && curHotel.RefundAmount > 0) refundAmt = curHotel.RefundAmount;
                 }
                 else if (string.Equals(p.BookingType, "Bus", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && busMap.TryGetValue(p.BookingId.Value, out curBus))
                 {
@@ -249,9 +260,6 @@ namespace PickNBook.Api.Controllers.Admin
                     pnr = !string.IsNullOrWhiteSpace(curBus.Pnr) ? curBus.Pnr : pnr;
                     if (!string.IsNullOrWhiteSpace(curBus.Status)) srdvStatus = curBus.Status;
                     summary = curBus.BusBooking != null ? $"{curBus.BusBooking.FromCity} → {curBus.BusBooking.ToCity} ({curBus.BusBooking.OperatorName})" : "Bus Journey";
-                    if (string.Equals(curBus.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) || string.Equals(curBus.Status, "Partially Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
-                    if (cancelCharges == 0 && (curBus.CancellationChargeInr ?? 0) > 0) cancelCharges = curBus.CancellationChargeInr!.Value;
-                    if (refundAmt == 0 && (curBus.RefundAmountInr ?? 0) > 0) refundAmt = curBus.RefundAmountInr!.Value;
                 }
                 else if (string.Equals(p.BookingType, "Flight", StringComparison.OrdinalIgnoreCase) && p.BookingId.HasValue && flightMap.TryGetValue(p.BookingId.Value, out curFlight))
                 {
@@ -259,10 +267,21 @@ namespace PickNBook.Api.Controllers.Admin
                     pnr = !string.IsNullOrWhiteSpace(curFlight.Pnr) ? curFlight.Pnr : pnr;
                     if (!string.IsNullOrWhiteSpace(curFlight.Status)) srdvStatus = curFlight.Status;
                     summary = !string.IsNullOrWhiteSpace(curFlight.Airline) ? $"{curFlight.Airline} ({curFlight.FromCity} → {curFlight.ToCity})" : "Flight Journey";
-                    if (string.Equals(curFlight.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) isCancelled = true;
-                    if (cancelCharges == 0 && (curFlight.CancellationChargeInr ?? 0) > 0) cancelCharges = curFlight.CancellationChargeInr!.Value;
-                    if (refundAmt == 0 && (curFlight.RefundAmountInr ?? 0) > 0) refundAmt = curFlight.RefundAmountInr!.Value;
                 }
+
+                if (cancel == null && !string.IsNullOrEmpty(bookingRef))
+                {
+                    cancellationByRef.TryGetValue(bookingRef, out cancel);
+                }
+
+                bool isCancelled = cancel != null ||
+                                   string.Equals(curHotel?.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(curBus?.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(curBus?.Status, "Partially Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                                   string.Equals(curFlight?.Status, "Cancelled", StringComparison.OrdinalIgnoreCase);
+
+                decimal cancelCharges = cancel?.SupplierCancellationCharge ?? curHotel?.CancellationCharges ?? curBus?.CancellationChargeInr ?? curFlight?.CancellationChargeInr ?? 0m;
+                decimal refundAmt = cancel?.CustomerRefundAmount ?? curHotel?.RefundAmount ?? curBus?.RefundAmountInr ?? curFlight?.RefundAmountInr ?? (string.Equals(p.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) || string.Equals(p.Status, "REFUNDED", StringComparison.OrdinalIgnoreCase) ? p.FinalPayableAmount : 0m);
 
                 var hierarchy = BuildLifecycleHierarchy(p, exec, cancel, curHotel, curBus, curFlight, bookingRef, pnr, srdvStatus, isCancelled, cancelCharges, refundAmt);
 
@@ -351,11 +370,6 @@ namespace PickNBook.Api.Controllers.Admin
                 .OrderByDescending(e => e.Id)
                 .FirstOrDefaultAsync();
 
-            var cancel = await _dbContext.BookingCancellations.AsNoTracking()
-                .Where(c => c.PaymentId == id)
-                .OrderByDescending(c => c.Id)
-                .FirstOrDefaultAsync();
-
             HotelReservation? hotel = null;
             BusReservation? bus = null;
             FlightReservation? flight = null;
@@ -379,6 +393,13 @@ namespace PickNBook.Api.Controllers.Admin
             string summary = hotel != null ? $"{hotel.HotelName} ({hotel.CheckInDate:dd MMM} - {hotel.CheckOutDate:dd MMM})" :
                              bus != null && bus.BusBooking != null ? $"{bus.BusBooking.FromCity} → {bus.BusBooking.ToCity} ({bus.BusBooking.OperatorName})" :
                              flight != null ? $"{flight.Airline} ({flight.FromCity} → {flight.ToCity})" : payment.BookingType;
+
+            var cancel = await _dbContext.BookingCancellations.AsNoTracking()
+                .Where(c => (c.PaymentId > 0 && c.PaymentId == id) ||
+                            (!string.IsNullOrEmpty(bookingRef) && c.BookingReference == bookingRef) ||
+                            (!string.IsNullOrEmpty(payment.PaymentReference) && c.BookingReference == payment.PaymentReference))
+                .OrderByDescending(c => c.Id)
+                .FirstOrDefaultAsync();
 
             bool isCancelled = cancel != null ||
                                string.Equals(hotel?.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) ||
@@ -469,18 +490,29 @@ namespace PickNBook.Api.Controllers.Admin
             {
                 timeline.Add(new
                 {
-                    timestamp = cancel?.CompletedAtUtc ?? payment.UpdatedAt,
+                    timestamp = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment.UpdatedAt,
                     stage = "REFUND_COMPLETED",
                     title = "Refund Settled",
                     status = "COMPLETED",
                     description = $"Refund of ₹{(refundAmt > 0 ? refundAmt : payment.FinalPayableAmount):F2} settled. Cashfree Refund ID: {payment.RefundId ?? cancel?.CashfreeRefundId ?? "N/A"}."
                 });
             }
+            else if (isCancelled && (refundAmt <= 0m || string.Equals(payment.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase) || string.Equals(cancel?.RefundStatus, "NOT_REQUIRED", StringComparison.OrdinalIgnoreCase)))
+            {
+                timeline.Add(new
+                {
+                    timestamp = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? hotel?.CancelledAt ?? bus?.CancelledAtUtc ?? flight?.CancelledAtUtc ?? payment.UpdatedAt,
+                    stage = "NO_REFUND_APPLICABLE",
+                    title = "No Refund Due",
+                    status = "COMPLETED",
+                    description = "Cancellation completed. No refund applicable based on fare rules."
+                });
+            }
             else if (string.Equals(payment.RefundStatus, "RefundOnHold", StringComparison.OrdinalIgnoreCase))
             {
                 timeline.Add(new
                 {
-                    timestamp = payment.UpdatedAt,
+                    timestamp = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment.UpdatedAt,
                     stage = "REFUND_ONHOLD",
                     title = "Refund On Hold (Gateway Balance)",
                     status = "WARNING",
@@ -493,7 +525,7 @@ namespace PickNBook.Api.Controllers.Admin
             {
                 timeline.Add(new
                 {
-                    timestamp = payment.UpdatedAt,
+                    timestamp = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment.UpdatedAt,
                     stage = "REFUND_PROCESSING",
                     title = "Refund Processing",
                     status = "PROCESSING",
@@ -696,9 +728,15 @@ namespace PickNBook.Api.Controllers.Admin
                 }
 
                 // Sync BookingCancellation if present
-                var cancelRecord = await _dbContext.BookingCancellations.FirstOrDefaultAsync(c => c.PaymentId == payment.Id);
+                var cancelRecord = await _dbContext.BookingCancellations.FirstOrDefaultAsync(c =>
+                    (c.PaymentId > 0 && c.PaymentId == payment.Id) ||
+                    (!string.IsNullOrEmpty(payment.PaymentReference) && c.BookingReference == payment.PaymentReference));
                 if (cancelRecord != null)
                 {
+                    if (cancelRecord.PaymentId == 0)
+                    {
+                        cancelRecord.PaymentId = payment.Id;
+                    }
                     cancelRecord.CashfreeRefundId = refundId;
                     if (string.Equals(payment.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase))
                     {
@@ -980,32 +1018,40 @@ namespace PickNBook.Api.Controllers.Admin
             else if (isRefundDone)
             {
                 stage5Status = "COMPLETED";
-                stage5Time = cancel?.CompletedAtUtc ?? p.UpdatedAt;
+                stage5Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? p.UpdatedAt;
                 decimal settledAmt = refundAmt > 0 ? refundAmt : p.FinalPayableAmount;
                 stage5Summary = $"Refund of ₹{settledAmt:F2} settled. Cashfree Refund ID: {p.RefundId ?? cancel?.CashfreeRefundId ?? "Settled"}.";
             }
             else if (isRefundOnHold)
             {
                 stage5Status = "WARNING";
-                stage5Time = p.UpdatedAt;
+                stage5Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? p.UpdatedAt;
                 stage5Summary = "Refund on hold at Cashfree due to insufficient merchant account balance.";
             }
             else if (isRefundProcessing)
             {
                 stage5Status = "IN_PROGRESS";
-                stage5Time = p.UpdatedAt;
+                stage5Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? p.UpdatedAt;
                 stage5Summary = $"Refund of ₹{refundAmt:F2} is processing with Cashfree.";
             }
             else if (isRefundFailed)
             {
                 stage5Status = "FAILED";
-                stage5Time = p.UpdatedAt;
+                stage5Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? p.UpdatedAt;
                 stage5Summary = p.LastError ?? "Cashfree refund failed or rejected.";
+            }
+            else if (refundAmt <= 0m && (string.Equals(p.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase) ||
+                                         string.Equals(cancel?.RefundStatus, "NOT_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
+                                         string.Equals(cancel?.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase)))
+            {
+                stage5Status = "COMPLETED";
+                stage5Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? p.UpdatedAt;
+                stage5Summary = "Booking cancellation complete. No refund applicable based on fare rules.";
             }
             else
             {
                 stage5Status = "PENDING";
-                stage5Time = p.UpdatedAt;
+                stage5Time = cancel?.CreatedAtUtc ?? cancel?.CompletedAtUtc ?? p.UpdatedAt;
                 stage5Summary = $"Eligible refund amount: ₹{refundAmt:F2}. Awaiting admin / auto refund initiation.";
             }
 
@@ -1126,6 +1172,15 @@ namespace PickNBook.Api.Controllers.Admin
                     canonicalLabel = "Cancelled - Refund Processing";
                     isTerminal = false;
                     nextAction = "Monitor Cashfree refund status";
+                }
+                else if (refundAmt <= 0m && (string.Equals(p.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase) ||
+                                             string.Equals(cancel?.RefundStatus, "NOT_REQUIRED", StringComparison.OrdinalIgnoreCase) ||
+                                             string.Equals(cancel?.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase)))
+                {
+                    canonicalStatus = "CANCELLED_NO_REFUND";
+                    canonicalLabel = "Cancelled (No Refund Applicable)";
+                    isTerminal = true;
+                    nextAction = "None (Cancellation complete, no refund due)";
                 }
                 else
                 {

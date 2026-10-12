@@ -419,7 +419,7 @@ namespace PickNBook.Api.Helpers
             else if (isRefundDone)
             {
                 stage4Status = "COMPLETED";
-                stage4Time = cancel?.CompletedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
+                stage4Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
                 decimal settledAmt = refundAmount > 0 ? refundAmount : totalPaid;
                 stage4Summary = $"Refund of ₹{settledAmt:F2} settled to your source payment method. Ref: {payment?.RefundId ?? cancel?.CashfreeRefundId ?? "Settled"}.";
 
@@ -432,10 +432,16 @@ namespace PickNBook.Api.Helpers
                     Description = $"Refund of ₹{settledAmt:F2} successfully settled. Gateway Ref: {payment?.RefundId ?? cancel?.CashfreeRefundId ?? "Completed"}."
                 });
             }
+            else if (refundAmount <= 0m && (string.Equals(payment?.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase) || string.Equals(cancel?.RefundStatus, "NOT_REQUIRED", StringComparison.OrdinalIgnoreCase)))
+            {
+                stage4Status = "COMPLETED";
+                stage4Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
+                stage4Summary = "Booking cancellation complete. No refund applicable based on fare rules.";
+            }
             else if (isRefundOnHold)
             {
                 stage4Status = "WARNING";
-                stage4Time = payment?.UpdatedAt ?? DateTime.UtcNow;
+                stage4Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
                 stage4Summary = "Refund is queued with payment gateway and will be released shortly.";
 
                 timeline.Add(new UserBookingTimelineEventDto
@@ -450,7 +456,7 @@ namespace PickNBook.Api.Helpers
             else if (isRefundProcessing)
             {
                 stage4Status = "IN_PROGRESS";
-                stage4Time = payment?.UpdatedAt ?? DateTime.UtcNow;
+                stage4Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
                 stage4Summary = $"Refund of ₹{refundAmount:F2} is processing with your payment provider.";
 
                 timeline.Add(new UserBookingTimelineEventDto
@@ -465,13 +471,13 @@ namespace PickNBook.Api.Helpers
             else if (isRefundFailed)
             {
                 stage4Status = "FAILED";
-                stage4Time = payment?.UpdatedAt ?? DateTime.UtcNow;
+                stage4Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
                 stage4Summary = payment?.LastError ?? "Refund encountered an issue. Support team is investigating.";
             }
             else
             {
                 stage4Status = "PENDING";
-                stage4Time = payment?.UpdatedAt ?? DateTime.UtcNow;
+                stage4Time = cancel?.CompletedAtUtc ?? cancel?.CreatedAtUtc ?? payment?.UpdatedAt ?? DateTime.UtcNow;
                 stage4Summary = $"Eligible refund amount: ₹{refundAmount:F2}. Queued for settlement.";
             }
 
@@ -593,6 +599,13 @@ namespace PickNBook.Api.Helpers
                     canonicalLabel = "Cancelled - Refund Processing";
                     isTerminal = false;
                     nextAction = "Processing refund with gateway";
+                }
+                else if (refundAmount <= 0m || string.Equals(payment?.RefundStatus, "NotRequired", StringComparison.OrdinalIgnoreCase) || string.Equals(cancel?.RefundStatus, "NOT_REQUIRED", StringComparison.OrdinalIgnoreCase))
+                {
+                    canonicalStatus = "CANCELLED_NO_REFUND";
+                    canonicalLabel = "Cancelled (No Refund Applicable)";
+                    isTerminal = true;
+                    nextAction = "None (Cancellation complete, no refund due)";
                 }
                 else
                 {

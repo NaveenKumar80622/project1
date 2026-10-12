@@ -3281,17 +3281,15 @@ namespace PickNBook.Api.Controllers
                             ? "Cancelled by user"
                             : reason.Trim();
 
+                        curBooking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                        curBooking.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                         if (isSupplierRefundSettled)
                         {
-                            curBooking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                            curBooking.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                             curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
                         }
                         else
                         {
-                            // Option A: Zero Financial Risk. Do not debit merchant wallet/Cashfree until supplier credits wallet.
-                            curBooking.FinancialStatus = "AWAITING_SUPPLIER_REFUND";
-                            curBooking.RefundAmountInr = 0m;
+                            curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "AWAITING_SUPPLIER_REFUND" : "NO_REFUND";
                         }
 
                         var usage = await dbContext.BusCouponUsages
@@ -3339,7 +3337,7 @@ namespace PickNBook.Api.Controllers
                         : (cancellationConfirmed
                             ? (isSupplierRefundSettled
                                 ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
-                                : "AWAITING_SUPPLIER")
+                                : (calculatedRefund.FinalCustomerRefundAmount > 0 ? "AWAITING_SUPPLIER" : "NOT_REQUIRED"))
                             : "PENDING");
 
                     var activeSeatNames = curActive
@@ -3358,10 +3356,22 @@ namespace PickNBook.Api.Controllers
                         ? "FULL"
                         : "PARTIAL";
 
+                    var payment = await dbContext.Payments.FirstOrDefaultAsync(p =>
+                        (p.BookingId == curBooking.Id || p.BookingReferenceId == curBooking.Id || (curBooking.BookingReference != null && p.PaymentReference == curBooking.BookingReference)) &&
+                        p.BookingType == "Bus");
+
+                    if (payment != null)
+                    {
+                        payment.RefundStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? (isSupplierRefundSettled ? "Pending" : "AwaitingSupplierRefund") : "NotRequired";
+                        payment.RefundReason = curBooking.CancellationReason;
+                        payment.UpdatedAt = DateTime.UtcNow;
+                    }
+
                     var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
                     {
                         BookingType = "Bus",
                         BookingReference = curBooking.BookingReference,
+                        PaymentId = payment?.Id ?? 0,
                         UserId = curBooking.UserId,
                         CreatedAtUtc = DateTime.UtcNow,
                         OriginalCustomerPaid = curBooking.TotalPriceInr,
@@ -3371,10 +3381,10 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = curBooking.CouponDiscountAmountInr + curBooking.AutoDiscountAmountInr + curBooking.FeaturedOfferDiscountAmount,
                         SupplierRefundAmount = srdvRefundAmount,
                         SupplierCancellationCharge = srdvCancellationCharge,
-                        MarkupRefunded = isSupplierRefundSettled ? calculatedRefund.MarkupRefunded : 0m,
-                        FeeRefunded = isSupplierRefundSettled ? calculatedRefund.FeeRefunded : 0m,
-                        CouponForfeited = isSupplierRefundSettled ? calculatedRefund.CouponForfeited : 0m,
-                        CustomerRefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m,
+                        MarkupRefunded = calculatedRefund.MarkupRefunded,
+                        FeeRefunded = calculatedRefund.FeeRefunded,
+                        CouponForfeited = calculatedRefund.CouponForfeited,
+                        CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                         Status = auditStatus,
                         CancellationType = calculatedCancellationType,
                         RefundStatus = refundAuditStatus,
@@ -3391,7 +3401,6 @@ namespace PickNBook.Api.Controllers
 
                     if (cancellationConfirmed && isSupplierRefundSettled && calculatedRefund.FinalCustomerRefundAmount > 0 && int.TryParse(curBooking.UserId, out int uId))
                     {
-                        var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == curBooking.UserId && p.BookingReferenceId == curBooking.Id && p.BookingType == "Bus");
                         var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
                         {
                             UserId = uId,
@@ -3412,6 +3421,14 @@ namespace PickNBook.Api.Controllers
                         cancellationAudit.GatewayRefundAmount = routeRes.GatewayRefunded;
                         cancellationAudit.CashfreeRefundId = routeRes.CashfreeRefundId;
                         cancellationAudit.RefundStatus = routeRes.RefundStatus;
+
+                        if (payment != null)
+                        {
+                            payment.RefundStatus = routeRes.RefundStatus;
+                            payment.RefundId = routeRes.CashfreeRefundId;
+                            payment.UpdatedAt = DateTime.UtcNow;
+                        }
+
                         await dbContext.SaveChangesAsync();
                     }
 
@@ -3713,16 +3730,15 @@ namespace PickNBook.Api.Controllers
 
                     if (cancellationConfirmed)
                     {
+                        curBooking.CancellationChargeInr = (curBooking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                        curBooking.RefundAmountInr = (curBooking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
                         if (isSupplierRefundSettled)
                         {
-                            curBooking.CancellationChargeInr = (curBooking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                            curBooking.RefundAmountInr = (curBooking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
                             curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
                         }
                         else
                         {
-                            // Option A: Zero Financial Risk. Wait for background poller to confirm supplier refund
-                            curBooking.FinancialStatus = "AWAITING_SUPPLIER_REFUND";
+                            curBooking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "AWAITING_SUPPLIER_REFUND" : "NO_REFUND";
                         }
                     }
 
@@ -3751,7 +3767,7 @@ namespace PickNBook.Api.Controllers
                         : (cancellationConfirmed
                             ? (isSupplierRefundSettled
                                 ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED")
-                                : "AWAITING_SUPPLIER")
+                                : (calculatedRefund.FinalCustomerRefundAmount > 0 ? "AWAITING_SUPPLIER" : "NOT_REQUIRED"))
                             : "PENDING");
 
                     string auditStatus = requiresManualReview
@@ -3762,10 +3778,22 @@ namespace PickNBook.Api.Controllers
                                 : "AwaitingSupplierRefund")
                             : "CANCEL_IN_PROCESS");
 
+                    var payment = await dbContext.Payments.FirstOrDefaultAsync(p =>
+                        (p.BookingId == curBooking.Id || p.BookingReferenceId == curBooking.Id || (curBooking.BookingReference != null && p.PaymentReference == curBooking.BookingReference)) &&
+                        p.BookingType == "Bus");
+
+                    if (payment != null)
+                    {
+                        payment.RefundStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? (isSupplierRefundSettled ? "Pending" : "AwaitingSupplierRefund") : "NotRequired";
+                        payment.RefundReason = !string.IsNullOrWhiteSpace(request.Reason) ? request.Reason.Trim() : curBooking.CancellationReason;
+                        payment.UpdatedAt = DateTime.UtcNow;
+                    }
+
                     var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
                     {
                         BookingType = "Bus",
                         BookingReference = curBooking.BookingReference,
+                        PaymentId = payment?.Id ?? 0,
                         UserId = curBooking.UserId,
                         CreatedAtUtc = DateTime.UtcNow,
                         OriginalCustomerPaid = refundInput.OriginalCustomerPaid,
@@ -3775,10 +3803,10 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = refundInput.DiscountAmount,
                         SupplierRefundAmount = srdvRefundAmount,
                         SupplierCancellationCharge = srdvCancellationCharge,
-                        MarkupRefunded = isSupplierRefundSettled ? calculatedRefund.MarkupRefunded : 0m,
-                        FeeRefunded = isSupplierRefundSettled ? calculatedRefund.FeeRefunded : 0m,
-                        CouponForfeited = isSupplierRefundSettled ? calculatedRefund.CouponForfeited : 0m,
-                        CustomerRefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m,
+                        MarkupRefunded = calculatedRefund.MarkupRefunded,
+                        FeeRefunded = calculatedRefund.FeeRefunded,
+                        CouponForfeited = calculatedRefund.CouponForfeited,
+                        CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                         Status = auditStatus,
                         CancellationType = cancellationType,
                         RefundStatus = refundAuditStatus,
@@ -5563,16 +5591,15 @@ Refund: ₹{currentRefundAmount}
 
             if (cancellationConfirmed)
             {
+                booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                booking.RefundAmountInr = (booking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
                 if (isSupplierRefundSettled)
                 {
-                    booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                    booking.RefundAmountInr = (booking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
                     booking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING_REFUND" : "NO_REFUND";
                 }
                 else
                 {
-                    // Option A: Zero Financial Risk. Wait for background poller to confirm supplier refund
-                    booking.FinancialStatus = "AWAITING_SUPPLIER_REFUND";
+                    booking.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "AWAITING_SUPPLIER_REFUND" : "NO_REFUND";
                 }
             }
 
@@ -5580,13 +5607,25 @@ Refund: ₹{currentRefundAmount}
                 ? (isSupplierRefundSettled ? "PendingReview" : "AwaitingSupplierRefund")
                 : "CANCEL_IN_PROCESS";
             string refundAuditStatus = cancellationConfirmed
-                ? (isSupplierRefundSettled ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED") : "AWAITING_SUPPLIER")
+                ? (isSupplierRefundSettled ? (calculatedRefund.FinalCustomerRefundAmount > 0 ? "PENDING" : "NOT_REQUIRED") : (calculatedRefund.FinalCustomerRefundAmount > 0 ? "AWAITING_SUPPLIER" : "NOT_REQUIRED"))
                 : "PENDING";
+
+            var payment = await dbContext.Payments.FirstOrDefaultAsync(p =>
+                (p.BookingId == booking.Id || p.BookingReferenceId == booking.Id || (booking.BookingReference != null && p.PaymentReference == booking.BookingReference)) &&
+                p.BookingType == "Bus");
+
+            if (payment != null)
+            {
+                payment.RefundStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? (isSupplierRefundSettled ? "Pending" : "AwaitingSupplierRefund") : "NotRequired";
+                payment.RefundReason = !string.IsNullOrWhiteSpace(request.Remarks) ? request.Remarks.Trim() : booking.CancellationReason;
+                payment.UpdatedAt = DateTime.UtcNow;
+            }
 
             var cancellationAudit = new PickNBook.Api.Models.Entities.BookingCancellation
             {
                 BookingType = "Bus",
                 BookingReference = booking.BookingReference,
+                PaymentId = payment?.Id ?? 0,
                 UserId = booking.UserId,
                 CreatedAtUtc = DateTime.UtcNow,
                 OriginalCustomerPaid = refundInput.OriginalCustomerPaid,
@@ -5596,10 +5635,10 @@ Refund: ₹{currentRefundAmount}
                 DiscountAmount = refundInput.DiscountAmount,
                 SupplierRefundAmount = srdvRefundAmount,
                 SupplierCancellationCharge = srdvCancellationCharge,
-                MarkupRefunded = isSupplierRefundSettled ? calculatedRefund.MarkupRefunded : 0m,
-                FeeRefunded = isSupplierRefundSettled ? calculatedRefund.FeeRefunded : 0m,
-                CouponForfeited = isSupplierRefundSettled ? calculatedRefund.CouponForfeited : 0m,
-                CustomerRefundAmount = (cancellationConfirmed && isSupplierRefundSettled) ? calculatedRefund.FinalCustomerRefundAmount : 0m,
+                MarkupRefunded = calculatedRefund.MarkupRefunded,
+                FeeRefunded = calculatedRefund.FeeRefunded,
+                CouponForfeited = calculatedRefund.CouponForfeited,
+                CustomerRefundAmount = cancellationConfirmed ? calculatedRefund.FinalCustomerRefundAmount : 0m,
                 Status = auditStatus,
                 CancellationType = cancellationType,
                 RefundStatus = refundAuditStatus,
