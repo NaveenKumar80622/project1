@@ -413,15 +413,33 @@ namespace PickNBook.Api.Services.Implementations
             {
                 response = cityCandidates
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
-                    .GroupBy(x => x.CityCode ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .GroupBy(x =>
+                        string.Equals(x.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.StateName)
+                            ? $"{BusCityCacheService.NormalizePhonetic(x.BaseCityName ?? x.CityName)}|{x.StateName.Trim()}".ToLowerInvariant()
+                            : (x.CityCode ?? x.CityName.Trim()),
+                        StringComparer.OrdinalIgnoreCase)
                     .Select(g => {
-                        var best = g.OrderBy(x => x.MatchTier).ThenByDescending(x => x.UsageCount).First();
+                        var best = g
+                            .OrderBy(x => x.MatchTier)
+                            .ThenByDescending(x => x.UsageCount)
+                            .ThenByDescending(x => x.ChildStopCount)
+                            .ThenBy(x => (string.IsNullOrEmpty(x.SubArea) || string.Equals(x.SubArea, x.StateName, StringComparison.OrdinalIgnoreCase)) ? 0 : 1)
+                            .ThenBy(x => x.CityName.Length)
+                            .First();
+
+                        var cleanCityName = (string.Equals(best.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) &&
+                                             !string.IsNullOrWhiteSpace(best.SubArea) &&
+                                             string.Equals(best.SubArea, best.StateName, StringComparison.OrdinalIgnoreCase) &&
+                                             !string.IsNullOrWhiteSpace(best.BaseCityName))
+                            ? best.BaseCityName
+                            : best.CityName;
+
                         return new PlaceSuggestionDto
                         {
-                            CityName = best.CityName,
-                            BaseCityName = best.BaseCityName,
+                            CityName = cleanCityName,
+                            BaseCityName = best.BaseCityName ?? cleanCityName,
                             SubArea = best.SubArea,
-                            DisplayName = best.DisplayName ?? (!string.IsNullOrWhiteSpace(best.StateName) ? $"{best.CityName}, {best.StateName}" : best.CityName),
+                            DisplayName = !string.IsNullOrWhiteSpace(best.StateName) ? $"{cleanCityName}, {best.StateName}" : cleanCityName,
                             CityCode = best.CityCode,
                             CityId = best.CityId ?? best.CityCode,
                             LocationType = best.LocationType ?? "CITY",
@@ -451,15 +469,34 @@ namespace PickNBook.Api.Services.Implementations
             {
                 response = cityCandidates
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
-                    .GroupBy(x => x.CityCode ?? x.CityName.Trim(), StringComparer.OrdinalIgnoreCase)
+                    .GroupBy(x =>
+                        string.Equals(x.TripType, "bus", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(x.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(x.StateName)
+                            ? $"{BusCityCacheService.NormalizePhonetic(x.BaseCityName ?? x.CityName)}|{x.StateName.Trim()}".ToLowerInvariant()
+                            : (x.AirportCode ?? x.CityCode ?? x.CityName.Trim()),
+                        StringComparer.OrdinalIgnoreCase)
                     .Select(g => {
-                        var best = g.OrderBy(x => x.MatchTier).ThenByDescending(x => x.UsageCount).First();
+                        var best = g
+                            .OrderBy(x => x.MatchTier)
+                            .ThenByDescending(x => x.UsageCount)
+                            .ThenByDescending(x => x.ChildStopCount)
+                            .First();
+
+                        var cleanCityName = (string.Equals(best.TripType, "bus", StringComparison.OrdinalIgnoreCase) &&
+                                             string.Equals(best.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) &&
+                                             !string.IsNullOrWhiteSpace(best.SubArea) &&
+                                             string.Equals(best.SubArea, best.StateName, StringComparison.OrdinalIgnoreCase) &&
+                                             !string.IsNullOrWhiteSpace(best.BaseCityName))
+                            ? best.BaseCityName
+                            : best.CityName;
+
                         return new PlaceSuggestionDto
                         {
-                            CityName = best.CityName,
-                            BaseCityName = best.BaseCityName,
+                            CityName = cleanCityName,
+                            BaseCityName = best.BaseCityName ?? cleanCityName,
                             SubArea = best.SubArea,
-                            DisplayName = best.DisplayName,
+                            DisplayName = !string.IsNullOrWhiteSpace(best.StateName) ? $"{cleanCityName}, {best.StateName}" : cleanCityName,
                             UsageCount = g.Sum(x => x.UsageCount),
                             AirportCode = best.AirportCode,
                             AirportName = best.AirportName,

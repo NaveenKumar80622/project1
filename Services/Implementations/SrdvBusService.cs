@@ -178,7 +178,10 @@ namespace PickNBook.Api.Services
 
         public async Task<string> SearchBusesProxyAsync(BusSearchProxyRequestDto request)
         {
-            var cacheKey = $"srdv:bus:search:{request.FromCityCode}:{request.ToCityCode}:{request.DepartDate}";
+            var canonicalFrom = _cityCache != null ? _cityCache.GetCanonicalCityCode(request.FromCityCode) : request.FromCityCode;
+            var canonicalTo = _cityCache != null ? _cityCache.GetCanonicalCityCode(request.ToCityCode) : request.ToCityCode;
+
+            var cacheKey = $"srdv:bus:search:{canonicalFrom}:{canonicalTo}:{request.DepartDate}";
             if (_cache.TryGetValue(cacheKey, out string? cachedResponse) && !string.IsNullOrWhiteSpace(cachedResponse))
             {
                 return cachedResponse;
@@ -188,11 +191,37 @@ namespace PickNBook.Api.Services
             bool isSameDay = DateOnly.TryParseExact(request.DepartDate, new[] { "yyyy-MM-dd", "dd/MM/yyyy" }, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dDate) && dDate <= todayIst;
             var busCacheTtl = isSameDay ? TimeSpan.FromMinutes(1) : TimeSpan.FromMinutes(5);
 
-            var fromAliases = _cityCache != null ? _cityCache.GetCityAliases(request.FromCityCode) : new[] { request.FromCityCode };
-            var toAliases = _cityCache != null ? _cityCache.GetCityAliases(request.ToCityCode) : new[] { request.ToCityCode };
+            // 1. Check for phonetic duplicate twin city IDs (e.g. Proddatur 262 and 32663)
+            var fromTwins = _cityCache != null ? _cityCache.GetTwinCityAliases(canonicalFrom) : new[] { canonicalFrom };
+            var toTwins = _cityCache != null ? _cityCache.GetTwinCityAliases(canonicalTo) : new[] { canonicalTo };
 
-            // 1. Primary-first search: Query the exact requested city codes
-            var primaryResponse = await ExecuteSingleSearchProxyAsync(request.FromCityCode, request.ToCityCode, request.DepartDate);
+            if (fromTwins.Count > 1 || toTwins.Count > 1)
+            {
+                var twinTasks = new List<Task<string>>();
+                foreach (var fCode in fromTwins)
+                {
+                    foreach (var tCode in toTwins)
+                    {
+                        twinTasks.Add(ExecuteSingleSearchProxyAsync(fCode, tCode, request.DepartDate));
+                    }
+                }
+
+                var twinResults = await Task.WhenAll(twinTasks);
+                var mergedTwins = MergeBusSearchResults(twinResults);
+
+                if (!string.IsNullOrWhiteSpace(mergedTwins) && mergedTwins.Contains("\"ErrorCode\":0"))
+                {
+                    _cache.Set(cacheKey, mergedTwins, busCacheTtl);
+                }
+
+                return mergedTwins;
+            }
+
+            var fromAliases = _cityCache != null ? _cityCache.GetCityAliases(canonicalFrom) : new[] { canonicalFrom };
+            var toAliases = _cityCache != null ? _cityCache.GetCityAliases(canonicalTo) : new[] { canonicalTo };
+
+            // 2. Primary-first search: Query the exact requested city codes
+            var primaryResponse = await ExecuteSingleSearchProxyAsync(canonicalFrom, canonicalTo, request.DepartDate);
 
             // Check if primary search returned valid buses
             bool hasPrimaryBuses = !string.IsNullOrWhiteSpace(primaryResponse) && 
@@ -208,13 +237,13 @@ namespace PickNBook.Api.Services
                 return primaryResponse;
             }
 
-            // 2. Fallback: Only if primary search returned 0 buses, query secondary aliases
+            // 3. Fallback: Only if primary search returned 0 buses, query secondary aliases
             var tasks = new List<Task<string>>();
             foreach (var fCode in fromAliases)
             {
                 foreach (var tCode in toAliases)
                 {
-                    if (fCode == request.FromCityCode && tCode == request.ToCityCode)
+                    if (fCode == canonicalFrom && tCode == canonicalTo)
                     {
                         tasks.Add(Task.FromResult(primaryResponse));
                     }

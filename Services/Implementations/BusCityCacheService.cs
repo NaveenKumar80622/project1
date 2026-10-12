@@ -24,6 +24,8 @@ namespace PickNBook.Api.Services
         private Dictionary<long, string> _cityIdToName = new();
         private Dictionary<string, long> _cityNameToId = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<long, List<long>> _cityAliases = new();
+        private Dictionary<long, long> _canonicalCityMap = new();
+        private Dictionary<long, List<long>> _twinCityAliases = new();
 
         private class CachedBusCity
         {
@@ -212,12 +214,25 @@ namespace PickNBook.Api.Services
 
                 // Build aliases dictionary
                 var aliases = new Dictionary<long, List<long>>();
+                var canonicalMap = new Dictionary<long, long>();
+                var twinAliases = new Dictionary<long, List<long>>();
 
                 // 1. Reciprocal aliases for phonetic clusters within same state
                 foreach (var group in clusterMap.Values)
                 {
                     if (group.Count > 1)
                     {
+                        var canonicalId = group
+                            .OrderByDescending(id => childCounts.GetValueOrDefault(id, 0))
+                            .ThenBy(id => id)
+                            .First();
+
+                        foreach (var id in group)
+                        {
+                            canonicalMap[id] = canonicalId;
+                            twinAliases[id] = group;
+                        }
+
                         foreach (var id in group)
                         {
                             if (!aliases.TryGetValue(id, out var list))
@@ -267,14 +282,33 @@ namespace PickNBook.Api.Services
                     }
                 }
 
+                // Update SearchCityId to canonical hub for all mapped cities
+                foreach (var dto in cities)
+                {
+                    if (long.TryParse(dto.CityCode, out var cid) && canonicalMap.TryGetValue(cid, out var canonId))
+                    {
+                        dto.SearchCityId = canonId.ToString();
+                    }
+                }
+
+                foreach (var c in cached)
+                {
+                    if (long.TryParse(c.CityCode, out var cid) && canonicalMap.TryGetValue(cid, out var canonId))
+                    {
+                        c.Dto.SearchCityId = canonId.ToString();
+                    }
+                }
+
                 BusCities = cities;
                 _cachedCities = cached;
                 _validCityIds = validIds;
                 _cityIdToName = idToName;
                 _cityNameToId = nameToId;
                 _cityAliases = aliases;
+                _canonicalCityMap = canonicalMap;
+                _twinCityAliases = twinAliases;
 
-                _logger.LogInformation($"Loaded {BusCities.Count} Bus City Codes and {_cityAliases.Count} aliased cluster IDs from Database.");
+                _logger.LogInformation($"Loaded {BusCities.Count} Bus City Codes, {_cityAliases.Count} aliased cluster IDs, and {_canonicalCityMap.Count} canonical twin IDs from Database.");
             }
             catch (Exception ex)
             {
@@ -312,6 +346,20 @@ namespace PickNBook.Api.Services
             if (_cityAliases.TryGetValue(cityId, out var aliases) && aliases.Count > 0)
             {
                 return aliases;
+            }
+            return new[] { cityId };
+        }
+
+        public long GetCanonicalCityCode(long cityId)
+        {
+            return _canonicalCityMap.TryGetValue(cityId, out var canonical) ? canonical : cityId;
+        }
+
+        public IReadOnlyList<long> GetTwinCityAliases(long cityId)
+        {
+            if (_twinCityAliases.TryGetValue(cityId, out var twins) && twins.Count > 1)
+            {
+                return twins;
             }
             return new[] { cityId };
         }
@@ -374,6 +422,30 @@ namespace PickNBook.Api.Services
                             UsageCount = usage,
                             MatchTier = 1
                         };
+                    })
+                    .GroupBy(x =>
+                        string.Equals(x.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.StateName)
+                            ? $"{NormalizePhonetic(x.BaseCityName ?? x.CityName)}|{x.StateName.Trim()}".ToLowerInvariant()
+                            : (x.CityCode ?? x.CityName.Trim()),
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(g => {
+                        var best = g
+                            .OrderByDescending(x => x.UsageCount)
+                            .ThenByDescending(x => x.ChildStopCount)
+                            .ThenBy(x => (string.IsNullOrEmpty(x.SubArea) || string.Equals(x.SubArea, x.StateName, StringComparison.OrdinalIgnoreCase)) ? 0 : 1)
+                            .ThenBy(x => x.CityName.Length)
+                            .First();
+
+                        if (string.Equals(best.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(best.SubArea) &&
+                            string.Equals(best.SubArea, best.StateName, StringComparison.OrdinalIgnoreCase) &&
+                            !string.IsNullOrWhiteSpace(best.BaseCityName))
+                        {
+                            best.CityName = best.BaseCityName;
+                            best.DisplayName = !string.IsNullOrWhiteSpace(best.StateName) ? $"{best.BaseCityName}, {best.StateName}" : best.BaseCityName;
+                        }
+
+                        return best;
                     })
                     .OrderByDescending(x => x.UsageCount)
                     .ThenBy(x => (string.IsNullOrEmpty(x.SubArea) || string.Equals(x.SubArea, x.StateName, StringComparison.OrdinalIgnoreCase)) ? 0 : 1)
@@ -471,11 +543,34 @@ namespace PickNBook.Api.Services
             }
 
             return matches
+                .GroupBy(x =>
+                    string.Equals(x.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(x.StateName)
+                        ? $"{NormalizePhonetic(x.BaseCityName ?? x.CityName)}|{x.StateName.Trim()}".ToLowerInvariant()
+                        : (x.CityCode ?? x.CityName.Trim()),
+                    StringComparer.OrdinalIgnoreCase)
+                .Select(g => {
+                    var best = g
+                        .OrderBy(x => x.MatchTier)
+                        .ThenByDescending(x => x.UsageCount)
+                        .ThenByDescending(x => x.ChildStopCount)
+                        .ThenBy(x => (string.IsNullOrEmpty(x.SubArea) || string.Equals(x.SubArea, x.StateName, StringComparison.OrdinalIgnoreCase)) ? 0 : 1)
+                        .ThenBy(x => x.CityName.Length)
+                        .First();
+
+                    if (string.Equals(best.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(best.SubArea) &&
+                        string.Equals(best.SubArea, best.StateName, StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(best.BaseCityName))
+                    {
+                        best.CityName = best.BaseCityName;
+                        best.DisplayName = !string.IsNullOrWhiteSpace(best.StateName) ? $"{best.BaseCityName}, {best.StateName}" : best.BaseCityName;
+                    }
+
+                    return best;
+                })
                 .OrderBy(x => x.MatchTier)
                 .ThenByDescending(x => x.UsageCount)
-                // Primary Hub Priority: A pure city or state-qualified city ranks above a localized sub-area (e.g. Anantapur > Ananthapur (Sagara))
                 .ThenBy(x => (string.IsNullOrEmpty(x.SubArea) || string.Equals(x.SubArea, x.StateName, StringComparison.OrdinalIgnoreCase)) ? 0 : 1)
-                // Major District Hub Priority: Cities with child boarding stops rank above 0-stop locations
                 .ThenByDescending(x => x.ChildStopCount)
                 .ThenByDescending(x => string.Equals(x.LocationType, "CITY", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
                 .ThenBy(x => x.CityName.Length)
