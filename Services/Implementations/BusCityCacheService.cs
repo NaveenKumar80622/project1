@@ -40,6 +40,7 @@ namespace PickNBook.Api.Services
             public bool IsCity { get; set; }
             public long? ParentCityId { get; set; }
             public string? ParentCityName { get; set; }
+            public string? ParentCityNameLower { get; set; }
             public int ChildStopCount { get; set; }
         }
 
@@ -208,6 +209,7 @@ namespace PickNBook.Api.Services
                         IsCity = string.Equals(c.Type, "CITY", StringComparison.OrdinalIgnoreCase) || c.ParentCityId == null || c.ParentCityId == 0,
                         ParentCityId = c.ParentCityId,
                         ParentCityName = parentName,
+                        ParentCityNameLower = parentName?.ToLowerInvariant(),
                         ChildStopCount = childCount
                     });
                 }
@@ -400,6 +402,7 @@ namespace PickNBook.Api.Services
             if (string.IsNullOrWhiteSpace(query))
             {
                 return _cachedCities
+                    .Where(c => c.IsCity) // Default popular suggestions only show main cities
                     .Select(c => {
                         var usage = popularityMap != null && popularityMap.TryGetValue(c.Dto.CityName, out var pop) ? (int)pop : 1;
                         return new PlaceSuggestionDto
@@ -467,51 +470,97 @@ namespace PickNBook.Api.Services
             {
                 int tier = 999;
 
-                // Tier 1: Exact match on CityCode or full CityName
-                if (item.CityCode == queryLower || item.CityNameLower == queryLower)
+                // Option B: Smart Area / Boarding Point Matching
+                if (!item.IsCity)
                 {
-                    tier = 1;
-                }
-                // Tier 2: Base city exact match (raw or phonetic transliteration, e.g. "ananthapur" matches "Anantapur")
-                else if (item.BaseCityNameLower == queryLower || (!string.IsNullOrEmpty(queryPhonetic) && item.NormalizedBaseCityLower == queryPhonetic))
-                {
-                    tier = 2;
-                }
-                // Tier 3: Base city prefix match (raw or phonetic)
-                else if (item.BaseCityNameLower.StartsWith(queryLower) || (!string.IsNullOrEmpty(queryPhonetic) && item.NormalizedBaseCityLower.StartsWith(queryPhonetic)))
-                {
-                    tier = 3;
-                }
-                // Tier 4: Qualifier / Parenthesis exact or prefix match (e.g. "sagara" or "sag" -> "Ananthapur (Sagara)")
-                else if (!string.IsNullOrEmpty(item.SubAreaLower) &&
-                         (item.SubAreaLower == queryLower || item.SubAreaLower.StartsWith(queryLower)))
-                {
-                    tier = 4;
-                }
-                // Tier 5: Multi-token match across full name + state
-                else if (queryTokens.Length > 1 && queryTokens.All(qt => item.SearchTokens.Any(st => st.StartsWith(qt))))
-                {
-                    tier = 5;
-                }
-                // Tier 6: Substring match in CityName or StateName (for queries >= 2 chars)
-                else if (queryLower.Length >= 2 && (item.CityNameLower.Contains(queryLower) || item.StateNameLower.Contains(queryLower)))
-                {
-                    tier = 6;
-                }
-                // Tier 7: Fuzzy match (Levenshtein distance <= 2, queries >= 3 chars)
-                else if (queryLower.Length >= 3)
-                {
-                    var distBase = FuzzyMatcher.ComputeLevenshteinDistance(queryLower, item.BaseCityNameLower);
-                    if (distBase <= 2)
+                    // 1. Guard: If the query matches the parent city name (e.g. "pro", "proddatur", "bangalore", "chennai"),
+                    // suppress the child boarding areas so the dropdown is not flooded with local stops.
+                    // The user is searching for the city, so only the city should appear.
+                    bool isSearchingParentCity =
+                        (!string.IsNullOrEmpty(item.ParentCityNameLower) &&
+                         (item.ParentCityNameLower.StartsWith(queryLower) || queryLower.StartsWith(item.ParentCityNameLower))) ||
+                        (!string.IsNullOrEmpty(item.SubAreaLower) &&
+                         (item.SubAreaLower.StartsWith(queryLower) || queryLower.StartsWith(item.SubAreaLower)));
+
+                    if (isSearchingParentCity)
                     {
-                        tier = 7;
+                        continue;
                     }
-                    else if (!string.IsNullOrEmpty(item.SubAreaLower))
+
+                    // 2. If the user is specifically typing the AREA's own name (e.g. "madiwala", "koyambedu", "old bus stand"):
+                    if (item.BaseCityNameLower == queryLower || (!string.IsNullOrEmpty(queryPhonetic) && item.NormalizedBaseCityLower == queryPhonetic))
                     {
-                        var distSub = FuzzyMatcher.ComputeLevenshteinDistance(queryLower, item.SubAreaLower);
-                        if (distSub <= 2)
+                        tier = 2;
+                    }
+                    else if (item.BaseCityNameLower.StartsWith(queryLower) || (!string.IsNullOrEmpty(queryPhonetic) && item.NormalizedBaseCityLower.StartsWith(queryPhonetic)))
+                    {
+                        tier = 3;
+                    }
+                    else if (queryTokens.Length > 1 && queryTokens.All(qt => item.SearchTokens.Any(st => st.StartsWith(qt))))
+                    {
+                        tier = 5;
+                    }
+                    else if (queryLower.Length >= 3 && item.BaseCityNameLower.Contains(queryLower))
+                    {
+                        tier = 6;
+                    }
+                    else if (queryLower.Length >= 4)
+                    {
+                        var distBase = FuzzyMatcher.ComputeLevenshteinDistance(queryLower, item.BaseCityNameLower);
+                        if (distBase <= 1)
                         {
                             tier = 7;
+                        }
+                    }
+                }
+                else
+                {
+                    // Tier 1: Exact match on CityCode or full CityName
+                    if (item.CityCode == queryLower || item.CityNameLower == queryLower)
+                    {
+                        tier = 1;
+                    }
+                    // Tier 2: Base city exact match (raw or phonetic transliteration, e.g. "ananthapur" matches "Anantapur")
+                    else if (item.BaseCityNameLower == queryLower || (!string.IsNullOrEmpty(queryPhonetic) && item.NormalizedBaseCityLower == queryPhonetic))
+                    {
+                        tier = 2;
+                    }
+                    // Tier 3: Base city prefix match (raw or phonetic)
+                    else if (item.BaseCityNameLower.StartsWith(queryLower) || (!string.IsNullOrEmpty(queryPhonetic) && item.NormalizedBaseCityLower.StartsWith(queryPhonetic)))
+                    {
+                        tier = 3;
+                    }
+                    // Tier 4: Qualifier / Parenthesis exact or prefix match (e.g. "sagara" or "sag" -> "Ananthapur (Sagara)")
+                    else if (!string.IsNullOrEmpty(item.SubAreaLower) &&
+                             (item.SubAreaLower == queryLower || item.SubAreaLower.StartsWith(queryLower)))
+                    {
+                        tier = 4;
+                    }
+                    // Tier 5: Multi-token match across full name + state
+                    else if (queryTokens.Length > 1 && queryTokens.All(qt => item.SearchTokens.Any(st => st.StartsWith(qt))))
+                    {
+                        tier = 5;
+                    }
+                    // Tier 6: Substring match in CityName or StateName (for queries >= 2 chars)
+                    else if (queryLower.Length >= 2 && (item.CityNameLower.Contains(queryLower) || item.StateNameLower.Contains(queryLower)))
+                    {
+                        tier = 6;
+                    }
+                    // Tier 7: Fuzzy match (Levenshtein distance <= 2, queries >= 3 chars)
+                    else if (queryLower.Length >= 3)
+                    {
+                        var distBase = FuzzyMatcher.ComputeLevenshteinDistance(queryLower, item.BaseCityNameLower);
+                        if (distBase <= 2)
+                        {
+                            tier = 7;
+                        }
+                        else if (!string.IsNullOrEmpty(item.SubAreaLower))
+                        {
+                            var distSub = FuzzyMatcher.ComputeLevenshteinDistance(queryLower, item.SubAreaLower);
+                            if (distSub <= 2)
+                            {
+                                tier = 7;
+                            }
                         }
                     }
                 }
