@@ -8,6 +8,7 @@ using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Models.Entities;
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.IO;
 using System.Linq;
 using System.Security.Claims;
@@ -66,8 +67,11 @@ public class ProfileController : BaseApiController
     /// </summary>
     [HttpGet("{id:int}")]
     [Authorize(Roles = AuthRoles.AdminOrSuperAdmin)]
-    public async Task<IActionResult> GetUserById(int id)
+    public async Task<IActionResult> GetUserById([Range(1, int.MaxValue, ErrorMessage = "Invalid user ID.")] int id)
     {
+        if (id <= 0)
+            return BadRequest(new { message = "User ID must be greater than zero." });
+
         var user = await _context.Users
             .AsNoTracking()
             .Where(u => u.Id == id)
@@ -91,11 +95,13 @@ public class ProfileController : BaseApiController
         return Ok(user);
     }
 
+    [HttpPut("")]
     [HttpPut("edit")]
     [Consumes("multipart/form-data", "application/x-www-form-urlencoded")]
     public Task<IActionResult> EditProfileFromForm([FromForm] EditProfileRequest request)
         => EditProfileCore(request.FirstName, request.LastName, request.PhoneNumber, request.Location, request.ProfileImage, null);
 
+    [HttpPut("")]
     [HttpPut("edit")]
     [Consumes("application/json", "text/json", "application/*+json")]
     [ApiExplorerSettings(IgnoreApi = true)]
@@ -141,23 +147,49 @@ public class ProfileController : BaseApiController
         if (!TryGetCurrentUserId(out var userId))
             return Unauthorized("Invalid token");
 
+        if (!ModelState.IsValid)
+            return BadRequest(ModelState);
+
         var user = await _context.Users.FindAsync(userId);
         if (user == null)
             return NotFound("User not found.");
 
         if (firstName is not null)
-            user.FirstName = firstName.Trim();
+        {
+            var trimmedFirst = firstName.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedFirst))
+                return BadRequest(new { message = "First name cannot be empty or whitespace." });
+
+            user.FirstName = trimmedFirst;
+        }
 
         if (lastName is not null)
-            user.LastName = lastName.Trim();
+        {
+            var trimmedLast = lastName.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedLast))
+                return BadRequest(new { message = "Last name cannot be empty or whitespace." });
+
+            user.LastName = trimmedLast;
+        }
 
         if (phoneNumber is not null)
-            user.PhoneNumber = phoneNumber.Trim();
+        {
+            var trimmedPhone = phoneNumber.Trim();
+            if (string.IsNullOrWhiteSpace(trimmedPhone))
+                return BadRequest(new { message = "Phone number cannot be empty or whitespace." });
+
+            var phoneTaken = await _context.Users.AnyAsync(u => u.PhoneNumber == trimmedPhone && u.Id != userId);
+            if (phoneTaken)
+                return Conflict(new { message = "This phone number is already registered to another account." });
+
+            user.PhoneNumber = trimmedPhone;
+        }
 
         if (location is not null)
             user.City = location.Trim(); // Mapped to User.City without requiring DB migration
 
-        if (profileImageFile != null)
+        // Profile image handling (optional)
+        if (profileImageFile != null && profileImageFile.Length > 0)
         {
             var (isValid, errorMessage, relativePath) = await SaveProfileImageAsync(profileImageFile);
             if (!isValid)
@@ -203,6 +235,9 @@ public class ProfileController : BaseApiController
         if (string.IsNullOrWhiteSpace(file.ContentType) || !AllowedMimeTypes.Contains(file.ContentType.ToLowerInvariant()))
             return (false, "Invalid content type. Only image files are allowed.", null);
 
+        if (!IsValidImageHeader(file, ext))
+            return (false, "Invalid image file content. The file header does not match a valid image format.", null);
+
         var webRootPath = _environment?.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
         var uploadsFolder = Path.Combine(webRootPath, "profile-images");
 
@@ -216,6 +251,36 @@ public class ProfileController : BaseApiController
         await file.CopyToAsync(stream);
 
         return (true, null, $"/profile-images/{fileName}");
+    }
+
+    private static bool IsValidImageHeader(IFormFile file, string extension)
+    {
+        try
+        {
+            using var stream = file.OpenReadStream();
+            if (stream.Length < 4)
+                return false;
+
+            var header = new byte[12];
+            var bytesRead = stream.Read(header, 0, header.Length);
+            if (bytesRead < 4)
+                return false;
+
+            return extension switch
+            {
+                ".jpg" or ".jpeg" => header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF,
+                ".png" => header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47,
+                ".gif" => header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46,
+                ".webp" => bytesRead >= 12
+                    && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46
+                    && header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50,
+                _ => false
+            };
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private bool TryGetCurrentUserId(out int userId)
