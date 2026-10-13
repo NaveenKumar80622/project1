@@ -3056,7 +3056,7 @@ namespace PickNBook.Api.Controllers
                         x.BusBooking.DepartureTime,
                         x.CancellationReason);
 
-                    return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle, payment, fallbackPaymentId);
+                    return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle, payment, fallbackPaymentId, refundCalculator);
                 });
 
             return Ok(response);
@@ -3139,9 +3139,56 @@ namespace PickNBook.Api.Controllers
                 .OrderBy(x => x.Id)
                 .ToListAsync();
 
-            return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle, payment, fallbackPaymentId));
+            return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle, payment, fallbackPaymentId, refundCalculator));
         }
 
+        [HttpGet("bookings/{bookingId:int}/cancellation-quote")]
+        public async Task<IActionResult> GetBusCancellationQuote(
+            int bookingId,
+            [FromQuery] string? passengerIds = null)
+        {
+            if (!currentUserService.IsAuthenticated())
+            {
+                return Unauthorized("Please login to continue.");
+            }
+            var userId = currentUserService.GetUserOrGuestId();
+
+            var booking = await dbContext.BusReservations
+                .AsNoTracking()
+                .Include(x => x.BusBooking)
+                .FirstOrDefaultAsync(x => x.Id == bookingId && x.UserId == userId);
+
+            if (booking is null || booking.BusBooking is null)
+            {
+                return NotFound("Booking not found.");
+            }
+
+            var passengers = await dbContext.BusReservationPassengers
+                .AsNoTracking()
+                .Where(x => x.BusReservationId == booking.Id)
+                .OrderBy(x => x.Id)
+                .ToListAsync();
+
+            List<int>? targetPaxIds = null;
+            if (!string.IsNullOrWhiteSpace(passengerIds))
+            {
+                targetPaxIds = passengerIds
+                    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(s => int.TryParse(s, out var id) ? id : (int?)null)
+                    .Where(id => id.HasValue)
+                    .Select(id => id!.Value)
+                    .ToList();
+            }
+
+            var quote = BusCancellationPolicyHelper.CalculateQuote(
+                booking,
+                booking.BusBooking,
+                passengers,
+                refundCalculator,
+                targetPaxIds);
+
+            return Ok(quote);
+        }
 
         [HttpPost("bookings/{bookingId}/cancel")]
         public async Task<IActionResult> CancelBusBooking(
@@ -3174,7 +3221,8 @@ namespace PickNBook.Api.Controllers
                     return BadRequest("A cancellation request is already in progress for this booking.");
 
                 // Prevent cancellation after departure
-                if (booking.BusBooking.DepartureTime <= DateTime.UtcNow)
+                var nowIst = IndiaTimeHelper.ToIst(DateTime.UtcNow);
+                if (booking.BusBooking.DepartureTime <= nowIst)
                 {
                     return BadRequest("Cannot cancel ticket after bus departure.");
                 }
@@ -3572,7 +3620,8 @@ namespace PickNBook.Api.Controllers
                     return BadRequest("A cancellation request is already in progress for this booking.");
 
                 // Prevent cancellation after departure
-                if (booking.BusBooking.DepartureTime <= DateTime.UtcNow)
+                var nowIst = IndiaTimeHelper.ToIst(DateTime.UtcNow);
+                if (booking.BusBooking.DepartureTime <= nowIst)
                 {
                     return BadRequest("Cannot cancel ticket after bus departure.");
                 }
@@ -3997,7 +4046,8 @@ namespace PickNBook.Api.Controllers
             IReadOnlyList<BusReservationPassenger> passengers,
             PickNBook.Api.Helpers.UserBookingLifecycleResult? lifecycle = null,
             PickNBook.Api.Models.Payments.Payment? payment = null,
-            long? fallbackPaymentId = null)
+            long? fallbackPaymentId = null,
+            PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator? refundCalculator = null)
         {
             var baseDto = new BookingResponseDto
             {
@@ -4042,6 +4092,13 @@ namespace PickNBook.Api.Controllers
             var maleCount = passengers.Count(x => x.Gender.Equals("Male", StringComparison.OrdinalIgnoreCase));
             var femaleCount = passengers.Count(x => x.Gender.Equals("Female", StringComparison.OrdinalIgnoreCase));
 
+            var nowIst = IndiaTimeHelper.ToIst(DateTime.UtcNow);
+            var cancellationQuote = PickNBook.Api.Helpers.BusCancellationPolicyHelper.CalculateQuote(
+                reservation,
+                bus,
+                passengers,
+                refundCalculator);
+
             string bookingStatus;
             if (reservation.Status == "Cancelled" || reservation.Status == "Partially Cancelled" || BusBookingStatus.IsCancelled(reservation.Status))
             {
@@ -4050,11 +4107,11 @@ namespace PickNBook.Api.Controllers
             else if (reservation.Status == "Failed" || reservation.Status == "FAILED" ||
                      (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
                      ((reservation.Status == "Pending" || reservation.Status == "Initiated" || reservation.Status == "BOOKING_IN_PROGRESS" || reservation.Status == BusBookingStatus.BookingInProgress) &&
-                      (bus.DepartureTime <= DateTime.UtcNow || reservation.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
+                      (bus.DepartureTime <= nowIst || reservation.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
             {
                 bookingStatus = "Payment Failed";
             }
-            else if (bus.DepartureTime <= DateTime.UtcNow && (reservation.Status == "Booked" || reservation.Status == "SUCCESS" || reservation.Status == "Confirmed" || BusBookingStatus.IsConfirmed(reservation.Status)))
+            else if (bus.DepartureTime <= nowIst && (reservation.Status == "Booked" || reservation.Status == "SUCCESS" || reservation.Status == "Confirmed" || BusBookingStatus.IsConfirmed(reservation.Status)))
             {
                 bookingStatus = "Past";
             }
@@ -4101,15 +4158,13 @@ namespace PickNBook.Api.Controllers
                 DroppingPointTimeDisplay = (reservation.DroppingPointTime ?? bus.ArrivalTime) != default ? (reservation.DroppingPointTime ?? bus.ArrivalTime).ToString("dd MMM yyyy, hh:mm tt") : "-",
                 baseDto.Status,
                 BookingStatus = bookingStatus,
-                CanCancel =
-        (BusBookingStatus.IsConfirmed(reservation.Status) || reservation.Status == "Booked" || reservation.Status == "SUCCESS") &&
-        bus.DepartureTime > DateTime.UtcNow,
+                CanCancel = cancellationQuote.CanCancel,
 
                 TripState = bookingStatus switch
                 {
                     "Cancelled" => "Cancelled",
                     "Payment Failed" or "Failed" => "Payment Failed",
-                    _ => bus.DepartureTime <= DateTime.UtcNow ? "Completed" : "Upcoming"
+                    _ => bus.DepartureTime <= nowIst ? "Completed" : "Upcoming"
                 },
                 PendingDays = pendingDays,
                 baseDto.PassengerName,
@@ -4174,7 +4229,8 @@ namespace PickNBook.Api.Controllers
                 LifecycleHierarchy = lifecycle?.Hierarchy,
                 Timeline = lifecycle?.Timeline,
                 PaymentBreakdown = lifecycle?.PaymentBreakdown,
-                CancellationAudit = lifecycle?.CancellationAudit
+                CancellationAudit = lifecycle?.CancellationAudit,
+                CancellationPolicy = cancellationQuote
             };
         }
 
@@ -4987,100 +5043,12 @@ Refund: ₹{currentRefundAmount}
             int totalBookedSeats,
             string? policyJsonOverride = null)
         {
-            var cancelledSeats = cancelledPassengers.Count;
-            var refundablePool = netFareInr;
-            var proportionalPrice = totalBookedSeats > 0 ? (refundablePool / totalBookedSeats) * cancelledSeats : 0m;
-
-            var rawPolicy = !string.IsNullOrWhiteSpace(policyJsonOverride)
-                ? policyJsonOverride.Trim()
-                : bus?.CancellationPoliciesJson?.Trim();
-
-            if (string.IsNullOrEmpty(rawPolicy))
-            {
-                return (0m, proportionalPrice);
-            }
-
-            try
-            {
-                if (rawPolicy.StartsWith("\"") && rawPolicy.EndsWith("\""))
-                {
-                    try
-                    {
-                        var unescaped = System.Text.Json.JsonSerializer.Deserialize<string>(rawPolicy);
-                        if (!string.IsNullOrWhiteSpace(unescaped)) rawPolicy = unescaped.Trim();
-                    }
-                    catch { }
-                }
-
-                var jsonOpts = new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                List<SrdvCancellationPolicyDto>? policies = null;
-                if (rawPolicy.StartsWith("["))
-                {
-                    policies = System.Text.Json.JsonSerializer.Deserialize<List<SrdvCancellationPolicyDto>>(rawPolicy, jsonOpts);
-                }
-                else if (rawPolicy.StartsWith("{"))
-                {
-                    var single = System.Text.Json.JsonSerializer.Deserialize<SrdvCancellationPolicyDto>(rawPolicy, jsonOpts);
-                    if (single != null) policies = new List<SrdvCancellationPolicyDto> { single };
-                }
-
-                if (policies == null || !policies.Any()) return (0m, proportionalPrice);
-
-                var istNow = DateTime.UtcNow.Add(IndiaOffset);
-                var istDeparture = bus.DepartureTime.Add(IndiaOffset);
-                var hoursBeforeDeparture = (istDeparture - istNow).TotalHours;
-
-                // Sort by TimeBeforeDept to find the right tier
-                // Note: "-1" is usually the catch-all for "anytime before".
-                var orderedPolicies = policies
-                    .Select(p => new { Policy = p, Hours = double.TryParse(p.TimeBeforeDept, out var h) ? h : 0 })
-                    .OrderBy(x => x.Hours < 0 ? double.MaxValue : x.Hours)
-                    .ToList();
-
-                decimal matchedCharge = 0m;
-                string chargeType = "Percentage";
-
-                foreach (var tier in orderedPolicies)
-                {
-                    if (tier.Hours > 0 && hoursBeforeDeparture <= tier.Hours)
-                    {
-                        matchedCharge = decimal.TryParse(tier.Policy.CancellationCharge, out var c) ? c : 0m;
-                        chargeType = tier.Policy.CancellationChargeType ?? "Percentage";
-                        break;
-                    }
-                    if (tier.Hours < 0) // The -1 catch all
-                    {
-                        matchedCharge = decimal.TryParse(tier.Policy.CancellationCharge, out var c) ? c : 0m;
-                        chargeType = tier.Policy.CancellationChargeType ?? "Percentage";
-                        break;
-                    }
-                }
-
-                var cancelledBaseFare = cancelledPassengers.Sum(p => p.BaseFareInr);
-                var fareForPercentage = cancelledBaseFare > 0 ? cancelledBaseFare : proportionalPrice;
-
-                decimal cancellationCharge = 0m;
-                if (chargeType.Equals("Percentage", StringComparison.OrdinalIgnoreCase))
-                {
-                    cancellationCharge = (fareForPercentage * matchedCharge) / 100m;
-                }
-                else
-                {
-                    cancellationCharge = matchedCharge * cancelledSeats;
-                }
-
-                if (cancellationCharge > proportionalPrice) cancellationCharge = proportionalPrice;
-                if (cancellationCharge < 0) cancellationCharge = 0;
-
-                decimal refundAmount = proportionalPrice - cancellationCharge;
-                if (refundAmount < 0) refundAmount = 0;
-                
-                return (decimal.Round(refundAmount, 2), decimal.Round(cancellationCharge, 2));
-            }
-            catch
-            {
-                return (0m, proportionalPrice);
-            }
+            return PickNBook.Api.Helpers.BusCancellationPolicyHelper.CalculateSupplierRefund(
+                bus,
+                cancelledPassengers,
+                netFareInr,
+                totalBookedSeats,
+                policyJsonOverride);
         }
 
         [HttpPost("v9/BookingDetails")]
