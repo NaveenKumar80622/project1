@@ -647,11 +647,12 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         // TIMINGS & LABELS
         // =========================================
-        var boardingTime = request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime;
-        var droppingTime = request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime;
+        var boardingTime = ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
+        var droppingTime = ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
+        var departureTime = ToIst(request.DepartureTime != default ? request.DepartureTime : boardingTime);
         var boardingTimeStr = boardingTime != default ? boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var droppingTimeStr = droppingTime != default ? droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
-        var departureTimeStr = (request.DepartureTime != default ? request.DepartureTime : boardingTime).ToString("hh:mm tt");
+        var departureTimeStr = departureTime != default ? departureTime.ToString("hh:mm tt") : "-";
         var reportingTimeStr = boardingTime != default ? boardingTime.AddMinutes(-15).ToString("hh:mm tt") : "-";
         var pListSummary = request.Passengers.Count > 0
             ? string.Join(", ", request.Passengers.Select(p => $"{p.FullName} (Seat {p.SeatNumber})"))
@@ -917,11 +918,12 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         // TIMINGS
         // =========================================
-        var boardingTime = request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime;
-        var droppingTime = request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime;
+        var boardingTime = ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
+        var droppingTime = ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
+        var departureTime = ToIst(request.DepartureTime != default ? request.DepartureTime : boardingTime);
         var boardingTimeStr = boardingTime != default ? boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var droppingTimeStr = droppingTime != default ? droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
-        var departureTimeStr = (request.DepartureTime != default ? request.DepartureTime : boardingTime).ToString("hh:mm tt");
+        var departureTimeStr = departureTime != default ? departureTime.ToString("hh:mm tt") : "-";
         var effectiveCancelDate = request.CancelledAtUtc.HasValue 
             ? request.CancelledAtUtc.Value 
             : (request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow);
