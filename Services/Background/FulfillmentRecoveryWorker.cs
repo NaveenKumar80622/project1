@@ -820,6 +820,8 @@ namespace PickNBook.Api.Services.Background
                                     DurationMinutes = (int)(res.BusBooking.ArrivalTime - res.BusBooking.DepartureTime).TotalMinutes,
                                     BoardingPoint = res.BusBooking.BoardingPoint,
                                     ArrivalPoint = !string.IsNullOrWhiteSpace(res.BusBooking.DroppingPoint) ? res.BusBooking.DroppingPoint : res.BusBooking.ToCity,
+                                    BookedAtUtc = res.BookedAtUtc,
+                                    CancelledAtUtc = res.CancelledAtUtc ?? DateTime.UtcNow,
                                     Price = res.TotalPriceInr,
                                     BaseFare = res.BaseFareInr,
                                     Currency = "INR",

@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
+using PickNBook.Api.Helpers;
 using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
+using QRCoder;
 
 namespace PickNBook.Api.Services;
 
@@ -645,11 +647,11 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         // TIMINGS & LABELS
         // =========================================
-        var boardingTime = ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
-        var droppingTime = ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
+        var boardingTime = IndiaTimeHelper.ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
+        var droppingTime = IndiaTimeHelper.ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
         var boardingTimeStr = boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt");
         var droppingTimeStr = droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt");
-        var departureTimeStr = ToIst(request.DepartureTime).ToString("hh:mm tt");
+        var departureTimeStr = IndiaTimeHelper.ToIst(request.DepartureTime).ToString("hh:mm tt");
         var reportingTimeStr = boardingTime.AddMinutes(-15).ToString("hh:mm tt");
         var pListSummary = request.Passengers.Count > 0
             ? string.Join(", ", request.Passengers.Select(p => $"{p.FullName} (Seat {p.SeatNumber})"))
@@ -667,8 +669,30 @@ public class TicketEmailService : ITicketEmailService
                           $"Status: CONFIRMED\n" +
                           $"Support: https://picknbook.in/contact";
 
-        var qrImgUrl = $"https://api.qrserver.com/v1/create-qr-code/?size=95x95&data={Uri.EscapeDataString(qrPlainText)}";
-        var bookingDateStr = ToIst(DateTime.UtcNow).ToString("dd MMM yyyy, hh:mm tt");
+        byte[] qrBytes = Array.Empty<byte>();
+        try
+        {
+            using var qrGen = new QRCodeGenerator();
+            var qrData = qrGen.CreateQrCode(qrPlainText, QRCodeGenerator.ECCLevel.M);
+            using var qrCode = new PngByteQRCode(qrData);
+            qrBytes = qrCode.GetGraphic(5);
+        }
+        catch { }
+
+        var qrAttachment = qrBytes.Length > 0 ? new EmailAttachment
+        {
+            FileName = "bus_ticket_qr.png",
+            ContentType = "image/png",
+            Content = qrBytes,
+            ContentId = "bus_ticket_qr",
+            IsInline = true
+        } : null;
+
+        var qrImgSrc = qrBytes.Length > 0
+            ? $"data:image/png;base64,{Convert.ToBase64String(qrBytes)}"
+            : $"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={Uri.EscapeDataString(qrPlainText)}";
+
+        var bookingDateStr = IndiaTimeHelper.FormatIst(request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow, "dd MMM yyyy, hh:mm tt");
         var baseFareVal = request.BaseFare > 0 ? request.BaseFare : Math.Max(0, request.Price - request.GstAmount);
 
         // =========================================
@@ -776,7 +800,7 @@ public class TicketEmailService : ITicketEmailService
             </div>
           </td>
           <td class=""stack-col text-mobile-center"" style=""width: 20%; text-align: center; vertical-align: middle; padding-left: 10px; border-left: 1px dashed #e2e8f0;"">
-            <img src=""{qrImgUrl}"" width=""85"" height=""85"" alt=""Ticket QR"" style=""display: inline-block; width: 85px; height: 85px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px; background: #ffffff;"" />
+            <img src=""{qrImgSrc}"" width=""95"" height=""95"" alt=""Ticket QR"" style=""display: inline-block; width: 95px; height: 95px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 2px; background: #ffffff;"" />
             <div style=""font-size: 9px; color: #64748b; font-weight: 700; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px;"">Scan for Details</div>
           </td>
         </tr>
@@ -872,11 +896,14 @@ public class TicketEmailService : ITicketEmailService
 </body>
 </html>";
 
+        var emailAttachments = new List<EmailAttachment> { attachment };
+        if (qrAttachment != null) emailAttachments.Add(qrAttachment);
+
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
             subject,
             body,
-            [attachment]);
+            emailAttachments);
     }
 
     public async Task SendBusCancellationAsync(
@@ -930,12 +957,15 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         // TIMINGS & QR DATA
         // =========================================
-        var boardingTime = ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
-        var droppingTime = ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
+        var boardingTime = IndiaTimeHelper.ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
+        var droppingTime = IndiaTimeHelper.ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
         var boardingTimeStr = boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt");
         var droppingTimeStr = droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt");
-        var departureTimeStr = ToIst(request.DepartureTime).ToString("hh:mm tt");
-        var cancellationDateStr = ToIst(DateTime.UtcNow).ToString("dd MMM yyyy, hh:mm tt");
+        var departureTimeStr = IndiaTimeHelper.ToIst(request.DepartureTime).ToString("hh:mm tt");
+        var effectiveCancelDate = request.CancelledAtUtc.HasValue 
+            ? request.CancelledAtUtc.Value 
+            : (request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow);
+        var cancellationDateStr = IndiaTimeHelper.FormatIst(effectiveCancelDate, "dd MMM yyyy, hh:mm tt");
 
         var qrPlainText = $"PICK&BOOK BUS TICKET [CANCELLED]\n" +
                           $"Booking ID: {request.BookingReference}\n" +
@@ -944,7 +974,28 @@ public class TicketEmailService : ITicketEmailService
                           $"Refund Amount: INR {refundAmount:0.00}\n" +
                           $"Support: https://picknbook.in/contact";
 
-        var qrImgUrl = $"https://api.qrserver.com/v1/create-qr-code/?size=95x95&data={Uri.EscapeDataString(qrPlainText)}";
+        byte[] qrBytes = Array.Empty<byte>();
+        try
+        {
+            using var qrGen = new QRCodeGenerator();
+            var qrData = qrGen.CreateQrCode(qrPlainText, QRCodeGenerator.ECCLevel.M);
+            using var qrCode = new PngByteQRCode(qrData);
+            qrBytes = qrCode.GetGraphic(5);
+        }
+        catch { }
+
+        var qrAttachment = qrBytes.Length > 0 ? new EmailAttachment
+        {
+            FileName = "bus_cancelled_qr.png",
+            ContentType = "image/png",
+            Content = qrBytes,
+            ContentId = "bus_cancelled_qr",
+            IsInline = true
+        } : null;
+
+        var qrImgSrc = qrBytes.Length > 0
+            ? $"data:image/png;base64,{Convert.ToBase64String(qrBytes)}"
+            : $"https://api.qrserver.com/v1/create-qr-code/?size=250x250&data={Uri.EscapeDataString(qrPlainText)}";
 
         // =========================================
         // DYNAMIC CANCELLATION POLICY ROWS
@@ -1150,7 +1201,7 @@ public class TicketEmailService : ITicketEmailService
             </div>
           </td>
           <td class=""stack-col text-mobile-center"" style=""width: 20%; text-align: center; vertical-align: middle; padding-left: 10px; border-left: 1px dashed #e2e8f0;"">
-            <img src=""{qrImgUrl}"" width=""85"" height=""85"" alt=""Cancellation QR"" style=""display: inline-block; width: 85px; height: 85px; border: 1px solid #fee2e2; border-radius: 6px; padding: 2px; background: #ffffff;"" />
+            <img src=""{qrImgSrc}"" width=""95"" height=""95"" alt=""Cancellation QR"" style=""display: inline-block; width: 95px; height: 95px; border: 1px solid #fee2e2; border-radius: 6px; padding: 2px; background: #ffffff;"" />
             <div style=""font-size: 9px; color: #dc2626; font-weight: 800; text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px;"">VOID / CANCELLED</div>
           </td>
         </tr>
@@ -1275,11 +1326,14 @@ public class TicketEmailService : ITicketEmailService
             Content = pdfBytes
         };
 
+        var cancelAttachments = new List<EmailAttachment> { attachment };
+        if (qrAttachment != null) cancelAttachments.Add(qrAttachment);
+
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
             subject,
             body,
-            [attachment]);
+            cancelAttachments);
     }
 
     public async Task SendFlightCancellationAsync(
@@ -1379,11 +1433,7 @@ public class TicketEmailService : ITicketEmailService
 
     private static DateTime ToIst(DateTime dt)
     {
-        if (dt.Kind == DateTimeKind.Local)
-        {
-            return dt;
-        }
-        return DateTime.SpecifyKind(dt, DateTimeKind.Utc).AddHours(5.5);
+        return IndiaTimeHelper.ToIst(dt);
     }
     private static string GetCityName(string airportCode)
     {

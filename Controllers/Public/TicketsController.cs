@@ -182,17 +182,19 @@ public class TicketsController : BaseApiController
                     ? booking.BoardingPointName 
                     : booking.BusBooking.BoardingPoint;
 
-                var boardingTimeStr = booking.BoardingPointTime.HasValue 
-                    ? booking.BoardingPointTime.Value.ToString("HH:mm") 
-                    : dep.ToString("HH:mm");
+                var bTime = booking.BoardingPointTime ?? dep;
+                var boardingTimeStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "HH:mm");
+                var boardingTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "hh:mm tt");
+                var boardingDateStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "ddd, dd MMM yyyy");
 
                 var droppingName = !string.IsNullOrWhiteSpace(booking.DroppingPointName) 
                     ? booking.DroppingPointName 
                     : booking.BusBooking.DroppingPoint;
 
-                var droppingTimeStr = booking.DroppingPointTime.HasValue 
-                    ? booking.DroppingPointTime.Value.ToString("HH:mm") 
-                    : arr.ToString("HH:mm");
+                var dTime = booking.DroppingPointTime ?? arr;
+                var droppingTimeStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "HH:mm");
+                var droppingTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "hh:mm tt");
+                var droppingDateStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "ddd, dd MMM yyyy");
 
                 var paxList = passengersByBooking[booking.Id].ToList();
 
@@ -208,18 +210,30 @@ public class TicketsController : BaseApiController
                     busType = booking.BusBooking.BusType,
                     fromCity = booking.BusBooking.FromCity,
                     toCity = booking.BusBooking.ToCity,
-                    departureTime = dep,
-                    arrivalTime = arr,
+                    departureTime = DateTime.SpecifyKind(dep, DateTimeKind.Utc),
+                    departureTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(dep),
+                    departureTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dep, "dd MMM yyyy, hh:mm tt"),
+                    arrivalTime = DateTime.SpecifyKind(arr, DateTimeKind.Utc),
+                    arrivalTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(arr),
+                    arrivalTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(arr, "dd MMM yyyy, hh:mm tt"),
                     duration = durationStr,
                     boardingPoint = new
                     {
                         name = boardingName,
-                        time = boardingTimeStr
+                        time = boardingTimeStr,
+                        timeDisplay = boardingTimeDisplay,
+                        date = boardingDateStr,
+                        dateTime = DateTime.SpecifyKind(bTime, DateTimeKind.Utc),
+                        dateTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(bTime)
                     },
                     droppingPoint = new
                     {
                         name = droppingName,
-                        time = droppingTimeStr
+                        time = droppingTimeStr,
+                        timeDisplay = droppingTimeDisplay,
+                        date = droppingDateStr,
+                        dateTime = DateTime.SpecifyKind(dTime, DateTimeKind.Utc),
+                        dateTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(dTime)
                     },
                     passengers = paxList.Select(p => new
                     {
@@ -231,7 +245,10 @@ public class TicketsController : BaseApiController
                     }),
                     seatsBooked = booking.SeatsBooked > 0 ? booking.SeatsBooked : paxList.Count,
                     status = booking.Status,
-                    totalFare = booking.TotalPriceInr
+                    totalFare = booking.TotalPriceInr,
+                    bookedAtUtc = DateTime.SpecifyKind(booking.BookedAtUtc, DateTimeKind.Utc),
+                    bookedAtIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.BookedAtUtc),
+                    bookedAtDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.BookedAtUtc, "dd MMM yyyy, hh:mm tt")
                 });
             }
 

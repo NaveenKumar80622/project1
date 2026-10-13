@@ -54,6 +54,10 @@ namespace PickNBook.Api.Models.DTOs
         public decimal CouponDiscountAmount { get; set; }
         
         public string? CancellationPoliciesJson { get; set; }
+
+        // ── Chronology & Timestamps ───────────────────────────
+        public DateTime BookedAtUtc { get; set; } = DateTime.UtcNow;
+        public DateTime? CancelledAtUtc { get; set; }
     }
 
     public class BusPassengerSeatDto

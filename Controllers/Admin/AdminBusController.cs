@@ -367,6 +367,8 @@ namespace PickNBook.Api.Controllers
                             DurationMinutes = (int)(reservation.BusBooking.ArrivalTime - reservation.BusBooking.DepartureTime).TotalMinutes,
                             BoardingPoint = reservation.BusBooking.BoardingPoint,
                             ArrivalPoint = !string.IsNullOrWhiteSpace(reservation.BusBooking.DroppingPoint) ? reservation.BusBooking.DroppingPoint : reservation.BusBooking.ToCity,
+                            BookedAtUtc = reservation.BookedAtUtc,
+                            CancelledAtUtc = reservation.CancelledAtUtc ?? DateTime.UtcNow,
 
                             // Fare breakdown
                             Price = reservation.TotalPriceInr,
@@ -2109,7 +2111,10 @@ namespace PickNBook.Api.Controllers
                         x.AutoPromotionCode,
 
                         BookedAtUtc = DateTime.SpecifyKind(x.BookedAtUtc, DateTimeKind.Utc),
+                        BookingDateUtc = DateTime.SpecifyKind(x.BookedAtUtc, DateTimeKind.Utc),
+                        BookingDateIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(x.BookedAtUtc),
                         CancelledAtUtc = x.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(x.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
+                        CancelledAtIst = x.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(x.CancelledAtUtc.Value) : (DateTime?)null,
 
                         Bus = new
                         {
@@ -2120,7 +2125,10 @@ namespace PickNBook.Api.Controllers
                             x.BusBooking.FromCity,
                             x.BusBooking.ToCity,
                             DepartureTime = DateTime.SpecifyKind(x.BusBooking.DepartureTime, DateTimeKind.Utc),
-                            ArrivalTime = DateTime.SpecifyKind(x.BusBooking.ArrivalTime, DateTimeKind.Utc)
+                            DepartureTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(x.BusBooking.DepartureTime),
+                            ArrivalTime = DateTime.SpecifyKind(x.BusBooking.ArrivalTime, DateTimeKind.Utc),
+                            ArrivalTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(x.BusBooking.ArrivalTime),
+                            JourneyDateIst = DateOnly.FromDateTime(PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(x.BusBooking.DepartureTime))
                         },
 
                         Passengers = passengerRows.Select(p => new

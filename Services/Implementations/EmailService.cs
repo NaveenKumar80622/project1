@@ -60,6 +60,12 @@ namespace PickNBook.Api.Services
                     attachmentStreams.Add(stream);
 
                     var attachment = new Attachment(stream, item.FileName, item.ContentType);
+                    if (!string.IsNullOrWhiteSpace(item.ContentId))
+                    {
+                        attachment.ContentId = item.ContentId;
+                        attachment.ContentDisposition.Inline = true;
+                        attachment.ContentDisposition.DispositionType = System.Net.Mime.DispositionTypeNames.Inline;
+                    }
                     message.Attachments.Add(attachment);
                 }
 

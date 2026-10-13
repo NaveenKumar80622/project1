@@ -8,6 +8,7 @@ using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json;
+using PickNBook.Api.Helpers;
 
 namespace PickNBook.Api.Services.Implementations
 {
@@ -406,8 +407,8 @@ namespace PickNBook.Api.Services.Implementations
 
                 var seatsRequired = authoritativeBlockedSeats.Count;
 
-                var depTime = DateTime.Parse(request.DepartureTime).ToUniversalTime();
-                var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : DateTime.Parse(request.ArrivalTime).ToUniversalTime();
+                var depTime = IndiaTimeHelper.ToUtcFromIst(request.DepartureTime);
+                var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : IndiaTimeHelper.ToUtcFromIst(request.ArrivalTime);
                 if (arrTime <= depTime)
                 {
                     arrTime = arrTime.AddDays(1);
@@ -489,9 +490,9 @@ namespace PickNBook.Api.Services.Implementations
                     Status = "Booked",
                     BookedAtUtc = DateTime.UtcNow,
                     BoardingPointName = request.BoardingPointName,
-                    BoardingPointTime = request.BoardingPointTime ?? depTime,
+                    BoardingPointTime = request.BoardingPointTime.HasValue ? IndiaTimeHelper.ToUtcFromIst(request.BoardingPointTime.Value) : depTime,
                     DroppingPointName = request.DroppingPointName,
-                    DroppingPointTime = request.DroppingPointTime ?? arrTime,
+                    DroppingPointTime = request.DroppingPointTime.HasValue ? IndiaTimeHelper.ToUtcFromIst(request.DroppingPointTime.Value) : arrTime,
                     CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                 };
 
@@ -811,7 +812,8 @@ namespace PickNBook.Api.Services.Implementations
                             }).ToList(),
                             CancellationPoliciesJson = !string.IsNullOrWhiteSpace(reservation.CancellationPolicyJson) 
                                 ? reservation.CancellationPolicyJson 
-                                : bus.CancellationPoliciesJson
+                                : bus.CancellationPoliciesJson,
+                            BookedAtUtc = reservation.BookedAtUtc
                         };
 
                         try

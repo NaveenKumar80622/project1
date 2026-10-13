@@ -204,7 +204,7 @@ namespace PickNBook.Api.Controllers
                         {
                             FromCity = payload.FromCity,
                             ToCity = payload.ToCity,
-                            DepartureTime = string.IsNullOrWhiteSpace(payload.DepartureTime) ? DateTime.UtcNow.AddDays(1) : DateTime.Parse(payload.DepartureTime).ToUniversalTime(),
+                            DepartureTime = string.IsNullOrWhiteSpace(payload.DepartureTime) ? DateTime.UtcNow.AddDays(1) : PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(payload.DepartureTime),
                             OperatorName = payload.OperatorName ?? "Unknown",
                             BusType = payload.BusType ?? "Unknown",
                             PriceInr = payload.TotalFare,

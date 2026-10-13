@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
+using PickNBook.Api.Helpers;
 using PickNBook.Api.Models.DTOs;
 
 namespace PickNBook.Api.Services
@@ -11,12 +12,8 @@ namespace PickNBook.Api.Services
     public class BookingHistoryService : IBookingHistoryService
     {
         private readonly AppDbContext _context;
-        private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
 
-        private static DateTime ToIst(DateTime utcDateTime)
-        {
-            return DateTime.SpecifyKind(utcDateTime, DateTimeKind.Utc).Add(IndiaOffset);
-        }
+        private static DateTime ToIst(DateTime utcDateTime) => IndiaTimeHelper.ToIst(utcDateTime);
 
         public BookingHistoryService(AppDbContext context)
         {

@@ -1394,7 +1394,7 @@ namespace PickNBook.Api.Controllers
                 {
                     FromCity = request.FromCity,
                     ToCity = request.ToCity,
-                    DepartureTime = string.IsNullOrWhiteSpace(request.DepartureTime) ? DateTime.UtcNow.AddDays(1) : DateTime.Parse(request.DepartureTime).ToUniversalTime(),
+                    DepartureTime = string.IsNullOrWhiteSpace(request.DepartureTime) ? DateTime.UtcNow.AddDays(1) : IndiaTimeHelper.ToUtcFromIst(request.DepartureTime),
                     OperatorName = request.OperatorName ?? "Unknown",
                     BusType = request.BusType ?? "Unknown",
                     PriceInr = request.TotalFare,
@@ -1746,8 +1746,8 @@ namespace PickNBook.Api.Controllers
                                     _cache.TryGetValue($"bus_block_passengers_{traceIdStr}_{compositeResultIndex}", out cachedPax);
                                 }
 
-                                var depTime = busCtx != null && DateTime.TryParse(busCtx.DepartureTime, out var dt) ? dt.ToUniversalTime() : DateTime.UtcNow.AddHours(2);
-                                var arrTime = busCtx != null && DateTime.TryParse(busCtx.ArrivalTime, out var at) ? at.ToUniversalTime() : depTime.AddHours(8);
+                                var depTime = busCtx != null && !string.IsNullOrWhiteSpace(busCtx.DepartureTime) ? IndiaTimeHelper.ToUtcFromIst(busCtx.DepartureTime) : DateTime.UtcNow.AddHours(2);
+                                var arrTime = busCtx != null && !string.IsNullOrWhiteSpace(busCtx.ArrivalTime) ? IndiaTimeHelper.ToUtcFromIst(busCtx.ArrivalTime) : depTime.AddHours(8);
 
                                 var blockedSeatsInDb = await dbContext.BusBlockedSeatPrices.Where(x => x.TraceId == traceIdStr).ToListAsync();
                                 var totalBlockedFare = blockedSeatsInDb.Sum(b => b.GrandTotal);
@@ -2128,8 +2128,8 @@ namespace PickNBook.Api.Controllers
                         if (string.IsNullOrWhiteSpace(request.FromCity) || string.IsNullOrWhiteSpace(request.ToCity) || string.IsNullOrWhiteSpace(request.DepartureTime))
                             throw new Exception("Missing required bus details in request payload.");
 
-                        var depTime = DateTime.Parse(request.DepartureTime).ToUniversalTime();
-                        var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : DateTime.Parse(request.ArrivalTime).ToUniversalTime();
+                        var depTime = IndiaTimeHelper.ToUtcFromIst(request.DepartureTime);
+                        var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : IndiaTimeHelper.ToUtcFromIst(request.ArrivalTime);
 
                         if (depTime <= DateTime.UtcNow)
                             throw new Exception("Cannot book a bus that already departed.");
@@ -2280,9 +2280,9 @@ namespace PickNBook.Api.Controllers
                             BookedAtUtc = DateTime.UtcNow,
                             
                             BoardingPointName = request.BoardingPointName,
-                            BoardingPointTime = request.BoardingPointTime,
+                            BoardingPointTime = request.BoardingPointTime.HasValue ? IndiaTimeHelper.ToUtcFromIst(request.BoardingPointTime.Value) : depTime,
                             DroppingPointName = request.DroppingPointName,
-                            DroppingPointTime = request.DroppingPointTime,
+                            DroppingPointTime = request.DroppingPointTime.HasValue ? IndiaTimeHelper.ToUtcFromIst(request.DroppingPointTime.Value) : arrTime,
                             CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                         };
 
@@ -4077,9 +4077,20 @@ namespace PickNBook.Api.Controllers
                 baseDto.TripNumber,
                 baseDto.ProviderName,
                 baseDto.FromCity,
-                baseDto.ToCity,
                 baseDto.DepartureTimeUtc,
+                DepartureTime = baseDto.DepartureTimeUtc,
+                DepartureTimeIst = IndiaTimeHelper.ToIst(bus.DepartureTime),
+                DepartureTimeDisplay = IndiaTimeHelper.FormatIst(bus.DepartureTime, "dd MMM yyyy, hh:mm tt"),
                 baseDto.ArrivalTimeUtc,
+                ArrivalTime = baseDto.ArrivalTimeUtc,
+                ArrivalTimeIst = IndiaTimeHelper.ToIst(bus.ArrivalTime),
+                ArrivalTimeDisplay = IndiaTimeHelper.FormatIst(bus.ArrivalTime, "dd MMM yyyy, hh:mm tt"),
+                BoardingPointTimeUtc = reservation.BoardingPointTime.HasValue ? DateTime.SpecifyKind(reservation.BoardingPointTime.Value, DateTimeKind.Utc) : baseDto.DepartureTimeUtc,
+                BoardingPointTimeIst = IndiaTimeHelper.ToIst(reservation.BoardingPointTime ?? bus.DepartureTime),
+                BoardingPointTimeDisplay = IndiaTimeHelper.FormatIst(reservation.BoardingPointTime ?? bus.DepartureTime, "dd MMM yyyy, hh:mm tt"),
+                DroppingPointTimeUtc = reservation.DroppingPointTime.HasValue ? DateTime.SpecifyKind(reservation.DroppingPointTime.Value, DateTimeKind.Utc) : baseDto.ArrivalTimeUtc,
+                DroppingPointTimeIst = IndiaTimeHelper.ToIst(reservation.DroppingPointTime ?? bus.ArrivalTime),
+                DroppingPointTimeDisplay = IndiaTimeHelper.FormatIst(reservation.DroppingPointTime ?? bus.ArrivalTime, "dd MMM yyyy, hh:mm tt"),
                 baseDto.Status,
                 BookingStatus = bookingStatus,
                 CanCancel =
@@ -4130,9 +4141,12 @@ namespace PickNBook.Api.Controllers
                 reservation.CouponCode,
                 reservation.AutoPromotionCode,
                 reservation.CancellationChargeInr,
-                reservation.RefundAmountInr,
                 baseDto.BookedAtUtc,
+                BookedAt = baseDto.BookedAtUtc,
+                BookedAtIst = IndiaTimeHelper.ToIst(reservation.BookedAtUtc),
+                BookedAtDisplay = IndiaTimeHelper.FormatIst(reservation.BookedAtUtc, "dd MMM yyyy, hh:mm tt"),
                 baseDto.CancelledAtUtc,
+                CancelledAtIst = reservation.CancelledAtUtc.HasValue ? IndiaTimeHelper.ToIst(reservation.CancelledAtUtc.Value) : (DateTime?)null,
                 CancellationReason = reservation.CancellationReason,
                 Passengers = passengerDtos,
                 MaleCount = maleCount,
@@ -4716,9 +4730,10 @@ namespace PickNBook.Api.Controllers
                             BoardingPointTime = booking.BoardingPointTime ?? booking.BusBooking.DepartureTime,
                             ArrivalPointTime = booking.BusBooking.ArrivalTime,
                             IsOvernightArrival = booking.BusBooking.ArrivalTime.Date > booking.BusBooking.DepartureTime.Date,
-                            DurationMinutes = (int)(booking.BusBooking.ArrivalTime - booking.BusBooking.DepartureTime).TotalMinutes,
                             BoardingPoint = booking.BusBooking.BoardingPoint,
                             ArrivalPoint = !string.IsNullOrWhiteSpace(booking.BusBooking.DroppingPoint) ? booking.BusBooking.DroppingPoint : booking.BusBooking.ToCity,
+                            BookedAtUtc = booking.BookedAtUtc,
+                            CancelledAtUtc = booking.CancelledAtUtc ?? DateTime.UtcNow,
 
                             // Fare breakdown
                             Price = booking.TotalPriceInr,
@@ -4888,6 +4903,7 @@ Refund: ₹{currentRefundAmount}
                         BoardingPointTime = reservation.BoardingPointTime ?? bus.DepartureTime,
                         ArrivalPoint = !string.IsNullOrWhiteSpace(reservation.DroppingPointName) ? reservation.DroppingPointName : bus.ToCity,
                         ArrivalPointTime = reservation.DroppingPointTime ?? bus.ArrivalTime,
+                        BookedAtUtc = reservation.BookedAtUtc,
 
                         // Fare breakdown
                         Price = reservation.TotalPriceInr,
