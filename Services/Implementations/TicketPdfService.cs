@@ -344,7 +344,7 @@ public class TicketPdfService : ITicketPdfService
         // Left
         gfx.DrawString(req.OperatorName, new XFont("Arial", 12, XFontStyle.Bold), darkBrush, left + 14, y + 16);
         gfx.DrawString(req.BusType, new XFont("Arial", 8.5, XFontStyle.Regular), slateBrush, left + 14, y + 30);
-        var depTimeStr = req.DepartureTime != default ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(req.DepartureTime, "hh:mm tt") : "";
+        var depTimeStr = req.DepartureTime != default ? req.DepartureTime.ToString("hh:mm tt") : "";
         gfx.DrawString($"Bus Start Time: {depTimeStr}", new XFont("Arial", 8, XFontStyle.Regular), grayBrush, left + 14, y + 42);
 
         // Right
@@ -364,7 +364,7 @@ public class TicketPdfService : ITicketPdfService
         gfx.DrawString("DEPARTURE", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, left + 14, y + 14);
         gfx.DrawString(req.Origin, new XFont("Arial", 13, XFontStyle.Bold), darkBrush, left + 14, y + 32);
         var bTime = req.BoardingPointTime != default ? req.BoardingPointTime : req.DepartureTime;
-        var bTimeStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "ddd, dd MMM yyyy hh:mm tt");
+        var bTimeStr = bTime != default ? bTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         gfx.DrawString(bTimeStr, new XFont("Arial", 8.5, XFontStyle.Bold), slateBrush, left + 14, y + 46);
         gfx.DrawString("Boarding Point:", new XFont("Arial", 7.5, XFontStyle.Bold), slateBrush, left + 14, y + 59);
         gfx.DrawString(req.BoardingPoint ?? "-", new XFont("Arial", 7.5, XFontStyle.Regular), grayBrush, new XRect(left + 14, y + 63, 160, 22), XStringFormats.TopLeft);
@@ -382,7 +382,7 @@ public class TicketPdfService : ITicketPdfService
         gfx.DrawString("ARRIVAL", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, left + 205, y + 14);
         gfx.DrawString(req.Destination, new XFont("Arial", 13, XFontStyle.Bold), darkBrush, left + 205, y + 32);
         var dTime = req.ArrivalPointTime != default ? req.ArrivalPointTime : req.ArrivalTime;
-        var dTimeStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "ddd, dd MMM yyyy hh:mm tt");
+        var dTimeStr = dTime != default ? dTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         gfx.DrawString(dTimeStr, new XFont("Arial", 8.5, XFontStyle.Bold), slateBrush, left + 205, y + 46);
         gfx.DrawString("Dropping Point:", new XFont("Arial", 7.5, XFontStyle.Bold), slateBrush, left + 205, y + 59);
         gfx.DrawString(req.ArrivalPoint ?? "-", new XFont("Arial", 7.5, XFontStyle.Regular), grayBrush, new XRect(left + 205, y + 63, 160, 22), XStringFormats.TopLeft);
@@ -430,7 +430,7 @@ public class TicketPdfService : ITicketPdfService
             gfx.DrawRoundedRectangle(amberBgBrush, left + 14, y + 90, contentW - 28, 16, 3, 3);
             gfx.DrawRoundedRectangle(amberBorderPen, left + 14, y + 90, contentW - 28, 16, 3, 3);
             var reportTimeStr = bTime != default
-                ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(bTime).AddMinutes(-15).ToString("hh:mm tt")
+                ? bTime.AddMinutes(-15).ToString("hh:mm tt")
                 : "";
             gfx.DrawString($"* Reporting Time at the boarding point: {reportTimeStr} (15 minutes prior to departure)", new XFont("Arial", 7.5, XFontStyle.Bold), amberTextBrush, left + 22, y + 101);
         }

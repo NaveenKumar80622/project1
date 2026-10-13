@@ -183,18 +183,18 @@ public class TicketsController : BaseApiController
                     : booking.BusBooking.BoardingPoint;
 
                 var bTime = booking.BoardingPointTime ?? dep;
-                var boardingTimeStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "HH:mm");
-                var boardingTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "hh:mm tt");
-                var boardingDateStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(bTime, "ddd, dd MMM yyyy");
+                var boardingTimeStr = bTime.ToString("HH:mm");
+                var boardingTimeDisplay = bTime.ToString("hh:mm tt");
+                var boardingDateStr = bTime.ToString("ddd, dd MMM yyyy");
 
                 var droppingName = !string.IsNullOrWhiteSpace(booking.DroppingPointName) 
                     ? booking.DroppingPointName 
                     : booking.BusBooking.DroppingPoint;
 
                 var dTime = booking.DroppingPointTime ?? arr;
-                var droppingTimeStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "HH:mm");
-                var droppingTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "hh:mm tt");
-                var droppingDateStr = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dTime, "ddd, dd MMM yyyy");
+                var droppingTimeStr = dTime.ToString("HH:mm");
+                var droppingTimeDisplay = dTime.ToString("hh:mm tt");
+                var droppingDateStr = dTime.ToString("ddd, dd MMM yyyy");
 
                 var paxList = passengersByBooking[booking.Id].ToList();
 
@@ -210,12 +210,12 @@ public class TicketsController : BaseApiController
                     busType = booking.BusBooking.BusType,
                     fromCity = booking.BusBooking.FromCity,
                     toCity = booking.BusBooking.ToCity,
-                    departureTime = DateTime.SpecifyKind(dep, DateTimeKind.Utc),
-                    departureTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(dep),
-                    departureTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(dep, "dd MMM yyyy, hh:mm tt"),
-                    arrivalTime = DateTime.SpecifyKind(arr, DateTimeKind.Utc),
-                    arrivalTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(arr),
-                    arrivalTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(arr, "dd MMM yyyy, hh:mm tt"),
+                    departureTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(dep),
+                    departureTimeIst = dep,
+                    departureTimeDisplay = dep != default ? dep.ToString("dd MMM yyyy, hh:mm tt") : "-",
+                    arrivalTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(arr),
+                    arrivalTimeIst = arr,
+                    arrivalTimeDisplay = arr != default ? arr.ToString("dd MMM yyyy, hh:mm tt") : "-",
                     duration = durationStr,
                     boardingPoint = new
                     {
@@ -223,8 +223,8 @@ public class TicketsController : BaseApiController
                         time = boardingTimeStr,
                         timeDisplay = boardingTimeDisplay,
                         date = boardingDateStr,
-                        dateTime = DateTime.SpecifyKind(bTime, DateTimeKind.Utc),
-                        dateTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(bTime)
+                        dateTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(bTime),
+                        dateTimeIst = bTime
                     },
                     droppingPoint = new
                     {
@@ -232,8 +232,8 @@ public class TicketsController : BaseApiController
                         time = droppingTimeStr,
                         timeDisplay = droppingTimeDisplay,
                         date = droppingDateStr,
-                        dateTime = DateTime.SpecifyKind(dTime, DateTimeKind.Utc),
-                        dateTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(dTime)
+                        dateTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(dTime),
+                        dateTimeIst = dTime
                     },
                     passengers = paxList.Select(p => new
                     {

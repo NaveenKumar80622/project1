@@ -407,8 +407,8 @@ namespace PickNBook.Api.Services.Implementations
 
                 var seatsRequired = authoritativeBlockedSeats.Count;
 
-                var depTime = IndiaTimeHelper.ToUtcFromIst(request.DepartureTime);
-                var arrTime = string.IsNullOrWhiteSpace(request.ArrivalTime) ? depTime.AddHours(10) : IndiaTimeHelper.ToUtcFromIst(request.ArrivalTime);
+                var depTime = DateTime.TryParse(request.DepartureTime, out var parsedDep) ? parsedDep : DateTime.UtcNow.Add(IndiaTimeHelper.IndiaOffset);
+                var arrTime = !string.IsNullOrWhiteSpace(request.ArrivalTime) && DateTime.TryParse(request.ArrivalTime, out var parsedArr) ? parsedArr : depTime.AddHours(10);
                 if (arrTime <= depTime)
                 {
                     arrTime = arrTime.AddDays(1);
@@ -490,9 +490,9 @@ namespace PickNBook.Api.Services.Implementations
                     Status = "Booked",
                     BookedAtUtc = DateTime.UtcNow,
                     BoardingPointName = request.BoardingPointName,
-                    BoardingPointTime = request.BoardingPointTime.HasValue ? IndiaTimeHelper.ToUtcFromIst(request.BoardingPointTime.Value) : depTime,
+                    BoardingPointTime = request.BoardingPointTime ?? depTime,
                     DroppingPointName = request.DroppingPointName,
-                    DroppingPointTime = request.DroppingPointTime.HasValue ? IndiaTimeHelper.ToUtcFromIst(request.DroppingPointTime.Value) : arrTime,
+                    DroppingPointTime = request.DroppingPointTime ?? arrTime,
                     CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                 };
 

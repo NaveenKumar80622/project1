@@ -57,18 +57,18 @@ namespace PickNBook.Api.Services.Background
             var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var notificationService = scope.ServiceProvider.GetRequiredService<INotificationService>();
 
-            var nowUtc = DateTime.UtcNow;
+            var nowIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(DateTime.UtcNow);
             // Reminder window: Trips departing between 1 hr 45 min and 2 hr 15 min from now (centered at T-2 hours)
-            var windowStartUtc = nowUtc.AddMinutes(105);
-            var windowEndUtc = nowUtc.AddMinutes(135);
+            var windowStartIst = nowIst.AddMinutes(105);
+            var windowEndIst = nowIst.AddMinutes(135);
 
             var upcomingReservations = await dbContext.BusReservations
                 .Include(r => r.BusBooking)
                 .Where(r => (r.Status == "Booked" || r.Status == "SUCCESS" || r.Status == "Confirmed")
                             && r.CancelledAtUtc == null
                             && !string.IsNullOrWhiteSpace(r.PassengerPhone)
-                            && ((r.BoardingPointTime.HasValue && r.BoardingPointTime.Value >= windowStartUtc && r.BoardingPointTime.Value <= windowEndUtc)
-                                || (!r.BoardingPointTime.HasValue && r.BusBooking != null && r.BusBooking.DepartureTime >= windowStartUtc && r.BusBooking.DepartureTime <= windowEndUtc)))
+                            && ((r.BoardingPointTime.HasValue && r.BoardingPointTime.Value >= windowStartIst && r.BoardingPointTime.Value <= windowEndIst)
+                                || (!r.BoardingPointTime.HasValue && r.BusBooking != null && r.BusBooking.DepartureTime >= windowStartIst && r.BusBooking.DepartureTime <= windowEndIst)))
                 .ToListAsync(stoppingToken);
 
             if (!upcomingReservations.Any())
@@ -96,8 +96,8 @@ namespace PickNBook.Api.Services.Background
                         continue;
                     }
 
-                    var rawTime = reservation.BoardingPointTime ?? reservation.BusBooking?.DepartureTime ?? DateTime.UtcNow;
-                    var istTime = ToIst(rawTime);
+                    var rawTime = reservation.BoardingPointTime ?? reservation.BusBooking?.DepartureTime ?? nowIst;
+                    var istTime = rawTime;
                     string formattedDate = istTime.ToString("dd/MM/yyyy");
                     string formattedTime = istTime.ToString("hh:mm tt");
 

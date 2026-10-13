@@ -76,7 +76,7 @@ namespace PickNBook.Api.Services
                     if (normalizedStatus == null) continue; // Exclude non-final states
 
                     DateTime journeyDateTime = booking.BusBooking != null
-                        ? ToIst(booking.BusBooking.DepartureTime)
+                        ? booking.BusBooking.DepartureTime
                         : ToIst(booking.BookedAtUtc);
 
                     string fromCity = booking.BusBooking?.FromCity ?? "Bus Journey";
