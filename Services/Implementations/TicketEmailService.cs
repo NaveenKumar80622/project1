@@ -659,7 +659,9 @@ public class TicketEmailService : ITicketEmailService
             : $"{request.PassengerName} (Seat {request.SeatNumber})";
 
         var bookingDateStr = IndiaTimeHelper.FormatIst(request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow, "dd MMM yyyy, hh:mm tt");
-        var baseFareVal = request.BaseFare > 0 ? request.BaseFare : Math.Max(0, request.Price - request.GstAmount);
+        var grossFare = request.TotalFareBeforeDiscount > 0
+            ? request.TotalFareBeforeDiscount
+            : (request.Price + totalDiscount);
 
         // =========================================
         // EMAIL BODY
@@ -796,10 +798,9 @@ public class TicketEmailService : ITicketEmailService
           <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;"">Payment Details</div>
           <table style=""width: 100%; border-collapse: collapse; font-size: 12px;"">
             <tr>
-              <td style=""padding: 4px 0; color: #64748b;"">Basic Fare:</td>
-              <td style=""padding: 4px 0; text-align: right; color: #0f172a; font-weight: 600;"">&#8377;{baseFareVal:0.00}</td>
+              <td style=""padding: 4px 0; color: #64748b;"">Total Fare:</td>
+              <td style=""padding: 4px 0; text-align: right; color: #0f172a; font-weight: 600;"">&#8377;{grossFare:0.00}</td>
             </tr>
-            {gstRow}
             {discountRow}
             <tr style=""border-top: 1px solid #cbd5e1;"">
               <td style=""padding: 8px 0 0 0; font-weight: 700; color: #0f172a; font-size: 13px;"">Amount Paid:</td>
