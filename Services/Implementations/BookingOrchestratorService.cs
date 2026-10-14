@@ -407,29 +407,26 @@ namespace PickNBook.Api.Services.Implementations
 
                 var seatsRequired = authoritativeBlockedSeats.Count;
 
-                var depTimeUtc = IndiaTimeHelper.ToUtcFromIst(request.DepartureTime, DateTime.UtcNow.AddDays(1));
-                DateTime arrTimeUtc;
+                var depTime = DateTime.TryParse(request.DepartureTime, out var parsedDep) ? parsedDep : DateTime.UtcNow.Add(IndiaTimeHelper.IndiaOffset);
+                DateTime arrTime;
                 if (!string.IsNullOrWhiteSpace(request.ArrivalTime) && DateTime.TryParse(request.ArrivalTime, out var parsedArr))
                 {
                     if (parsedArr.Year == 1 || (parsedArr.Date == DateTime.MinValue.Date && parsedArr.TimeOfDay != TimeSpan.Zero))
                     {
-                        var depIst = IndiaTimeHelper.ToIst(depTimeUtc);
-                        var combinedIst = depIst.Date.Add(parsedArr.TimeOfDay);
-                        if (combinedIst <= depIst) combinedIst = combinedIst.AddDays(1);
-                        arrTimeUtc = IndiaTimeHelper.ToUtcFromIst(combinedIst);
+                        var combined = depTime.Date.Add(parsedArr.TimeOfDay);
+                        if (combined <= depTime) combined = combined.AddDays(1);
+                        arrTime = combined;
                     }
                     else
                     {
-                        arrTimeUtc = IndiaTimeHelper.ToUtcFromIst(parsedArr);
+                        arrTime = parsedArr;
                     }
                 }
                 else
                 {
-                    arrTimeUtc = depTimeUtc.AddHours(10);
+                    arrTime = depTime.AddHours(10);
                 }
 
-                var depTime = depTimeUtc;
-                var arrTime = arrTimeUtc;
 
                 BusSearchItemContext? busCtx = null;
                 if (!string.IsNullOrEmpty(request.TraceId) && !string.IsNullOrEmpty(request.ResultIndex))
@@ -503,13 +500,9 @@ namespace PickNBook.Api.Services.Implementations
                     Status = "Booked",
                     BookedAtUtc = DateTime.UtcNow,
                     BoardingPointName = request.BoardingPointName,
-                    BoardingPointTime = request.BoardingPointTime.HasValue
-                        ? IndiaTimeHelper.ToUtcFromIst(request.BoardingPointTime.Value)
-                        : depTime,
+                    BoardingPointTime = request.BoardingPointTime ?? depTime,
                     DroppingPointName = request.DroppingPointName,
-                    DroppingPointTime = request.DroppingPointTime.HasValue
-                        ? IndiaTimeHelper.ToUtcFromIst(request.DroppingPointTime.Value)
-                        : arrTime,
+                    DroppingPointTime = request.DroppingPointTime ?? arrTime,
                     CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                 };
 

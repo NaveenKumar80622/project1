@@ -647,9 +647,9 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         // TIMINGS & LABELS
         // =========================================
-        var boardingTime = ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
-        var droppingTime = ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
-        var departureTime = ToIst(request.DepartureTime != default ? request.DepartureTime : boardingTime);
+        var boardingTime = request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime;
+        var droppingTime = request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime;
+        var departureTime = request.DepartureTime != default ? request.DepartureTime : boardingTime;
         var boardingTimeStr = boardingTime != default ? boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var droppingTimeStr = droppingTime != default ? droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var departureTimeStr = departureTime != default ? departureTime.ToString("hh:mm tt") : "-";
@@ -658,7 +658,8 @@ public class TicketEmailService : ITicketEmailService
             ? string.Join(", ", request.Passengers.Select(p => $"{p.FullName} (Seat {p.SeatNumber})"))
             : $"{request.PassengerName} (Seat {request.SeatNumber})";
 
-        var bookingDateStr = IndiaTimeHelper.FormatIst(request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow, "dd MMM yyyy, hh:mm tt");
+        var effectiveBookedDate = request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow;
+        var bookingDateStr = effectiveBookedDate.ToString("dd MMM yyyy, hh:mm tt");
         var grossFare = request.TotalFareBeforeDiscount > 0
             ? request.TotalFareBeforeDiscount
             : (request.Price + totalDiscount);
@@ -919,16 +920,16 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         // TIMINGS
         // =========================================
-        var boardingTime = ToIst(request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime);
-        var droppingTime = ToIst(request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime);
-        var departureTime = ToIst(request.DepartureTime != default ? request.DepartureTime : boardingTime);
+        var boardingTime = request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime;
+        var droppingTime = request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime;
+        var departureTime = request.DepartureTime != default ? request.DepartureTime : boardingTime;
         var boardingTimeStr = boardingTime != default ? boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var droppingTimeStr = droppingTime != default ? droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var departureTimeStr = departureTime != default ? departureTime.ToString("hh:mm tt") : "-";
         var effectiveCancelDate = request.CancelledAtUtc.HasValue 
             ? request.CancelledAtUtc.Value 
             : (request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow);
-        var cancellationDateStr = IndiaTimeHelper.FormatIst(effectiveCancelDate, "dd MMM yyyy, hh:mm tt");
+        var cancellationDateStr = effectiveCancelDate.ToString("dd MMM yyyy, hh:mm tt");
 
         // =========================================
         // DYNAMIC CANCELLATION POLICY ROWS
