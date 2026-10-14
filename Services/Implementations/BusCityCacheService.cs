@@ -229,10 +229,16 @@ namespace PickNBook.Api.Services
                             .ThenBy(id => id)
                             .First();
 
+                        var orderedGroup = group
+                            .OrderByDescending(id => id == canonicalId)
+                            .ThenByDescending(id => childCounts.GetValueOrDefault(id, 0))
+                            .ThenBy(id => id)
+                            .ToList();
+
                         foreach (var id in group)
                         {
                             canonicalMap[id] = canonicalId;
-                            twinAliases[id] = group;
+                            twinAliases[id] = orderedGroup;
                         }
 
                         foreach (var id in group)

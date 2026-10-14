@@ -298,7 +298,8 @@ namespace PickNBook.Api.Services
 
             JsonNode? primaryRoot = null;
             var mergedBuses = new JsonArray();
-            var seenKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenRouteIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var seenPhysicalSchedules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var raw in responses)
             {
@@ -322,24 +323,37 @@ namespace PickNBook.Api.Services
                         {
                             if (bus == null) continue;
 
-                            var operatorName = bus["TravelsName"]?.ToString() ?? bus["OperatorName"]?.ToString() ?? string.Empty;
-                            var deptTime = bus["DepartureTime"]?.ToString() ?? string.Empty;
-                            var busType = bus["BusType"]?.ToString() ?? string.Empty;
-                            var routeId = bus["RouteId"]?.ToString() ?? string.Empty;
+                            var operatorName = (bus["TravelsName"]?.ToString() ?? bus["OperatorName"]?.ToString() ?? string.Empty).Trim();
+                            var deptTimeStr = (bus["DepartureTime"]?.ToString() ?? string.Empty).Trim();
+                            var busType = (bus["BusType"]?.ToString() ?? string.Empty).Trim();
+                            var routeId = (bus["RouteId"]?.ToString() ?? string.Empty).Trim();
 
-                            var dedupeKey = !string.IsNullOrEmpty(routeId)
-                                ? routeId
-                                : $"{operatorName}|{deptTime}|{busType}".Trim();
-
-                            if (!string.IsNullOrEmpty(dedupeKey) && seenKeys.Add(dedupeKey))
+                            // 1. Exact RouteId deduplication
+                            if (!string.IsNullOrEmpty(routeId) && !seenRouteIds.Add(routeId))
                             {
-                                var busNode = JsonNode.Parse(bus.ToJsonString())!;
-                                if (!string.IsNullOrEmpty(currentTraceId))
-                                {
-                                    busNode["TraceId"] = currentTraceId;
-                                }
-                                mergedBuses.Add(busNode);
+                                continue;
                             }
+
+                            // 2. Physical bus schedule deduplication across twin city / alias queries:
+                            // Operators running twin city variants share identical operator, departure time, and bus type.
+                            if (!string.IsNullOrEmpty(operatorName) && !string.IsNullOrEmpty(deptTimeStr) && !string.IsNullOrEmpty(busType))
+                            {
+                                var normalizedDept = DateTime.TryParse(deptTimeStr, out var parsedDt)
+                                    ? parsedDt.ToString("yyyyMMddHHmm")
+                                    : deptTimeStr;
+                                var scheduleKey = $"{operatorName.ToLowerInvariant()}|{normalizedDept}|{busType.ToLowerInvariant()}";
+                                if (!seenPhysicalSchedules.Add(scheduleKey))
+                                {
+                                    continue;
+                                }
+                            }
+
+                            var busNode = JsonNode.Parse(bus.ToJsonString())!;
+                            if (!string.IsNullOrEmpty(currentTraceId))
+                            {
+                                busNode["TraceId"] = currentTraceId;
+                            }
+                            mergedBuses.Add(busNode);
                         }
                     }
                 }
