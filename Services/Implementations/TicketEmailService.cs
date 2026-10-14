@@ -909,6 +909,10 @@ public class TicketEmailService : ITicketEmailService
             totalDiscount = request.DiscountAmount.Value;
         }
 
+        var grossFare = request.TotalFareBeforeDiscount > 0
+            ? request.TotalFareBeforeDiscount
+            : (request.Price + totalDiscount);
+
         var discountRow = totalDiscount > 0
             ? $@"
             <tr>
@@ -1166,10 +1170,14 @@ public class TicketEmailService : ITicketEmailService
           <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;"">Refund &amp; Fare Breakdown</div>
           <table style=""width: 100%; border-collapse: collapse; font-size: 12px;"">
             <tr>
-              <td style=""padding: 3px 0; color: #64748b;"">Total Ticket Fare:</td>
-              <td style=""padding: 3px 0; text-align: right; color: #0f172a; font-weight: 600;"">&#8377;{request.Price:0.00}</td>
+              <td style=""padding: 3px 0; color: #64748b;"">Total Fare:</td>
+              <td style=""padding: 3px 0; text-align: right; color: #0f172a; font-weight: 600;"">&#8377;{grossFare:0.00}</td>
             </tr>
             {discountRow}
+            <tr>
+              <td style=""padding: 3px 0; color: #64748b;"">Original Paid:</td>
+              <td style=""padding: 3px 0; text-align: right; color: #0f172a; font-weight: 600;"">&#8377;{request.Price:0.00}</td>
+            </tr>
             <tr>
               <td style=""padding: 3px 0; color: #dc2626;"">Cancellation Charges:</td>
               <td style=""padding: 3px 0; text-align: right; color: #dc2626; font-weight: 600;"">- &#8377;{cancellationCharge:0.00}</td>

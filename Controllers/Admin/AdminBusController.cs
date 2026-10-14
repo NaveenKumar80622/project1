@@ -375,6 +375,8 @@ namespace PickNBook.Api.Controllers
                             Price = reservation.TotalPriceInr,
                             BaseFare = reservation.BaseFareInr,
                             Currency = "INR",
+                            TotalFareBeforeDiscount = reservation.TotalPriceInr + reservation.DiscountAmountInr,
+                            CancellationPoliciesJson = reservation.BusBooking?.CancellationPoliciesJson ?? reservation.CancellationPolicyJson,
                             NetFare = reservation.NetFareInr,
                             GstPercent = reservation.GstPercent,
                             GstAmount = reservation.GstAmountInr,

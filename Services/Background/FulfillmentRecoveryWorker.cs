@@ -825,6 +825,8 @@ namespace PickNBook.Api.Services.Background
                                     Price = res.TotalPriceInr,
                                     BaseFare = res.BaseFareInr,
                                     Currency = "INR",
+                                    TotalFareBeforeDiscount = res.TotalPriceInr + res.DiscountAmountInr,
+                                    CancellationPoliciesJson = res.BusBooking?.CancellationPoliciesJson ?? res.CancellationPolicyJson,
                                     NetFare = res.NetFareInr,
                                     GstPercent = res.GstPercent,
                                     GstAmount = res.GstAmountInr,
