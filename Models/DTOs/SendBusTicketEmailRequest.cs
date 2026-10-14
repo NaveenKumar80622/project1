@@ -26,6 +26,7 @@ namespace PickNBook.Api.Models.DTOs
 
         // ── Fare breakdown ────────────────────────────────────
         public decimal Price { get; set; }                 // final customer fare (after coupon)
+        public decimal TotalFareBeforeDiscount { get; set; } // gross fare including GST & markup before coupon discount
         public decimal GstPercent { get; set; }
 
         public decimal GstAmount { get; set; }

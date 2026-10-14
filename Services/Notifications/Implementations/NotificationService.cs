@@ -48,18 +48,15 @@ namespace PickNBook.Api.Services.Notifications.Implementations
             var template = await _dbContext.NotificationTemplates
                 .FirstOrDefaultAsync(t => t.TemplateKey == templateKey && t.Channel == channel && t.IsActive);
 
-            // Fallback string if template is missing, for development continuity
-            string content = template?.Body ?? $"[{templateKey}] payload: {JsonSerializer.Serialize(payload)}";
-            string? subject = template?.Subject;
-
-            if (template != null)
+            if (template == null)
             {
-                content = ReplaceVariables(template.Body, payload);
-                if (!string.IsNullOrEmpty(subject))
-                {
-                    subject = ReplaceVariables(subject, payload);
-                }
+                var logger = _serviceProvider.GetService<ILogger<NotificationService>>();
+                logger?.LogWarning("Notification template '{TemplateKey}' for channel '{Channel}' not found or inactive. Notification dispatch aborted.", templateKey, channel);
+                return (false, $"Active notification template '{templateKey}' for channel '{channel}' not found.");
             }
+
+            string content = ReplaceVariables(template.Body, payload);
+            string? subject = !string.IsNullOrEmpty(template.Subject) ? ReplaceVariables(template.Subject, payload) : null;
 
             INotificationProvider? provider = null;
             if (channel == "SMS")

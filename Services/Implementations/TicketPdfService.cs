@@ -280,12 +280,9 @@ public class TicketPdfService : ITicketPdfService
         // Logo
         string[] candidateLogoPaths = new[]
         {
-            Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "wwwroot", "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo.png"),
             Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo.png"),
-            @"c:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\picknbook-logo.png",
-            @"c:\Users\ADMIN\Desktop\Local\PickNBook.Api\bin\Debug\net8.0\wwwroot\picknbook-logo.png",
-            @"c:\Users\ADMIN\Desktop\Local\TicketEmailTester\bin\Debug\net8.0\wwwroot\picknbook-logo.png",
-            @"c:\Users\ADMIN\Desktop\Local\PickNBook.Api\publish\wwwroot\picknbook-logo.png"
+            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png")
         };
         string? foundLogo = candidateLogoPaths.FirstOrDefault(File.Exists);
         if (foundLogo != null)
@@ -295,14 +292,7 @@ public class TicketPdfService : ITicketPdfService
                 using var logoImg = XImage.FromFile(foundLogo);
                 gfx.DrawImage(logoImg, left + 14, y + 8, 112, 22);
             }
-            catch
-            {
-                DrawFallbackLogo(gfx, left + 14, y + 26, redBrush, grayBrush);
-            }
-        }
-        else
-        {
-            DrawFallbackLogo(gfx, left + 14, y + 26, redBrush, grayBrush);
+            catch { }
         }
 
         // Title: Bus Ticket
@@ -319,12 +309,15 @@ public class TicketPdfService : ITicketPdfService
             : "";
         gfx.DrawString(bookingDateStr, new XFont("Arial", 8, XFontStyle.Regular), grayBrush, left + 14, y + 58);
 
-        // Right side: Booking ID, PNR, Status
-        gfx.DrawString("Booking ID: ", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, right - 190, y + 16);
-        gfx.DrawString(req.BookingReference, new XFont("Arial", 9.5, XFontStyle.Bold), redBrush, right - 120, y + 16);
+        // Right side: Booking ID, PNR, Status (Cleanly bounded to avoid crossing right border)
+        double metaBoxW = 230;
+        double metaLeft = right - metaBoxW - 14;
 
-        gfx.DrawString("Bus Partner PNR: ", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, right - 190, y + 30);
-        gfx.DrawString(req.Pnr, new XFont("Arial", 9, XFontStyle.Bold), darkBrush, right - 105, y + 30);
+        gfx.DrawString("Booking ID:", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, metaLeft, y + 16);
+        gfx.DrawString(req.BookingReference, new XFont("Arial", 9.5, XFontStyle.Bold), redBrush, new XRect(metaLeft, y + 6, metaBoxW, 14), XStringFormats.TopRight);
+
+        gfx.DrawString("Bus Partner PNR:", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, metaLeft, y + 30);
+        gfx.DrawString(req.Pnr, new XFont("Arial", 9, XFontStyle.Bold), darkBrush, new XRect(metaLeft, y + 20, metaBoxW, 14), XStringFormats.TopRight);
 
         string statusBadge = isCancelled ? "CANCELLED" : "CONFIRMED";
         XBrush badgeBg = isCancelled ? redBgBrush : greenBgBrush;
@@ -477,12 +470,12 @@ public class TicketPdfService : ITicketPdfService
         // Right: Payment Details
         gfx.DrawString("PAYMENT DETAILS", new XFont("Arial", 8, XFontStyle.Bold), darkBrush, midX + 14, y + 14);
         double payY = y + 26;
-        var baseFare = req.BaseFare > 0 ? req.BaseFare : Math.Max(0, req.Price - req.GstAmount);
-        DrawPdfPayRow(gfx, midX + 14, right - 14, ref payY, "Basic Fare:", $"INR {baseFare:0.00}", grayBrush, darkBrush, false);
-        if (req.GstAmount > 0)
-        {
-            DrawPdfPayRow(gfx, midX + 14, right - 14, ref payY, "Bus Partner GST:", $"INR {req.GstAmount:0.00}", grayBrush, darkBrush, false);
-        }
+        decimal totalGross = req.TotalFareBeforeDiscount > 0 
+            ? req.TotalFareBeforeDiscount 
+            : (req.Price + (req.DiscountAmount ?? 0m));
+
+        DrawPdfPayRow(gfx, midX + 14, right - 14, ref payY, "Total Fare:", $"INR {totalGross:0.00}", grayBrush, darkBrush, false);
+
         var totalDisc = req.AutoDiscountAmount + req.CouponDiscountAmount;
         if (totalDisc == 0 && req.DiscountAmount.GetValueOrDefault() > 0) totalDisc = req.DiscountAmount.Value;
         if (totalDisc > 0)
@@ -524,7 +517,7 @@ public class TicketPdfService : ITicketPdfService
         // =====================================================================
         var parsedPolicies = ParseBusCancellationPolicies(req);
         int policyCount = parsedPolicies.Count > 0 ? parsedPolicies.Count : 1;
-        double sec6H = Math.Max(112, 38 + (policyCount * 13));
+        double sec6H = Math.Max(125, 42 + (policyCount * 14) + 26);
 
         gfx.DrawRectangle(cardBgBrush, left, y, contentW, sec6H);
         gfx.DrawLine(borderPen, left, y + sec6H, right, y + sec6H);
@@ -556,10 +549,10 @@ public class TicketPdfService : ITicketPdfService
                 gfx.DrawString(cp.TimeWindow, new XFont("Arial", 6.8, XFontStyle.Regular), darkBrush, col6MidX + 14, cpy);
                 gfx.DrawString(cp.RefundPct, new XFont("Arial", 6.8, XFontStyle.Regular), darkBrush, new XRect(col6MidX + 130, cpy - 7, 50, 10), XStringFormats.TopCenter);
                 gfx.DrawString(cp.RefundAmt, new XFont("Arial", 6.8, XFontStyle.Bold), darkBrush, new XRect(right - 90, cpy - 7, 76, 10), XStringFormats.TopRight);
-                cpy += 13;
+                cpy += 14;
             }
 
-            gfx.DrawString("*Refund amount is indicative", new XFont("Arial", 6.5, XFontStyle.Italic), grayBrush, col6MidX + 14, cpy + 2);
+            gfx.DrawString("*Refund amount is indicative", new XFont("Arial", 6.5, XFontStyle.Italic), grayBrush, col6MidX + 14, cpy + 4);
         }
 
         y += sec6H;
@@ -583,14 +576,6 @@ public class TicketPdfService : ITicketPdfService
             var voidBrush = new XSolidBrush(XColor.FromArgb(40, 220, 38, 38));
             gfx.DrawString("CANCELLED", new XFont("Arial", 46, XFontStyle.Bold), voidBrush, new XRect(left, 140, contentW, 300), XStringFormats.Center);
         }
-    }
-
-    private static void DrawFallbackLogo(XGraphics gfx, double x, double y, XBrush redBrush, XBrush grayBrush)
-    {
-        var fLogo = new XFont("Arial", 16, XFontStyle.Bold);
-        gfx.DrawString("Pick", fLogo, redBrush, x, y);
-        gfx.DrawString("&", fLogo, grayBrush, x + 34, y);
-        gfx.DrawString("book", fLogo, redBrush, x + 46, y);
     }
 
     private static void DrawPdfPayRow(

@@ -345,21 +345,6 @@ namespace PickNBook.Api.Services.Implementations
                     {
                         _logger.LogWarning("Cannot enqueue PaymentSuccess SMS for Payment {PaymentId}: No phone number available.", payment.Id);
                     }
-
-                    // 2. Enqueue Email notification if customer email is available
-                    var emailRecipient = !string.IsNullOrWhiteSpace(customerEmail) ? customerEmail.Trim() : (payment.UserId.Contains('@') ? payment.UserId : null);
-                    if (!string.IsNullOrWhiteSpace(emailRecipient))
-                    {
-                        await _notificationService.EnqueueAsync(
-                            eventType: "PaymentSuccess",
-                            channel: "Email",
-                            recipient: emailRecipient,
-                            templateKey: "PAYMENT_SUCCESS",
-                            payload: new { Amount = payment.FinalPayableAmount, OrderId = payment.CashfreeOrderId },
-                            bookingId: payment.PaymentReference,
-                            userId: payment.UserId
-                        );
-                    }
                 }
                 else if (status == PaymentStatus.Failed && oldStatus != PaymentStatus.Failed)
                 {
