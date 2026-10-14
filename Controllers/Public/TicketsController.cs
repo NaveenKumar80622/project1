@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using PickNBook.Api.Data;
+using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Services;
 
@@ -116,8 +117,11 @@ public class TicketsController : BaseApiController
 
         var nowUtc = DateTime.UtcNow;
 
-        // Standardized confirmed statuses
+        // Standardized confirmed and eligible statuses
         var busConfirmedStatuses = new[] { "SUCCESS", "Success", "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED" };
+        var busEligibleStatuses = request.ActiveOnly
+            ? busConfirmedStatuses
+            : new[] { "SUCCESS", "Success", "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED", "Cancelled", "CANCELLED", "Refunded", "REFUNDED" };
         var flightConfirmedStatuses = new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Ticketed", "TICKETED", "Success", "SUCCESS", "Completed", "COMPLETED" };
         var hotelConfirmedStatuses = new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED", "Success", "SUCCESS" };
 
@@ -126,7 +130,7 @@ public class TicketsController : BaseApiController
         {
             var query = _context.BusReservations
                 .Include(x => x.BusBooking)
-                .Where(x => busConfirmedStatuses.Contains(x.Status) && x.BusBooking != null);
+                .Where(x => busEligibleStatuses.Contains(x.Status) && x.BusBooking != null);
 
             if (request.ActiveOnly)
             {
@@ -163,10 +167,10 @@ public class TicketsController : BaseApiController
 
             if (!bookings.Any()) return new List<object>();
 
-            // Batch load passengers (Avoid N+1)
+            // Batch load passengers (Avoid N+1) - include all passengers so cancelled bookings retain their seat and traveler data
             var bookingIds = bookings.Select(b => b.Id).ToList();
             var allPassengers = await _context.BusReservationPassengers
-                .Where(p => bookingIds.Contains(p.BusReservationId) && !p.IsCancelled)
+                .Where(p => bookingIds.Contains(p.BusReservationId))
                 .ToListAsync();
             var passengersByBooking = allPassengers.ToLookup(p => p.BusReservationId);
 
@@ -245,6 +249,12 @@ public class TicketsController : BaseApiController
                     }),
                     seatsBooked = booking.SeatsBooked > 0 ? booking.SeatsBooked : paxList.Count,
                     status = booking.Status,
+                    isCancelled = BusBookingStatus.IsCancelled(booking.Status),
+                    cancelledAtUtc = booking.CancelledAtUtc,
+                    cancelledAtIst = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.CancelledAtUtc.Value) : (DateTime?)null,
+                    refundAmount = booking.RefundAmountInr ?? 0m,
+                    cancellationReason = booking.CancellationReason ?? string.Empty,
+                    cancellationCharge = booking.CancellationChargeInr ?? 0m,
                     totalFare = booking.TotalPriceInr,
                     bookedAtUtc = DateTime.SpecifyKind(booking.BookedAtUtc, DateTimeKind.Utc),
                     bookedAtIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.BookedAtUtc),
