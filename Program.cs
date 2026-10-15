@@ -186,7 +186,6 @@ builder.Services.AddHttpClient(nameof(PickNBook.Api.Services.Notifications.Provi
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.ISmsProvider, PickNBook.Api.Services.Notifications.Providers.PointerItSmsProvider>();
 builder.Services.AddSingleton<PickNBook.Api.Services.Notifications.Interfaces.IWhatsAppProvider, PickNBook.Api.Services.Notifications.Providers.MockWhatsAppProvider>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.NotificationOutboxWorker>();
-builder.Services.AddHostedService<PickNBook.Api.Services.Background.BusBoardingReminderHostedService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.HotelCheckInReminderHostedService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.DailyAdminSummaryHostedService>();
 builder.Services.AddHostedService<PickNBook.Api.Services.Background.SrdvBusWalletMonitorHostedService>();

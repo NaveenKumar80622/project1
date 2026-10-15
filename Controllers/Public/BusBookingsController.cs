@@ -645,7 +645,7 @@ namespace PickNBook.Api.Controllers
                 if (jsonNode is System.Text.Json.Nodes.JsonObject rootObj)
                 {
                     var bpWorkflow = new BusBoardingPointsWorkflowContext();
-                    void ExtractPoints(System.Text.Json.Nodes.JsonNode? arrNode, HashSet<string> targetSet)
+                    void ExtractPoints(System.Text.Json.Nodes.JsonNode? arrNode, HashSet<string> targetSet, Dictionary<string, string> timesMap, Dictionary<string, string> namesMap)
                     {
                         if (arrNode is System.Text.Json.Nodes.JsonArray arr)
                         {
@@ -658,14 +658,25 @@ namespace PickNBook.Api.Controllers
                                       ?? item["Id"]?.ToString();
                                 if (!string.IsNullOrWhiteSpace(id))
                                 {
-                                    targetSet.Add(id.Trim());
+                                    var trimmedId = id.Trim();
+                                    targetSet.Add(trimmedId);
+                                    var time = item["CityPointTime"]?.ToString() ?? item["Time"]?.ToString();
+                                    if (!string.IsNullOrWhiteSpace(time))
+                                    {
+                                        timesMap[trimmedId] = time.Trim();
+                                    }
+                                    var name = item["CityPointName"]?.ToString() ?? item["CityPointLocation"]?.ToString() ?? item["Name"]?.ToString();
+                                    if (!string.IsNullOrWhiteSpace(name))
+                                    {
+                                        namesMap[trimmedId] = name.Trim();
+                                    }
                                 }
                             }
                         }
                     }
 
-                    ExtractPoints(rootObj["BoardingPointsDetails"] ?? rootObj["BoardingPoints"], bpWorkflow.BoardingPointIds);
-                    ExtractPoints(rootObj["DroppingPointsDetails"] ?? rootObj["DroppingPoints"], bpWorkflow.DroppingPointIds);
+                    ExtractPoints(rootObj["BoardingPointsDetails"] ?? rootObj["BoardingPoints"], bpWorkflow.BoardingPointIds, bpWorkflow.BoardingPointTimes, bpWorkflow.BoardingPointNames);
+                    ExtractPoints(rootObj["DroppingPointsDetails"] ?? rootObj["DroppingPoints"], bpWorkflow.DroppingPointIds, bpWorkflow.DroppingPointTimes, bpWorkflow.DroppingPointNames);
 
                     if (bpWorkflow.BoardingPointIds.Count > 0 || bpWorkflow.DroppingPointIds.Count > 0)
                     {
@@ -1118,6 +1129,7 @@ namespace PickNBook.Api.Controllers
 
                     var resultObj = jsonObj["Result"] as System.Text.Json.Nodes.JsonObject;
                     var blockKeyStr = jsonObj["BlockKey"]?.ToString() ?? resultObj?["BlockKey"]?.ToString();
+                    var travelsNameStr = jsonObj["TravelsName"]?.ToString() ?? resultObj?["TravelsName"]?.ToString() ?? busCtx?.OperatorName;
 
                     if (errCode == 0)
                     {
@@ -1129,6 +1141,15 @@ namespace PickNBook.Api.Controllers
                             if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
                             {
                                 _cache.Set($"bus_blockkey_{request.TraceId}_{compositeResultIndex}", blockKeyStr.Trim(), TimeSpan.FromHours(1));
+                            }
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(travelsNameStr))
+                        {
+                            _cache.Set($"bus_travelsname_{request.TraceId}_{request.ResultIndex}", travelsNameStr.Trim(), TimeSpan.FromHours(1));
+                            if (!string.Equals(compositeResultIndex, request.ResultIndex, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _cache.Set($"bus_travelsname_{request.TraceId}_{compositeResultIndex}", travelsNameStr.Trim(), TimeSpan.FromHours(1));
                             }
                         }
 
@@ -1754,7 +1775,7 @@ namespace PickNBook.Api.Controllers
 
                                 var bus = new BusBooking
                                 {
-                                    BusNumber = "SRDV-" + Random.Shared.Next(1000, 9999),
+                                    BusNumber = !string.IsNullOrWhiteSpace(busCtx?.OperatorName) ? busCtx.OperatorName.Trim() : "Bus Service",
                                     OperatorName = busCtx?.OperatorName ?? "Unknown",
                                     BusType = busCtx?.BusType ?? "Unknown",
                                     GstCategory = "AC",
@@ -2145,7 +2166,12 @@ namespace PickNBook.Api.Controllers
                         // Create the BusBooking record just-in-time for this specific booking
                         var bus = new BusBooking
                         {
-                            BusNumber = "SRDV-" + Random.Shared.Next(1000, 9999),
+                            BusNumber = !string.IsNullOrWhiteSpace(request.OperatorName) 
+                                ? request.OperatorName.Trim() 
+                                : ((_cache.TryGetValue($"bus_travelsname_{request.TraceId}_{request.ResultIndex}", out string? cachedTn) ||
+                                    _cache.TryGetValue($"bus_travelsname_{request.TraceId}_{compositeResultIndex}", out cachedTn)) && !string.IsNullOrWhiteSpace(cachedTn) 
+                                    ? cachedTn.Trim() 
+                                    : (busCtx?.OperatorName ?? "Bus Service")),
                             OperatorName = request.OperatorName ?? "Unknown",
                             BusType = request.BusType ?? "Unknown",
                             GstCategory = "AC",
@@ -2252,10 +2278,67 @@ namespace PickNBook.Api.Controllers
                             request.SelectedFeaturedOfferId,
                             validationContext);
 
-                        var pnr = await GenerateUniqueBusPnrAsync();
+                        var bookingRef = $"BS-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}";
+                        var pnr = bookingRef;
+
+                        DateTime resolvedBoardingTime = depTime;
+                        if (request.BoardingPointTime.HasValue)
+                        {
+                            resolvedBoardingTime = request.BoardingPointTime.Value;
+                        }
+                        else if (!string.IsNullOrWhiteSpace(request.BoardingPointId) &&
+                                 (_cache.TryGetValue($"bus_bp_{request.TraceId}_{request.ResultIndex}", out BusBoardingPointsWorkflowContext? bpCtx) ||
+                                  _cache.TryGetValue($"bus_bp_{request.TraceId}_{compositeResultIndex}", out bpCtx)) &&
+                                 bpCtx != null &&
+                                 bpCtx.BoardingPointTimes.TryGetValue(request.BoardingPointId, out var rawTimeStr))
+                        {
+                            if (DateTime.TryParse(rawTimeStr, out var parsedBpDt) && parsedBpDt.Year > 2000)
+                            {
+                                resolvedBoardingTime = parsedBpDt;
+                            }
+                            else if (TimeSpan.TryParse(rawTimeStr, out var parsedBpSpan))
+                            {
+                                var combined = depTime.Date.Add(parsedBpSpan);
+                                if (combined < depTime) combined = combined.AddDays(1);
+                                resolvedBoardingTime = combined;
+                            }
+                        }
+
+                        DateTime resolvedDroppingTime = arrTime;
+                        if (request.DroppingPointTime.HasValue)
+                        {
+                            resolvedDroppingTime = request.DroppingPointTime.Value;
+                        }
+                        else if (!string.IsNullOrWhiteSpace(request.DroppingPointId) &&
+                                 (_cache.TryGetValue($"bus_bp_{request.TraceId}_{request.ResultIndex}", out BusBoardingPointsWorkflowContext? dpCtx) ||
+                                  _cache.TryGetValue($"bus_bp_{request.TraceId}_{compositeResultIndex}", out dpCtx)) &&
+                                 dpCtx != null &&
+                                 dpCtx.DroppingPointTimes.TryGetValue(request.DroppingPointId, out var rawDpStr))
+                        {
+                            if (DateTime.TryParse(rawDpStr, out var parsedDpDt) && parsedDpDt.Year > 2000)
+                            {
+                                resolvedDroppingTime = parsedDpDt;
+                            }
+                            else if (TimeSpan.TryParse(rawDpStr, out var parsedDpSpan))
+                            {
+                                var combined = depTime.Date.Add(parsedDpSpan);
+                                if (combined < depTime) combined = combined.AddDays(1);
+                                resolvedDroppingTime = combined;
+                            }
+                        }
+
+                        var bpName = !string.IsNullOrWhiteSpace(request.BoardingPointName) 
+                            ? request.BoardingPointName 
+                            : ((_cache.TryGetValue($"bus_bp_{request.TraceId}_{request.ResultIndex}", out BusBoardingPointsWorkflowContext? bpNameCtx) ||
+                                _cache.TryGetValue($"bus_bp_{request.TraceId}_{compositeResultIndex}", out bpNameCtx)) &&
+                               bpNameCtx != null && !string.IsNullOrWhiteSpace(request.BoardingPointId) &&
+                               bpNameCtx.BoardingPointNames.TryGetValue(request.BoardingPointId, out var resolvedBpName)
+                                ? resolvedBpName 
+                                : (bus.BoardingPoint ?? "Default Point"));
+
                         var reservation = new BusReservation
                         {
-                            BookingReference = $"BS-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}",
+                            BookingReference = bookingRef,
                             Pnr = pnr,
                             UserId = userId!,
                             BusBookingId = bus.Id,
@@ -2286,11 +2369,10 @@ namespace PickNBook.Api.Controllers
                             Status = BusBookingStatus.BookingInProgress,
                             FinancialStatus = "DEDUCT_PENDING",
                             BookedAtUtc = DateTime.UtcNow,
-                            
-                            BoardingPointName = request.BoardingPointName,
-                            BoardingPointTime = request.BoardingPointTime ?? depTime,
+                            BoardingPointName = bpName,
+                            BoardingPointTime = resolvedBoardingTime,
                             DroppingPointName = request.DroppingPointName,
-                            DroppingPointTime = request.DroppingPointTime ?? arrTime,
+                            DroppingPointTime = resolvedDroppingTime,
                             CancellationPolicyJson = busCtx?.CancellationPoliciesJson
                         };
 
@@ -2466,7 +2548,7 @@ namespace PickNBook.Api.Controllers
                 bool isAmbiguousOutcome = false;
                 string? explicitFailureMessage = null;
 
-                if (bus.BusNumber.StartsWith("SRDV-") && !string.IsNullOrEmpty(bus.TraceId))
+                if (!string.IsNullOrEmpty(bus.TraceId) || bus.BusNumber.StartsWith("SRDV-"))
                 {
                     var srdvReq = new SrdvBusBookingRequestDto
                     {
@@ -2824,13 +2906,15 @@ namespace PickNBook.Api.Controllers
                             // WhatsApp notification
                             try
                             {
+                                var departureFormatted = (res.BoardingPointTime ?? b.DepartureTime).ToString("dd/MM/yyyy hh:mm tt");
                                 var message = $@"
                 Booking Confirmed ✅
 
                 Ref: {res.BookingReference}
+                PNR: {res.Pnr}
                 Route: {b.FromCity} → {b.ToCity}
                 Seats: {seatNumbers}
-                Departure: {b.DepartureTime}
+                Departure: {departureFormatted}
                 ";
 
                                 var whatsAppResult = await scopedWhatsApp.SendTextAsync(
@@ -3249,7 +3333,7 @@ namespace PickNBook.Api.Controllers
                 long? cancelTraceId = null;
                 SrdvBusCancelResponseDto? v9Result = null;
 
-                if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && !string.IsNullOrEmpty(booking.BusBooking.TraceId))
+                if (!string.IsNullOrEmpty(booking.BusBooking.TraceId) || booking.BusBooking.BusNumber.StartsWith("SRDV-"))
                 {
                     if (seatNumbers.Any())
                     {
@@ -3658,7 +3742,7 @@ namespace PickNBook.Api.Controllers
                 long? cancelTraceId = null;
                 SrdvBusCancelResponseDto? v9Result = null;
 
-                if (booking.BusBooking.BusNumber.StartsWith("SRDV-") && !string.IsNullOrEmpty(booking.BusBooking.TraceId))
+                if (!string.IsNullOrEmpty(booking.BusBooking.TraceId) || booking.BusBooking.BusNumber.StartsWith("SRDV-"))
                 {
                     if (seatNumbers.Any())
                     {
@@ -4682,7 +4766,7 @@ namespace PickNBook.Api.Controllers
                 {
                     var bus = new BusBooking
                     {
-                        BusNumber = "SRDV-" + Random.Shared.Next(1000, 9999),
+                        BusNumber = !string.IsNullOrWhiteSpace(offer.OperatorName) ? offer.OperatorName.Trim() : "Bus Service",
                         OperatorName = offer.OperatorName,
                         BusType = offer.BusType,
                         GstCategory = "AC", // Simplified

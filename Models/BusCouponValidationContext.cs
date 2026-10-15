@@ -66,5 +66,9 @@ namespace PickNBook.Api.Models
     {
         public HashSet<string> BoardingPointIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
         public HashSet<string> DroppingPointIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> BoardingPointTimes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> DroppingPointTimes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> BoardingPointNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> DroppingPointNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     }
 }

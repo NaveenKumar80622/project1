@@ -2085,6 +2085,7 @@ namespace PickNBook.Api.Controllers
                     {
                         x.Id,
                         x.BookingReference,
+                        x.Pnr,
                         x.Status,
 
                         PaymentStatus = payment?.Status,
@@ -2218,65 +2219,12 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPost("bookings/{id:int}/send-boarding-reminder")]
-        public async Task<IActionResult> SendBoardingReminder(int id)
+        public Task<IActionResult> SendBoardingReminder(int id)
         {
-            var reservation = await dbContext.BusReservations
-                .Include(r => r.BusBooking)
-                .FirstOrDefaultAsync(r => r.Id == id);
-
-            if (reservation == null)
-            {
-                return NotFound(new { message = $"Bus reservation {id} not found." });
-            }
-
-            if (string.IsNullOrWhiteSpace(reservation.PassengerPhone))
-            {
-                return BadRequest(new { message = "Reservation does not have a valid passenger phone number." });
-            }
-
-            var rawTime = reservation.BoardingPointTime ?? reservation.BusBooking?.DepartureTime ?? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(DateTime.UtcNow);
-            var istTime = rawTime;
-            string formattedDate = istTime.ToString("dd/MM/yyyy");
-            string formattedTime = istTime.ToString("hh:mm tt");
-
-            string boardingPoint = !string.IsNullOrWhiteSpace(reservation.BoardingPointName)
-                ? reservation.BoardingPointName
-                : (!string.IsNullOrWhiteSpace(reservation.BusBooking?.BoardingPoint) ? reservation.BusBooking.BoardingPoint : "Bus Station");
-
-            string pnr = !string.IsNullOrWhiteSpace(reservation.Pnr) ? reservation.Pnr : reservation.BookingReference;
-
-            var result = await notificationService.SendImmediateAsync(
-                eventType: "BusBoardingReminder",
-                channel: "SMS",
-                recipient: reservation.PassengerPhone.Trim(),
-                templateKey: "BUS_BOARDING_REMINDER",
-                payload: new
-                {
-                    Pnr = pnr,
-                    Date = formattedDate,
-                    Time = formattedTime,
-                    Boarding = boardingPoint,
-                    Var1 = pnr,
-                    Var2 = formattedDate,
-                    Var3 = formattedTime,
-                    Var4 = boardingPoint
-                }
-            );
-
-            if (!result.IsSuccess)
-            {
-                return StatusCode(500, new { message = "Failed to send boarding reminder SMS", error = result.ErrorMessage });
-            }
-
-            return Ok(new
-            {
-                message = "Bus boarding reminder SMS sent successfully.",
-                pnr,
-                recipient = reservation.PassengerPhone,
-                date = formattedDate,
-                time = formattedTime,
-                boardingPoint
-            });
+            return Task.FromResult<IActionResult>(BadRequest(new 
+            { 
+                message = "Bus boarding reminder functionality has been permanently decommissioned." 
+            }));
         }
     }
 }
