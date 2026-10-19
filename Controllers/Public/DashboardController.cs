@@ -77,7 +77,7 @@ public class DashboardController : AdminApiController
 
         // Active Bookings
         var activeFlights = flightReservations.Count(x => x.Status == "Booked" || x.Status == "Confirmed");
-        var activeBuses = busReservations.Count(x => x.Status == "Booked" || x.Status == "Confirmed");
+        var activeBuses = busReservations.Count(x => x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success");
         var activeHotels = hotelReservations.Count(x => x.Status == "Booked" || x.Status == "Confirmed");
         var activeBookings = activeFlights + activeBuses + activeHotels;
         var activeBookingsGrowth = 0m;

@@ -98,4 +98,9 @@ public static class IndiaTimeHelper
     {
         return DateTime.UtcNow + IndiaOffset;
     }
+
+    /// <summary>
+    /// Alias for UtcNowIst() returning current IST instant.
+    /// </summary>
+    public static DateTime NowIst => UtcNowIst();
 }

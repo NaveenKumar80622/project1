@@ -715,7 +715,7 @@ namespace PickNBook.Api.Data
             {
                 entity.ToTable("bus_bookings");
                 entity.HasKey(x => x.Id);
-                entity.Property(x => x.BusNumber).HasMaxLength(20).IsRequired();
+                entity.Property(x => x.BusNumber).HasMaxLength(100).IsRequired();
                 entity.Property(x => x.OperatorName).HasMaxLength(120).IsRequired();
                 entity.Property(x => x.BusType).HasMaxLength(40).IsRequired();
                 entity.Property(x => x.FromCity).HasMaxLength(80).IsRequired();
@@ -772,7 +772,7 @@ namespace PickNBook.Api.Data
                 entity.ToTable("bus_reservations");
                 entity.HasKey(x => x.Id);
                 entity.Property(x => x.BookingReference).HasMaxLength(40).IsRequired();
-                entity.Property(x => x.Pnr).HasMaxLength(20).IsRequired().HasDefaultValue("");
+                entity.Property(x => x.Pnr).HasMaxLength(100).IsRequired().HasDefaultValue("");
                 entity.Property(x => x.UserId).HasMaxLength(80).IsRequired();
                 entity.Property(x => x.PassengerName).HasMaxLength(120).IsRequired();
                 entity.Property(x => x.PassengerPhone).HasMaxLength(30).IsRequired();

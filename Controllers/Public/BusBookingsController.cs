@@ -3003,11 +3003,11 @@ namespace PickNBook.Api.Controllers
                 }
                 else if (normalizedStatus == "upcoming")
                 {
-                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.BusBooking.DepartureTime > DateTime.UtcNow);
+                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && (x.BusBooking == null || x.BusBooking.DepartureTime > DateTime.UtcNow));
                 }
                 else if (normalizedStatus == "completed" || normalizedStatus == "past")
                 {
-                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.BusBooking.DepartureTime <= DateTime.UtcNow);
+                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && x.BusBooking != null && x.BusBooking.DepartureTime <= DateTime.UtcNow);
                 }
                 else if (normalizedStatus == "cancelled")
                 {
@@ -3091,7 +3091,6 @@ namespace PickNBook.Api.Controllers
                 .ToDictionary(x => x.Key, x => (IReadOnlyList<BusReservationPassenger>)x.ToList());
 
             var response = bookings
-                .Where(x => x.BusBooking is not null)
                 .Select(x =>
                 {
                     if (!passengersByBooking.TryGetValue(x.Id, out var passengerRows))
@@ -3123,13 +3122,24 @@ namespace PickNBook.Api.Controllers
                     walletTxMap.TryGetValue(x.BookingReference ?? "", out var walletTx);
                     long? fallbackPaymentId = walletTx?.Id;
 
+                    var bus = x.BusBooking ?? new BusBooking
+                    {
+                        FromCity = "Unknown",
+                        ToCity = "Unknown",
+                        OperatorName = "Bus Operator",
+                        BusType = "Bus",
+                        DepartureTime = x.BookedAtUtc,
+                        ArrivalTime = x.BookedAtUtc.AddHours(4),
+                        BusNumber = "N/A"
+                    };
+
                     var lifecycle = PickNBook.Api.Helpers.BookingLifecycleHelper.Build(
                         "Bus",
                         x.Id,
                         x.BookingReference,
                         x.Pnr,
                         x.Status,
-                        $"{x.BusBooking!.FromCity} → {x.BusBooking.ToCity} ({x.BusBooking.OperatorName})",
+                        $"{bus.FromCity} → {bus.ToCity} ({bus.OperatorName})",
                         x.BookedAtUtc,
                         payment,
                         exec,
@@ -3137,10 +3147,10 @@ namespace PickNBook.Api.Controllers
                         x.TotalPriceInr,
                         cancelCharges,
                         refundAmt,
-                        x.BusBooking.DepartureTime,
+                        bus.DepartureTime,
                         x.CancellationReason);
 
-                    return MapBusReservation(x, x.BusBooking!, passengerRows, lifecycle, payment, fallbackPaymentId, refundCalculator, srdvBusService);
+                    return MapBusReservation(x, bus, passengerRows, lifecycle, payment, fallbackPaymentId, refundCalculator, srdvBusService);
                 });
 
             return Ok(response);

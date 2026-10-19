@@ -49,12 +49,19 @@ namespace PickNBook.Api.Controllers
 
             if (!string.IsNullOrWhiteSpace(status))
             {
-                sql += " AND Status = @Status";
-                parameters.Add("Status", status.Trim());
-            }
-            else
-            {
-                sql += " AND Status = 'Booked'";
+                var s = status.Trim();
+                if (!s.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (s.Equals("Booked", StringComparison.OrdinalIgnoreCase) || s.Equals("Success", StringComparison.OrdinalIgnoreCase) || s.Equals("Confirmed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sql += " AND Status IN ('Booked', 'SUCCESS', 'Confirmed', 'Success')";
+                    }
+                    else
+                    {
+                        sql += " AND Status = @Status";
+                        parameters.Add("Status", s);
+                    }
+                }
             }
 
             if (!string.IsNullOrWhiteSpace(pnr))
@@ -2026,13 +2033,19 @@ namespace PickNBook.Api.Controllers
             if (!string.IsNullOrWhiteSpace(status))
             {
                 var normalizedStatus = status.Trim();
-
-                queryable = queryable.Where(x =>
-                    EF.Functions.Like(x.Status, normalizedStatus));
-            }
-            else
-            {
-                queryable = queryable.Where(x => x.Status == "Booked");
+                if (!normalizedStatus.Equals("all", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (normalizedStatus.Equals("Booked", StringComparison.OrdinalIgnoreCase) ||
+                        normalizedStatus.Equals("Success", StringComparison.OrdinalIgnoreCase) ||
+                        normalizedStatus.Equals("Confirmed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        queryable = queryable.Where(x => x.Status == "Booked" || x.Status == "SUCCESS" || x.Status == "Confirmed" || x.Status == "Success");
+                    }
+                    else
+                    {
+                        queryable = queryable.Where(x => EF.Functions.Like(x.Status, normalizedStatus));
+                    }
+                }
             }
 
             var bookings = await queryable
@@ -2068,7 +2081,6 @@ namespace PickNBook.Api.Controllers
                     g => g.OrderByDescending(p => p.CreatedAt).FirstOrDefault());
 
             var response = bookings
-                .Where(x => x.BusBooking is not null)
                 .Select(x =>
                 {
                     if (!passengersByBooking.TryGetValue(
@@ -2120,9 +2132,9 @@ namespace PickNBook.Api.Controllers
                         CancelledAtUtc = x.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(x.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
                         CancelledAtIst = x.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(x.CancelledAtUtc.Value) : (DateTime?)null,
 
-                        Bus = new
+                        Bus = x.BusBooking != null ? new
                         {
-                            x.BusBooking!.Id,
+                            x.BusBooking.Id,
                             x.BusBooking.BusNumber,
                             x.BusBooking.OperatorName,
                             x.BusBooking.BusType,
@@ -2133,7 +2145,7 @@ namespace PickNBook.Api.Controllers
                             ArrivalTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(x.BusBooking.ArrivalTime),
                             ArrivalTimeIst = x.BusBooking.ArrivalTime,
                             JourneyDateIst = DateOnly.FromDateTime(x.BusBooking.DepartureTime)
-                        },
+                        } : null,
 
                         Passengers = passengerRows.Select(p => new
                         {
@@ -2145,9 +2157,6 @@ namespace PickNBook.Api.Controllers
                         })
                     };
                 })
-                .Where(x => !string.IsNullOrWhiteSpace(status)
-                    ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
-                    : x.Status == "Booked")
                 .ToList();
 
             return Ok(response);

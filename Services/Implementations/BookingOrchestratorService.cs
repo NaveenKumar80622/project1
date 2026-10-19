@@ -179,8 +179,12 @@ namespace PickNBook.Api.Services.Implementations
                     result = await ProcessFlightBookingAsync(payment, pendingBooking, execution);
                 }
 
-                if (!result.Success && payment.FulfillmentStatus.StartsWith("Failed"))
+                if (!result.Success)
                 {
+                    payment.FulfillmentStatus = "Failed_LocalPersistence";
+                    payment.FailureReason = "Recovery failed: " + (result.ErrorMessage ?? "Unknown local persistence error");
+                    await _dbContext.SaveChangesAsync();
+
                     // Do NOT refund because supplier succeeded. Leave it for manual fix.
                     _logger.LogCritical("Payment {PaymentId}: Retry of local persistence failed. Supplier was successful. DO NOT REFUND.", paymentId);
                 }
@@ -401,8 +405,15 @@ namespace PickNBook.Api.Services.Implementations
 
                 if (missingLayoutSeats.Any())
                 {
-                    return (false,
-                        $"Authoritative seat layout information is unavailable for seat(s): {string.Join(", ", missingLayoutSeats)}. Please refresh the seat layout and block again.");
+                    if (existingExecution != null)
+                    {
+                        _logger.LogWarning("Layout cache expired during recovery for payment {PaymentId}. Falling back to passenger payload SeatTypes.", payment.Id);
+                    }
+                    else
+                    {
+                        return (false,
+                            $"Authoritative seat layout information is unavailable for seat(s): {string.Join(", ", missingLayoutSeats)}. Please refresh the seat layout and block again.");
+                    }
                 }
 
                 var seatsRequired = authoritativeBlockedSeats.Count;
@@ -442,15 +453,17 @@ namespace PickNBook.Api.Services.Implementations
                     }
                 }
 
+                var rawBusNumber = !string.IsNullOrWhiteSpace(request.OperatorName) 
+                    ? request.OperatorName.Trim() 
+                    : ((_cache.TryGetValue($"bus_travelsname_{request.TraceId}_{request.ResultIndex}", out string? cachedTn) ||
+                        (!string.IsNullOrEmpty(compositeResultIndex) && _cache.TryGetValue($"bus_travelsname_{request.TraceId}_{compositeResultIndex}", out cachedTn))) && !string.IsNullOrWhiteSpace(cachedTn) 
+                        ? cachedTn.Trim() 
+                        : (busCtx?.OperatorName ?? "Bus Service"));
+
                 // 1. Create DB Booking Tracking Record
                 var bus = new BusBooking
                 {
-                    BusNumber = !string.IsNullOrWhiteSpace(request.OperatorName) 
-                        ? request.OperatorName.Trim() 
-                        : ((_cache.TryGetValue($"bus_travelsname_{request.TraceId}_{request.ResultIndex}", out string? cachedTn) ||
-                            (!string.IsNullOrEmpty(compositeResultIndex) && _cache.TryGetValue($"bus_travelsname_{request.TraceId}_{compositeResultIndex}", out cachedTn))) && !string.IsNullOrWhiteSpace(cachedTn) 
-                            ? cachedTn.Trim() 
-                            : (busCtx?.OperatorName ?? "Bus Service")),
+                    BusNumber = rawBusNumber.Length > 100 ? rawBusNumber[..100] : rawBusNumber,
                     OperatorName = request.OperatorName ?? "Unknown",
                     BusType = request.BusType ?? "Unknown",
                     GstCategory = "AC",
@@ -573,7 +586,15 @@ namespace PickNBook.Api.Services.Implementations
                 foreach (var item in authoritativeBlockedSeats)
                 {
                     var p = item.Passenger;
-                    var layoutSeat = layoutMap![item.SeatCode];
+                    string seatType = "Seater";
+                    if (layoutMap != null && layoutMap.TryGetValue(item.SeatCode, out var layoutSeat) && !string.IsNullOrWhiteSpace(layoutSeat.SeatType))
+                    {
+                        seatType = layoutSeat.SeatType;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(p.SeatType))
+                    {
+                        seatType = p.SeatType;
+                    }
 
                     dbPassengers.Add(new BusReservationPassenger
                     {
@@ -581,8 +602,8 @@ namespace PickNBook.Api.Services.Implementations
                         FullName = p.FullName,
                         Gender = p.Gender,
                         SeatNumber = item.SeatCode,
-                        BaseFareInr = item.BlockedSeat!.BaseFare,
-                        SeatType = layoutSeat.SeatType,
+                        BaseFareInr = item.BlockedSeat != null ? item.BlockedSeat.BaseFare : p.BaseFare,
+                        SeatType = seatType,
                         Age = p.Age
                     });
                 }
@@ -668,8 +689,17 @@ namespace PickNBook.Api.Services.Implementations
                     // Persist BusBooking & BusReservation as Failed before refunding
                     try
                     {
-                        _dbContext.BusBookings.Add(bus);
-                        await _dbContext.SaveChangesAsync();
+                        var existingBus = await _dbContext.BusBookings
+                            .FirstOrDefaultAsync(b => b.BusNumber == bus.BusNumber && b.FromCity == bus.FromCity && b.ToCity == bus.ToCity && b.DepartureTime == bus.DepartureTime);
+                        if (existingBus != null)
+                        {
+                            bus = existingBus;
+                        }
+                        else
+                        {
+                            _dbContext.BusBookings.Add(bus);
+                            await _dbContext.SaveChangesAsync();
+                        }
 
                         reservation.BusBookingId = bus.Id;
                         reservation.Status = "Failed";
@@ -798,7 +828,7 @@ namespace PickNBook.Api.Services.Implementations
                     ? srdvTravelOperatorPnr.Trim()
                     : (!string.IsNullOrWhiteSpace(srdvTicketNo) ? srdvTicketNo.Trim() : (!string.IsNullOrWhiteSpace(srdvPnr) ? srdvPnr : reservation.Pnr));
 
-                reservation.Pnr = operatorPnr;
+                reservation.Pnr = operatorPnr.Length > 100 ? operatorPnr[..100] : operatorPnr;
                 reservation.SrdvBookingId = srdvPnr ?? srdvTravelOperatorPnr;
                 reservation.SrdvTicketNo = srdvTicketNo;
                 reservation.Status = "Booked";
@@ -818,8 +848,17 @@ namespace PickNBook.Api.Services.Implementations
                     catch { /* Ignore parsing errors */ }
                 }
                 
-                _dbContext.BusBookings.Add(bus);
-                await _dbContext.SaveChangesAsync();
+                var existingBusBooking = await _dbContext.BusBookings
+                    .FirstOrDefaultAsync(b => b.BusNumber == bus.BusNumber && b.FromCity == bus.FromCity && b.ToCity == bus.ToCity && b.DepartureTime == bus.DepartureTime);
+                if (existingBusBooking != null)
+                {
+                    bus = existingBusBooking;
+                }
+                else
+                {
+                    _dbContext.BusBookings.Add(bus);
+                    await _dbContext.SaveChangesAsync();
+                }
                 
                 reservation.BusBookingId = bus.Id;
                 _dbContext.BusReservations.Add(reservation);

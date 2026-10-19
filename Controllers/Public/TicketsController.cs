@@ -130,16 +130,17 @@ public class TicketsController : BaseApiController
         {
             var query = _context.BusReservations
                 .Include(x => x.BusBooking)
-                .Where(x => busEligibleStatuses.Contains(x.Status) && x.BusBooking != null);
+                .Where(x => busEligibleStatuses.Contains(x.Status));
 
-            if (request.ActiveOnly)
+            if (request.ActiveOnly && !hasRef)
             {
-                query = query.Where(x => x.BusBooking!.DepartureTime >= nowUtc);
+                var nowIst = PickNBook.Api.Helpers.IndiaTimeHelper.UtcNowIst();
+                query = query.Where(x => x.BusBooking == null || x.BusBooking.DepartureTime >= nowIst);
             }
 
             if (hasRef)
             {
-                query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef);
+                query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef || x.SrdvTicketNo == bookingRef || x.SrdvBookingId == bookingRef);
             }
             else if (hasPhone && hasEmail)
             {
@@ -160,7 +161,7 @@ public class TicketsController : BaseApiController
             }
 
             var bookings = await query
-                .OrderByDescending(x => x.BusBooking!.DepartureTime)
+                .OrderByDescending(x => x.BookedAtUtc)
                 .ToListAsync();
 
             _logger.LogInformation("[TicketsController.Fetch] Table: BusReservations. Matched {Count} records.", bookings.Count);
@@ -177,14 +178,27 @@ public class TicketsController : BaseApiController
             var result = new List<object>();
             foreach (var booking in bookings)
             {
-                var dep = booking.BusBooking!.DepartureTime;
-                var arr = booking.BusBooking.ArrivalTime;
+                var bus = booking.BusBooking ?? new BusBooking
+                {
+                    OperatorName = "Bus Operator",
+                    BusNumber = "N/A",
+                    BusType = "Bus",
+                    FromCity = "Unknown",
+                    ToCity = "Unknown",
+                    DepartureTime = booking.BookedAtUtc,
+                    ArrivalTime = booking.BookedAtUtc.AddHours(4),
+                    BoardingPoint = booking.BoardingPointName ?? "Boarding Point",
+                    DroppingPoint = booking.DroppingPointName ?? "Dropping Point"
+                };
+
+                var dep = bus.DepartureTime;
+                var arr = bus.ArrivalTime;
                 var totalMinutes = (int)Math.Max(0, (arr - dep).TotalMinutes);
                 var durationStr = $"{totalMinutes / 60}h {totalMinutes % 60:D2}m";
 
                 var boardingName = !string.IsNullOrWhiteSpace(booking.BoardingPointName) 
                     ? booking.BoardingPointName 
-                    : booking.BusBooking.BoardingPoint;
+                    : bus.BoardingPoint;
 
                 var bTime = booking.BoardingPointTime ?? dep;
                 var boardingTimeStr = bTime.ToString("HH:mm");
@@ -193,7 +207,7 @@ public class TicketsController : BaseApiController
 
                 var droppingName = !string.IsNullOrWhiteSpace(booking.DroppingPointName) 
                     ? booking.DroppingPointName 
-                    : booking.BusBooking.DroppingPoint;
+                    : bus.DroppingPoint;
 
                 var dTime = booking.DroppingPointTime ?? arr;
                 var droppingTimeStr = dTime.ToString("HH:mm");
@@ -208,12 +222,12 @@ public class TicketsController : BaseApiController
                     ticketType = "bus",
                     pnr = booking.Pnr,
                     ticketNumber = booking.SrdvTicketNo ?? "",
-                    providerName = booking.BusBooking.OperatorName,
-                    operatorName = booking.BusBooking.OperatorName,
-                    tripNumber = booking.BusBooking.BusNumber,
-                    busType = booking.BusBooking.BusType,
-                    fromCity = booking.BusBooking.FromCity,
-                    toCity = booking.BusBooking.ToCity,
+                    providerName = bus.OperatorName,
+                    operatorName = bus.OperatorName,
+                    tripNumber = bus.BusNumber,
+                    busType = bus.BusType,
+                    fromCity = bus.FromCity,
+                    toCity = bus.ToCity,
                     departureTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(dep),
                     departureTimeIst = dep,
                     departureTimeDisplay = dep != default ? dep.ToString("dd MMM yyyy, hh:mm tt") : "-",
@@ -272,7 +286,7 @@ public class TicketsController : BaseApiController
                 .Include(x => x.Segments)
                 .Where(x => flightConfirmedStatuses.Contains(x.Status));
 
-            if (request.ActiveOnly)
+            if (request.ActiveOnly && !hasRef)
             {
                 query = query.Where(x => x.DepartureTime >= nowUtc);
             }
@@ -374,7 +388,7 @@ public class TicketsController : BaseApiController
             var query = _context.HotelReservations
                 .Where(x => hotelConfirmedStatuses.Contains(x.Status));
 
-            if (request.ActiveOnly)
+            if (request.ActiveOnly && !hasRef)
             {
                 query = query.Where(x => x.CheckOutDate >= nowUtc.Date);
             }
