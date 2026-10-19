@@ -638,6 +638,7 @@ public class AdminHotelController : AdminApiController
         return Ok(new { message = $"Hotel markup rule {id} deleted successfully." });
     }
     [HttpPost("Balance")]
+    [HttpPost("~/api/admin/hotel/v8/Balance")]
     public async Task<IActionResult> GetBalance([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] BalanceRequestDto? request = null)
     {
         _logger.LogInformation("Admin Hotel Balance POST request received");
@@ -648,6 +649,15 @@ public class AdminHotelController : AdminApiController
         }
 
         var res = await _hotelService.GetBalanceAsync(request);
+
+        if (res.AvailableBalance.HasValue)
+        {
+            var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
+            if (alertService != null)
+            {
+                _ = alertService.EvaluateAndAlertAsync(res.AvailableBalance.Value);
+            }
+        }
 
         if (res.Error != null && res.Error.ErrorCode == 6000)
         {
@@ -671,6 +681,7 @@ public class AdminHotelController : AdminApiController
     }
 
     [HttpPost("BalanceLog")]
+    [HttpPost("~/api/admin/hotel/v8/BalanceLog")]
     public async Task<IActionResult> GetBalanceLog([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] BalanceLogRequestDto? request = null)
     {
         _logger.LogInformation("Admin Hotel BalanceLog POST request received");

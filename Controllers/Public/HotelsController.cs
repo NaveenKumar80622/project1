@@ -15,6 +15,7 @@ using System.Security.Claims;
 using System.Threading.Tasks;
 
 using PickNBook.Api.Services.Notifications.Interfaces;
+using PickNBook.Api.Extensions;
 
 namespace PickNBook.Api.Controllers
 {
@@ -420,12 +421,29 @@ namespace PickNBook.Api.Controllers
         // =====================================
         // BLOCK ROOM
         // =====================================
+        [HttpPost("~/v8/BlockRoom")]
+        [HttpPost("/v8/BlockRoom")]
         [HttpPost("BlockRoom")]
         [HttpPost("block-room")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> PostBlockRoom([FromBody] BlockRoomRequestDto request)
         {
+            string? userId = null;
+            bool isPartnerApiCall = false;
+            if (Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) && !string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                isPartnerApiCall = true;
+            }
+            else if (_currentUserService.IsAuthenticated())
+            {
+                userId = _currentUserService.GetUserOrGuestId();
+            }
+            else
+            {
+                return Unauthorized(ValidationErrorDto.Create("Please login or provide a valid Api-Token header to block hotel room.", "Authorization"));
+            }
+
             if (request == null)
             {
                 return BadRequest(ValidationErrorDto.Create("Request body cannot be null.", "request"));
@@ -504,12 +522,21 @@ namespace PickNBook.Api.Controllers
             }
         }
 
+        [HttpGet("~/v8/BlockRoom")]
+        [HttpGet("/v8/BlockRoom")]
         [HttpGet("BlockRoom")]
         [HttpGet("block-room")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> GetBlockRoom([FromQuery] long traceId, [FromQuery] string resultIndex, [FromQuery] string? optionId = null, [FromQuery] string? roomTypeCode = null, [FromQuery] string? roomIndex = null)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) || string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                if (!_currentUserService.IsAuthenticated())
+                {
+                    return Unauthorized(ValidationErrorDto.Create("Please login or provide a valid Api-Token header to block hotel room.", "Authorization"));
+                }
+            }
             if (traceId <= 0)
             {
                 return BadRequest(ValidationErrorDto.Create("traceId is required and must be a positive integer.", "traceId"));
@@ -572,6 +599,7 @@ namespace PickNBook.Api.Controllers
         // =====================================
         // BOOK ROOM (SRDV v8 INTEGRATION)
         // =====================================
+        [HttpPost("~/v8/Book")]
         [HttpPost("/v8/Book")]
         [HttpPost("BookRoom")]
         [HttpPost("book-room")]
@@ -792,6 +820,32 @@ namespace PickNBook.Api.Controllers
                 b2cFinalFare = markedUpPrice - couponDiscount;
             }
 
+            // Pre-booking Validation: Check Master Wallet AvailableBalance per SRDV v8 specification:
+            // "AvailableBalance is the number to act on: Balance plus CreditLimit, less the debits already held against them.
+            // It is the same figure checked before a booking is allowed to be paid for, so a booking cannot fail for want of money this route said you had."
+            try
+            {
+                var walletBalance = await _hotelService.GetBalanceAsync();
+                if (walletBalance != null && walletBalance.IsSuccess && walletBalance.AvailableBalance.HasValue)
+                {
+                    decimal requiredCost = quotedPrice > 0 ? quotedPrice : request.Price;
+                    if (requiredCost > 0 && walletBalance.AvailableBalance.Value < requiredCost)
+                    {
+                        _logger.LogError("Supplier wallet AvailableBalance insufficient for Hotel Booking. Available: ₹{Avail}, Required: ₹{Req}", walletBalance.AvailableBalance.Value, requiredCost);
+                        return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                        {
+                            success = false,
+                            message = "Network error or booking settlement temporarily unavailable. Please try again later.",
+                            errorCode = "INSUFFICIENT_FUNDS"
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to perform pre-booking balance check. Continuing with booking pipeline.");
+            }
+
             try
             {
                 var bookRes = await _hotelService.BookRoomAsync(request);
@@ -852,6 +906,12 @@ namespace PickNBook.Api.Controllers
                             // Tax Breakdown
                             SrdvGstAmount = blockedPrice?.Tax ?? 0m,
                             
+                            SrdvBookingResponseJson = System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                SupplierResponse = bookRes,
+                                HotelRoomsDetails = request.HotelRoomsDetails
+                            }),
+
                             Status = isPending ? "Pending" : "Confirmed",
                             CreatedAt = DateTime.UtcNow
                         };
@@ -2312,6 +2372,129 @@ namespace PickNBook.Api.Controllers
             discount = decimal.Round(discount, 2, MidpointRounding.AwayFromZero);
 
             return (true, discount, "Coupon is valid.", coupon);
+        }
+
+        // =====================================
+        // WALLET BALANCE & BALANCE LOG ENDPOINTS (SRDV v8 SPECIFICATION)
+        // =====================================
+
+        /// <summary>
+        /// POST /v8/Balance - Your account wallet: ledger balance, credit limit, held amount, and available balance.
+        /// Authentication: Api-Token + account IP whitelist
+        /// Request body: Takes no request body.
+        /// Response: Every value sits at the root, not under Result. Five money keys present only when ErrorCode is 0.
+        /// </summary>
+        [HttpPost("~/v8/Balance")]
+        [HttpPost("Balance")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetBalance([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] BalanceRequestDto? request = null)
+        {
+            _logger.LogInformation("Hotel Balance POST request received on v8/Balance");
+
+            var tokenHeader = Request.Headers["Api-Token"].FirstOrDefault()
+                              ?? Request.Headers["X-SRDV-Token"].FirstOrDefault();
+
+            var srdvSettings = HttpContext.RequestServices.GetService<Microsoft.Extensions.Options.IOptions<PickNBook.Api.Models.Config.SrdvSettings>>()?.Value;
+
+            if (!string.IsNullOrWhiteSpace(tokenHeader) && srdvSettings != null)
+            {
+                if (!string.Equals(tokenHeader, srdvSettings.ApiToken, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning("Hotel Balance request received with invalid Api-Token: {Token}", tokenHeader);
+                    return StatusCode(StatusCodes.Status401Unauthorized, new BalanceResponseDto
+                    {
+                        Error = new HotelSearchErrorDto
+                        {
+                            ErrorCode = 6000,
+                            ErrorMessage = "The account behind the token no longer exists or the Api-Token is invalid."
+                        }
+                    });
+                }
+            }
+
+            request ??= new BalanceRequestDto();
+            if (string.IsNullOrWhiteSpace(request.EndUserIp) || request.EndUserIp == "127.0.0.1")
+            {
+                request.EndUserIp = HttpContext.GetClientIpAddress();
+            }
+
+            var res = await _hotelService.GetBalanceAsync(request);
+
+            if (res.AvailableBalance.HasValue)
+            {
+                var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
+                if (alertService != null)
+                {
+                    _ = alertService.EvaluateAndAlertAsync(res.AvailableBalance.Value);
+                }
+            }
+
+            if (res.Error != null && res.Error.ErrorCode == 6000)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, res);
+            }
+
+            if (res.Error != null && res.Error.ErrorCode != 0)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, res);
+            }
+
+            return Ok(res);
+        }
+
+        /// <summary>
+        /// POST /v8/BalanceLog - Wallet movements for your account, newest first, with running balance after each entry.
+        /// Authentication: Api-Token + account IP whitelist
+        /// Request body: Takes no request body.
+        /// Response: Result is omitted entirely when there are no movements — not sent as an empty array.
+        /// </summary>
+        [HttpPost("~/v8/BalanceLog")]
+        [HttpPost("BalanceLog")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetBalanceLog([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] BalanceLogRequestDto? request = null)
+        {
+            _logger.LogInformation("Hotel BalanceLog POST request received on v8/BalanceLog");
+
+            var tokenHeader = Request.Headers["Api-Token"].FirstOrDefault()
+                              ?? Request.Headers["X-SRDV-Token"].FirstOrDefault();
+
+            var srdvSettings = HttpContext.RequestServices.GetService<Microsoft.Extensions.Options.IOptions<PickNBook.Api.Models.Config.SrdvSettings>>()?.Value;
+
+            if (!string.IsNullOrWhiteSpace(tokenHeader) && srdvSettings != null)
+            {
+                if (!string.Equals(tokenHeader, srdvSettings.ApiToken, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning("Hotel BalanceLog request received with invalid Api-Token: {Token}", tokenHeader);
+                    return StatusCode(StatusCodes.Status401Unauthorized, new BalanceLogResponseDto
+                    {
+                        Error = new HotelSearchErrorDto
+                        {
+                            ErrorCode = 6000,
+                            ErrorMessage = "The account behind the token no longer exists or the Api-Token is invalid."
+                        }
+                    });
+                }
+            }
+
+            request ??= new BalanceLogRequestDto();
+            if (string.IsNullOrWhiteSpace(request.EndUserIp) || request.EndUserIp == "127.0.0.1")
+            {
+                request.EndUserIp = HttpContext.GetClientIpAddress();
+            }
+
+            var res = await _hotelService.GetBalanceLogAsync(request);
+
+            if (res.Error != null && res.Error.ErrorCode == 6000)
+            {
+                return StatusCode(StatusCodes.Status401Unauthorized, res);
+            }
+
+            if (res.Error != null && res.Error.ErrorCode != 0)
+            {
+                return StatusCode(StatusCodes.Status502BadGateway, res);
+            }
+
+            return Ok(res);
         }
     }
 }

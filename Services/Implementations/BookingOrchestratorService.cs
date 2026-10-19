@@ -1215,6 +1215,30 @@ namespace PickNBook.Api.Services.Implementations
                 }
                 else
                 {
+                    // Pre-fulfillment validation: verify supplier wallet AvailableBalance per SRDV v8 specification
+                    try
+                    {
+                        var walletBal = await hotelService.GetBalanceAsync();
+                        if (walletBal != null && walletBal.IsSuccess && walletBal.AvailableBalance.HasValue)
+                        {
+                            decimal reqCost = request.Price > 0 ? request.Price : (payment.FinalPayableAmount > 0 ? payment.FinalPayableAmount : 0m);
+                            if (reqCost > 0 && walletBal.AvailableBalance.Value < reqCost)
+                            {
+                                _logger.LogError("Supplier wallet AvailableBalance insufficient for hotel fulfillment (Payment {PaymentId}). Available: ₹{Avail}, Required: ₹{Req}",
+                                    payment.Id, walletBal.AvailableBalance.Value, reqCost);
+                                throw new InvalidOperationException($"Insufficient supplier wallet balance (₹{walletBal.AvailableBalance.Value:N2}) to fulfill booking for payment {payment.Id}.");
+                            }
+                        }
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to verify supplier balance before hotel fulfillment for payment {PaymentId}. Proceeding with attempt.", payment.Id);
+                    }
+
                     var srdvRes = await hotelService.BookRoomAsync(request);
                     var result = srdvRes.BookResult;
                     
@@ -1225,7 +1249,11 @@ namespace PickNBook.Api.Services.Implementations
                     srdvProviderBookingId = result?.BookingId > 0 ? result.BookingId.ToString() : (!string.IsNullOrEmpty(result?.BookingRefNo) ? result.BookingRefNo : null);
                     srdvConfirmationNo = result?.ConfirmationNo;
                     srdvInvoiceNumber = result?.InvoiceNumber;
-                    srdvResponseJson = JsonSerializer.Serialize(srdvRes);
+                    srdvResponseJson = JsonSerializer.Serialize(new
+                    {
+                        SupplierResponse = srdvRes,
+                        HotelRoomsDetails = request.HotelRoomsDetails
+                    });
 
                     var execution = new PickNBook.Api.Models.Entities.SupplierFulfillmentExecution
                     {

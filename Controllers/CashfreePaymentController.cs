@@ -499,6 +499,34 @@ namespace PickNBook.Api.Controllers
                                 request.BookingPayloadJson = JsonSerializer.Serialize(payload);
                             }
                         }
+
+                        // Pre-payment Strict Sufficient Funds Gate for Hotel (SRDV /v8/Balance)
+                        // Verifies supplier AvailableBalance before creating Cashfree order / redirecting to gateway
+                        var hotelService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.IHotelService>();
+                        if (hotelService != null)
+                        {
+                            var hotelBalance = await hotelService.GetBalanceAsync();
+                            decimal availableFunds = hotelBalance?.AvailableBalance ?? 0m;
+
+                            if (hotelBalance == null || !hotelBalance.IsSuccess || availableFunds < providerAmount)
+                            {
+                                _logger.LogCritical("SRDV HOTEL WALLET INSUFFICIENT FUNDS: Required={Required}, Available={Available}. Aborting payment.",
+                                    providerAmount, availableFunds);
+
+                                var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
+                                if (alertService != null)
+                                {
+                                    _ = alertService.EvaluateAndAlertAsync(availableFunds);
+                                }
+
+                                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                                {
+                                    success = false,
+                                    message = "Network error, please try again",
+                                    errorCode = "INSUFFICIENT_FUNDS"
+                                });
+                            }
+                        }
                     }
                     else if (request.BookingType == BookingType.Flight)
                     {

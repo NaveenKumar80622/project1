@@ -1203,24 +1203,29 @@ namespace PickNBook.Api.Models.DTOs
         public HotelSearchErrorDto Error { get; set; } = new();
 
         [JsonPropertyName("CurrencyCode")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         [JsonConverter(typeof(SafeStringConverter))]
         public string? CurrencyCode { get; set; }
 
         [JsonPropertyName("Balance")]
-        [JsonConverter(typeof(SafeDecimalConverter))]
-        public decimal Balance { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
+        public decimal? Balance { get; set; }
 
         [JsonPropertyName("CreditLimit")]
-        [JsonConverter(typeof(SafeDecimalConverter))]
-        public decimal CreditLimit { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
+        public decimal? CreditLimit { get; set; }
 
         [JsonPropertyName("HeldAmount")]
-        [JsonConverter(typeof(SafeDecimalConverter))]
-        public decimal HeldAmount { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
+        public decimal? HeldAmount { get; set; }
 
         [JsonPropertyName("AvailableBalance")]
-        [JsonConverter(typeof(SafeDecimalConverter))]
-        public decimal AvailableBalance { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        [JsonConverter(typeof(SafeNullableDecimalConverter))]
+        public decimal? AvailableBalance { get; set; }
 
         [JsonIgnore]
         public bool IsSuccess => Error == null || Error.ErrorCode == 0;
@@ -1291,12 +1296,18 @@ namespace PickNBook.Api.Models.DTOs
 
     public class BalanceLogResponseDto
     {
+        private System.Collections.Generic.List<BalanceLogItemDto>? _result;
+
         [JsonPropertyName("Error")]
         public HotelSearchErrorDto Error { get; set; } = new();
 
         [JsonPropertyName("Result")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public System.Collections.Generic.List<BalanceLogItemDto>? Result { get; set; }
+        public System.Collections.Generic.List<BalanceLogItemDto>? Result
+        {
+            get => (_result != null && _result.Count == 0) ? null : _result;
+            set => _result = (value != null && value.Count == 0) ? null : value;
+        }
 
         [JsonIgnore]
         public bool IsSuccess => Error == null || Error.ErrorCode == 0;

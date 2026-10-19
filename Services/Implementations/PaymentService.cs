@@ -998,7 +998,10 @@ namespace PickNBook.Api.Services.Implementations
             }
 
             var orphanHotelReservations = await _dbContext.HotelReservations
-                .Where(h => (h.Status == "Pending" || h.Status == "Initiated") && h.CreatedAt <= cutoff30Min)
+                .Where(h => (h.Status == "Pending" || h.Status == "Initiated") 
+                            && string.IsNullOrEmpty(h.ProviderBookingId) 
+                            && string.IsNullOrEmpty(h.SrdvBookingId) 
+                            && h.CreatedAt <= cutoff30Min)
                 .Take(50)
                 .ToListAsync(cancellationToken);
             foreach (var h in orphanHotelReservations)

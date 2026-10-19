@@ -38,6 +38,7 @@ namespace PickNBook.Api.Services.Background
                     await ProcessStrandedFulfillmentsAsync(stoppingToken);
                     await ProcessPendingFlightCancellationsAsync(stoppingToken);
                     await ProcessPendingBusCancellationsAsync(stoppingToken);
+                    await ProcessPendingHotelReservationsAsync(stoppingToken);
                     await ProcessExpiredReservationsAsync(stoppingToken);
                 }
                 catch (Exception ex)
@@ -891,6 +892,64 @@ namespace PickNBook.Api.Services.Background
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error occurred processing expired wallet reservations.");
+            }
+        }
+
+        private async Task ProcessPendingHotelReservationsAsync(CancellationToken stoppingToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var hotelService = scope.ServiceProvider.GetService<IHotelService>();
+            var ticketEmailService = scope.ServiceProvider.GetService<PickNBook.Api.Services.ITicketEmailService>();
+
+            if (hotelService == null) return;
+
+            var pendingCutoff = DateTime.UtcNow.AddHours(-24);
+            var pendingHotels = await dbContext.HotelReservations
+                .Where(h => h.Status == "Pending" && !string.IsNullOrEmpty(h.TraceId) && h.CreatedAt >= pendingCutoff)
+                .Take(25)
+                .ToListAsync(stoppingToken);
+
+            foreach (var reservation in pendingHotels)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+
+                if (!long.TryParse(reservation.TraceId, out var traceId) || traceId <= 0)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    _logger.LogInformation("Reconciling pending HotelReservation {BookingReference} (TraceId: {TraceId})...", reservation.BookingReference, traceId);
+                    var details = await hotelService.GetBookingDetailsAsync(traceId);
+                    if (details != null && details.Success)
+                    {
+                        var updatedRes = await dbContext.HotelReservations
+                            .AsNoTracking()
+                            .FirstOrDefaultAsync(h => h.Id == reservation.Id, stoppingToken);
+
+                        if (updatedRes != null && updatedRes.Status == "Confirmed")
+                        {
+                            _logger.LogInformation("HotelReservation {BookingReference} settled to Confirmed.", updatedRes.BookingReference);
+                            if (ticketEmailService != null)
+                            {
+                                try
+                                {
+                                    await ticketEmailService.SendHotelTicketAsync(updatedRes);
+                                }
+                                catch (Exception mailEx)
+                                {
+                                    _logger.LogWarning(mailEx, "Failed to send confirmation email for settled HotelReservation {BookingReference}", updatedRes.BookingReference);
+                                }
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to reconcile pending HotelReservation {BookingReference} (TraceId {TraceId})", reservation.BookingReference, traceId);
+                }
             }
         }
     }

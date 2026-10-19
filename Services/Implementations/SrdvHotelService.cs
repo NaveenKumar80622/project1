@@ -929,15 +929,17 @@ namespace PickNBook.Api.Services
 
         public async Task<PickNBookBalanceResponseDto> GetApiBalanceAsync(string endUserIp)
         {
-            var requestBody = new
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.HotelBaseUrl.TrimEnd('/')}/Balance")
             {
-                EndUserIp = "127.0.0.1",
-                ClientId = _settings.ClientId,
-                UserName = _settings.UserName,
-                Password = _settings.Password
+                Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json")
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.HotelBaseUrl}/Balance", requestBody, new JsonSerializerOptions { PropertyNamingPolicy = null });
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", _settings.ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
             response.EnsureSuccessStatusCode();
 
             using var contentStream = await response.Content.ReadAsStreamAsync();
@@ -996,15 +998,17 @@ namespace PickNBook.Api.Services
 
         public async Task<PickNBookBalanceLogResponseDto> GetApiBalanceLogAsync(string endUserIp)
         {
-            var requestBody = new
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.HotelBaseUrl.TrimEnd('/')}/BalanceLog")
             {
-                EndUserIp = "127.0.0.1",
-                ClientId = _settings.ClientId,
-                UserName = _settings.UserName,
-                Password = _settings.Password
+                Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json")
             };
 
-            var response = await _httpClient.PostAsJsonAsync($"{_settings.HotelBaseUrl}/BalanceLog", requestBody, new JsonSerializerOptions { PropertyNamingPolicy = null });
+            if (!string.IsNullOrEmpty(_settings.ApiToken))
+            {
+                requestMessage.Headers.TryAddWithoutValidation("Api-Token", _settings.ApiToken);
+            }
+
+            var response = await _httpClient.SendAsync(requestMessage);
             response.EnsureSuccessStatusCode();
 
             using var contentStream = await response.Content.ReadAsStreamAsync();
@@ -1013,23 +1017,43 @@ namespace PickNBook.Api.Services
 
             var balanceLogDto = new PickNBookBalanceLogResponseDto { Success = true };
 
-            if (root.TryGetProperty("Logs", out var logsProp) && logsProp.ValueKind == JsonValueKind.Array)
+            var logsArray = root.TryGetProperty("Result", out var resProp) && resProp.ValueKind == JsonValueKind.Array
+                ? resProp
+                : (root.TryGetProperty("Logs", out var lp) && lp.ValueKind == JsonValueKind.Array ? lp : default);
+
+            if (logsArray.ValueKind == JsonValueKind.Array)
             {
-                foreach (var log in logsProp.EnumerateArray())
+                foreach (var log in logsArray.EnumerateArray())
                 {
                     var entry = new BalanceLogEntryDto();
-                    if (log.TryGetProperty("TransactionId", out var txProp)) entry.TransactionId = txProp.GetString() ?? string.Empty;
+                    if (log.TryGetProperty("ID", out var idProp)) entry.TransactionId = idProp.ToString();
+                    else if (log.TryGetProperty("TransactionId", out var txProp)) entry.TransactionId = txProp.GetString() ?? string.Empty;
+
                     if (log.TryGetProperty("Date", out var dtProp)) entry.Date = dtProp.GetString() ?? string.Empty;
-                    if (log.TryGetProperty("Description", out var descProp)) entry.Description = descProp.GetString() ?? string.Empty;
-                    if (log.TryGetProperty("Amount", out var amtProp))
+
+                    if (log.TryGetProperty("Detail", out var detProp)) entry.Description = detProp.GetString() ?? string.Empty;
+                    else if (log.TryGetProperty("Description", out var descProp)) entry.Description = descProp.GetString() ?? string.Empty;
+
+                    if (log.TryGetProperty("Debit", out var debProp))
                     {
-                        entry.Amount = amtProp.ValueKind == JsonValueKind.Number ? amtProp.GetDecimal() : (decimal.TryParse(amtProp.GetString(), out var val) ? val : 0m);
+                        decimal deb = debProp.ValueKind == JsonValueKind.Number ? debProp.GetDecimal() : (decimal.TryParse(debProp.GetString(), out var val) ? val : 0m);
+                        if (deb > 0) { entry.Amount = deb; entry.Type = "Debit"; }
                     }
-                    if (log.TryGetProperty("Type", out var typeProp)) entry.Type = typeProp.GetString() ?? string.Empty;
-                    if (log.TryGetProperty("RunningBalance", out var rbProp))
+                    if (log.TryGetProperty("Credit", out var credProp))
+                    {
+                        decimal cred = credProp.ValueKind == JsonValueKind.Number ? credProp.GetDecimal() : (decimal.TryParse(credProp.GetString(), out var val) ? val : 0m);
+                        if (cred > 0) { entry.Amount = cred; entry.Type = "Credit"; }
+                    }
+
+                    if (log.TryGetProperty("Balance", out var bProp))
+                    {
+                        entry.RunningBalance = bProp.ValueKind == JsonValueKind.Number ? bProp.GetDecimal() : (decimal.TryParse(bProp.GetString(), out var val) ? val : 0m);
+                    }
+                    else if (log.TryGetProperty("RunningBalance", out var rbProp))
                     {
                         entry.RunningBalance = rbProp.ValueKind == JsonValueKind.Number ? rbProp.GetDecimal() : (decimal.TryParse(rbProp.GetString(), out var val) ? val : 0m);
                     }
+
                     balanceLogDto.Logs.Add(entry);
                 }
             }
@@ -2518,16 +2542,8 @@ namespace PickNBook.Api.Services
         {
             try
             {
-                var payload = new
-                {
-                    EndUserIp = request?.EndUserIp ?? "127.0.0.1",
-                    ClientId = _settings.ClientId,
-                    UserName = _settings.UserName,
-                    Password = _settings.Password,
-                };
-
-                var payloadJson = System.Text.Json.JsonSerializer.Serialize(payload);
-                var content = new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json");
+                // Per SRDV v8 Spec: "This endpoint takes no request body. The account is taken from the Api-Token."
+                var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
                 var url = $"{_settings.HotelBaseUrl.TrimEnd('/')}/Balance";
                 var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
                 {
@@ -2553,11 +2569,26 @@ namespace PickNBook.Api.Services
                     NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
                 };
                 var result = System.Text.Json.JsonSerializer.Deserialize<BalanceResponseDto>(resStr, options);
-                return result ?? new BalanceResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 1, ErrorMessage = "Deserialization Failed" } };
+                if (result == null)
+                {
+                    return new BalanceResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 1, ErrorMessage = "Deserialization Failed" } };
+                }
+
+                // Per SRDV v8 Spec: "The five money keys are present only when ErrorCode is 0."
+                if (result.Error != null && result.Error.ErrorCode != 0)
+                {
+                    result.CurrencyCode = null;
+                    result.Balance = null;
+                    result.CreditLimit = null;
+                    result.HeldAmount = null;
+                    result.AvailableBalance = null;
+                }
+
+                return result;
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "Error fetching Balance");
+                _logger?.LogError(ex, "Error fetching Hotel Balance from supplier");
                 return new BalanceResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 500, ErrorMessage = ex.Message } };
             }
         }
@@ -2566,16 +2597,8 @@ namespace PickNBook.Api.Services
         {
             try
             {
-                var payload = new
-                {
-                    EndUserIp = request?.EndUserIp ?? "127.0.0.1",
-                    ClientId = _settings.ClientId,
-                    UserName = _settings.UserName,
-                    Password = _settings.Password,
-                };
-
-                var payloadJson = System.Text.Json.JsonSerializer.Serialize(payload);
-                var content = new StringContent(payloadJson, System.Text.Encoding.UTF8, "application/json");
+                // Per SRDV v8 Spec: "This endpoint takes no request body. The account is taken from the Api-Token."
+                var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
                 var url = $"{_settings.HotelBaseUrl.TrimEnd('/')}/BalanceLog";
                 var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
                 {
@@ -2604,6 +2627,11 @@ namespace PickNBook.Api.Services
                 
                 if (result != null)
                 {
+                    // Per SRDV v8 Spec: "Result is omitted entirely when there are no movements — not sent as an empty array."
+                    if (result.Result != null && result.Result.Count == 0)
+                    {
+                        result.Result = null;
+                    }
                     return result;
                 }
 
@@ -2611,7 +2639,7 @@ namespace PickNBook.Api.Services
             }
             catch (Exception ex)
             {
-                _logger?.LogError(ex, "Error fetching Balance Log");
+                _logger?.LogError(ex, "Error fetching Hotel Balance Log from supplier");
                 return new BalanceLogResponseDto { Error = new HotelSearchErrorDto { ErrorCode = 500, ErrorMessage = ex.Message } };
             }
         }
