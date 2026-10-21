@@ -1064,12 +1064,22 @@ namespace PickNBook.Api.Controllers
         // =====================================
         // BOOKING DETAILS (SRDV v8 INTEGRATION)
         // =====================================
+        [HttpPost("~/v8/BookingDetails")]
+        [HttpPost("/v8/BookingDetails")]
         [HttpPost("BookingDetails")]
         [HttpPost("booking-details")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> PostBookingDetails([FromBody] HotelBookingDetailsRequestDto request)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) || string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                if (!_currentUserService.IsAuthenticated())
+                {
+                    return Unauthorized(new { message = "Please login or provide a valid Api-Token header." });
+                }
+            }
+
             if (request == null || request.TraceId <= 0)
             {
                 return BadRequest(new { message = "TraceId is required and must be a positive integer." });
@@ -1091,10 +1101,18 @@ namespace PickNBook.Api.Controllers
 
         [HttpGet("BookingDetails")]
         [HttpGet("booking-details")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> GetBookingDetails([FromQuery] long traceId)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) || string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                if (!_currentUserService.IsAuthenticated())
+                {
+                    return Unauthorized(new { message = "Please login or provide a valid Api-Token header." });
+                }
+            }
+
             if (traceId <= 0)
             {
                 return BadRequest(new { message = "traceId is required and must be a positive integer." });
@@ -1117,6 +1135,7 @@ namespace PickNBook.Api.Controllers
         // =====================================
         // HOTEL CANCEL (SRDV v8 INTEGRATION)
         // =====================================
+        [HttpPost("~/v8/Cancel")]
         [HttpPost("/v8/Cancel")]
         [HttpPost("Cancel")]
         [HttpPost("cancel-booking")]
@@ -1148,8 +1167,10 @@ namespace PickNBook.Api.Controllers
             {
                 var cancelRes = await _hotelService.CancelBookingAsync(request);
 
-                // If acknowledged, send cancellation email
-                if (cancelRes.Error?.ErrorCode == 0 && (cancelRes.ResponseStatus == 1 || (cancelRes.ChangeRequestId.HasValue && cancelRes.ChangeRequestId.Value > 0)))
+                // Per SRDV v8 spec: ChangeRequestStatus 3 (Processed) means the booking is cancelled immediately.
+                // ChangeRequestStatus 1 (Pending): property has not confirmed yet - authoritative state is read back via BookingDetails.
+                // ChangeRequestStatus 4 (Rejected): nothing was cancelled and booking stays live.
+                if (cancelRes.Error?.ErrorCode == 0 && cancelRes.ChangeRequestStatus == 3)
                 {
                     try
                     {
@@ -1171,9 +1192,9 @@ namespace PickNBook.Api.Controllers
                                         payload: new
                                         {
                                             Reference = reservation.BookingReference,
-                                            Status = "Confirmed",
+                                            Status = "Cancelled",
                                             Var1 = reservation.BookingReference,
-                                            Var2 = "Confirmed"
+                                            Var2 = "Cancelled"
                                         },
                                         bookingId: reservation.Id.ToString(),
                                         userId: reservation.UserId
@@ -1190,6 +1211,14 @@ namespace PickNBook.Api.Controllers
                     {
                         _logger.LogError(mailEx, "Failed to send hotel cancellation email for TraceId {TraceId}", request.TraceId);
                     }
+                }
+                else if (cancelRes.ChangeRequestStatus == 1)
+                {
+                    _logger.LogInformation("Hotel cancel request acknowledged by provider as PENDING for TraceId {TraceId}. Awaiting property confirmation via BookingDetails.", request.TraceId);
+                }
+                else if (cancelRes.ChangeRequestStatus == 4)
+                {
+                    _logger.LogWarning("Hotel cancel request REJECTED by property for TraceId {TraceId}. Booking remains live.", request.TraceId);
                 }
 
                 if (cancelRes.Error != null && cancelRes.Error.ErrorCode != 0)
@@ -1208,22 +1237,35 @@ namespace PickNBook.Api.Controllers
 
         [HttpGet("Cancel")]
         [HttpGet("cancel-booking")]
-        [Authorize]
+        [AllowAnonymous]
         [InjectClientIp]
-        public async Task<IActionResult> GetCancel([FromQuery] long traceId, [FromQuery] string? remarks = null)
+        public async Task<IActionResult> GetCancel([FromQuery] long traceId)
         {
+            if (!Request.Headers.TryGetValue("Api-Token", out var apiTokenHeader) || string.IsNullOrWhiteSpace(apiTokenHeader))
+            {
+                if (!_currentUserService.IsAuthenticated())
+                {
+                    return Unauthorized(new { message = "Please login or provide a valid Api-Token header." });
+                }
+            }
+
             if (traceId <= 0)
             {
                 return BadRequest(new { message = "traceId is required and must be a positive integer." });
             }
 
-            var req = new HotelCancelBookingRequestDto
-            {
-                TraceId = traceId,
-                Remarks = !string.IsNullOrWhiteSpace(remarks) ? remarks : "Cancellation requested by guest"
-            };
+            _logger.LogInformation("Hotel Cancel Status GET poll received for TraceId {TraceId}", traceId);
 
-            return await PostCancel(req);
+            try
+            {
+                var result = await _hotelService.GetBookingDetailsAsync(traceId);
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Provider failure during Hotel Cancel Status GET for TraceId {TraceId}", traceId);
+                return StatusCode(500, new { message = ex.Message });
+            }
         }
 
         // =====================================
@@ -1231,6 +1273,7 @@ namespace PickNBook.Api.Controllers
         // =====================================
         [HttpPost("SendChangeRequest")]
         [HttpPost("CancelRoom")]
+        [Obsolete("Use POST /v8/Cancel. Note: SRDV cancels the entire booking together.")]
         [AllowAnonymous]
         [InjectClientIp]
         public async Task<IActionResult> PostSendChangeRequest([FromBody] HotelCancelRequestDto request)

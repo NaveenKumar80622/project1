@@ -2845,9 +2845,10 @@ namespace PickNBook.Api.Services
                 var root = jsonDoc.RootElement;
                 dto.RawResponse = root.Clone();
 
-                // Target container: could be root, or wrapped under "BookingDetail", "BookingDetails", or "Result"
+                // Target container: could be root, or wrapped under "BookingDetailResult", "BookingDetail", "BookingDetails", or "Result"
                 var target = root;
-                if (root.TryGetProperty("BookingDetail", out var bdProp) && bdProp.ValueKind == JsonValueKind.Object) target = bdProp;
+                if (root.TryGetProperty("BookingDetailResult", out var bdrProp) && bdrProp.ValueKind == JsonValueKind.Object) target = bdrProp;
+                else if (root.TryGetProperty("BookingDetail", out var bdProp) && bdProp.ValueKind == JsonValueKind.Object) target = bdProp;
                 else if (root.TryGetProperty("Result", out var rProp) && rProp.ValueKind == JsonValueKind.Object) target = rProp;
                 else if (root.TryGetProperty("BookingDetails", out var bdsProp) && bdsProp.ValueKind == JsonValueKind.Object) target = bdsProp;
 
@@ -2909,6 +2910,7 @@ namespace PickNBook.Api.Services
                 // Build Result DTO
                 var resultDto = new HotelBookingDetailsResultDto
                 {
+                    Error = dto.Error,
                     TraceId = dto.TraceId,
                     BookingStatus = dto.BookingStatus,
                     CancellationStatus = dto.CancellationStatus,
@@ -2918,12 +2920,18 @@ namespace PickNBook.Api.Services
                     FailureReason = dto.FailureReason
                 };
 
+                if (target.TryGetProperty("BookingId", out var bIdProp))
+                {
+                    if (bIdProp.ValueKind == JsonValueKind.Number) resultDto.BookingId = bIdProp.GetInt64();
+                    else if (bIdProp.ValueKind == JsonValueKind.String && long.TryParse(bIdProp.GetString(), out var parsedBid)) resultDto.BookingId = parsedBid;
+                    resultDto.BookingReference = bIdProp.ValueKind == JsonValueKind.Number ? bIdProp.GetRawText() : bIdProp.GetString();
+                }
+
                 if (target.TryGetProperty("ConfirmationNo", out var cNoProp)) resultDto.ConfirmationNo = cNoProp.GetString();
                 else if (target.TryGetProperty("ConfirmationNumber", out var cNumProp)) resultDto.ConfirmationNo = cNumProp.GetString();
 
                 if (target.TryGetProperty("BookingReference", out var bRefProp)) resultDto.BookingReference = bRefProp.GetString();
                 else if (target.TryGetProperty("BookingRefNo", out var bRefNoProp)) resultDto.BookingReference = bRefNoProp.GetString();
-                else if (target.TryGetProperty("BookingId", out var bIdProp)) resultDto.BookingReference = bIdProp.ValueKind == JsonValueKind.Number ? bIdProp.GetRawText() : bIdProp.GetString();
 
                 if (target.TryGetProperty("HotelCode", out var hcProp)) resultDto.HotelCode = hcProp.GetString();
                 if (target.TryGetProperty("HotelName", out var hnProp)) resultDto.HotelName = hnProp.GetString();
@@ -2946,10 +2954,24 @@ namespace PickNBook.Api.Services
 
                 if (hasRooms)
                 {
+                    int defaultRoomIdx = 1;
                     foreach (var rm in roomsElement.EnumerateArray())
                     {
                         var roomItem = new HotelBookingDetailsRoomItemDto();
+                        if (rm.TryGetProperty("RoomIndex", out var rIdxProp))
+                        {
+                            if (rIdxProp.ValueKind == JsonValueKind.Number) roomItem.RoomIndex = rIdxProp.GetInt32();
+                            else if (rIdxProp.ValueKind == JsonValueKind.String && int.TryParse(rIdxProp.GetString(), out var pri)) roomItem.RoomIndex = pri;
+                        }
+                        else
+                        {
+                            roomItem.RoomIndex = defaultRoomIdx++;
+                        }
+
                         if (rm.TryGetProperty("RoomStatus", out var rStatusProp)) roomItem.RoomStatus = rStatusProp.GetString();
+                        if (rm.TryGetProperty("CancellationStatus", out var rCanProp)) roomItem.CancellationStatus = rCanProp.GetString();
+                        else if (rm.TryGetProperty("CancelStatus", out var rCsProp)) roomItem.CancellationStatus = rCsProp.GetString();
+
                         if (rm.TryGetProperty("RoomTypeName", out var rtnProp)) roomItem.RoomTypeName = rtnProp.GetString();
                         else if (rm.TryGetProperty("RoomType", out var rtProp)) roomItem.RoomTypeName = rtProp.GetString();
                         if (rm.TryGetProperty("RoomTypeCode", out var rtcProp)) roomItem.RoomTypeCode = rtcProp.GetString();
@@ -3007,6 +3029,7 @@ namespace PickNBook.Api.Services
                 }
 
                 dto.Result = resultDto;
+                dto.BookingDetailResult = resultDto;
                 dto.Success = dto.Error == null || dto.Error.ErrorCode == 0;
                 dto.Message = dto.Success ? "Booking details retrieved successfully." : dto.Error?.ErrorMessage;
 
@@ -3041,7 +3064,11 @@ namespace PickNBook.Api.Services
                             }
                             else if (statusUpper == "SUCCESS")
                             {
-                                reservation.Status = "Confirmed";
+                                // Do not overwrite if cancellation is in-progress (ChangeRequestStatus 1)
+                                if (reservation.Status != "CancellationPending")
+                                {
+                                    reservation.Status = "Confirmed";
+                                }
                             }
                             else if (statusUpper == "FAILED")
                             {
@@ -3292,13 +3319,28 @@ namespace PickNBook.Api.Services
 
                         if (reservation != null)
                         {
-                            reservation.Status = "CancellationPending";
-                            reservation.CancelledAt = DateTime.UtcNow;
+                            if (resDto.ChangeRequestStatus == 3)
+                            {
+                                reservation.Status = "Cancelled";
+                                reservation.CancelledAt = DateTime.UtcNow;
+                            }
+                            else if (resDto.ChangeRequestStatus == 4)
+                            {
+                                // Rejected: booking stays live
+                                _logger?.LogInformation("Hotel cancel request for TraceId {TraceId} was rejected by supplier. Booking remains live.", traceIdStr);
+                            }
+                            else
+                            {
+                                // 1 (Pending) or acknowledged default
+                                reservation.Status = "CancellationPending";
+                                reservation.CancelledAt = DateTime.UtcNow;
+                            }
+
                             reservation.CancellationReason = cleanRemarks;
                             reservation.UpdatedAt = DateTime.UtcNow;
 
                             await dbContext.SaveChangesAsync();
-                            _logger?.LogInformation("Updated HotelReservation ID {Id} for TraceId {TraceId} to CancellationPending.", reservation.Id, traceIdStr);
+                            _logger?.LogInformation("Updated HotelReservation ID {Id} for TraceId {TraceId} to status {Status}.", reservation.Id, traceIdStr, reservation.Status);
                         }
                     }
                     catch (Exception dbEx)

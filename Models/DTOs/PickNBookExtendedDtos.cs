@@ -1376,6 +1376,9 @@ namespace PickNBook.Api.Models.DTOs
         [JsonPropertyName("Result")]
         public HotelBookingDetailsResultDto? Result { get; set; }
 
+        [JsonPropertyName("BookingDetailResult")]
+        public HotelBookingDetailsResultDto? BookingDetailResult { get; set; }
+
         [JsonPropertyName("Error")]
         public HotelBookingDetailsErrorDto? Error { get; set; }
 
@@ -1394,8 +1397,15 @@ namespace PickNBook.Api.Models.DTOs
 
     public class HotelBookingDetailsResultDto
     {
+        [JsonPropertyName("Error")]
+        public HotelBookingDetailsErrorDto? Error { get; set; }
+
         [JsonPropertyName("TraceId")]
         public long TraceId { get; set; }
+
+        [JsonPropertyName("BookingId")]
+        [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
+        public long? BookingId { get; set; }
 
         [JsonPropertyName("BookingStatus")]
         public string? BookingStatus { get; set; }
@@ -1439,8 +1449,14 @@ namespace PickNBook.Api.Models.DTOs
 
     public class HotelBookingDetailsRoomItemDto
     {
+        [JsonPropertyName("RoomIndex")]
+        public int RoomIndex { get; set; } = 1;
+
         [JsonPropertyName("RoomStatus")]
         public string? RoomStatus { get; set; } // PENDING, CONFIRMED, FAILED, CANCELLED
+
+        [JsonPropertyName("CancellationStatus")]
+        public string? CancellationStatus { get; set; }
 
         [JsonPropertyName("RoomTypeName")]
         public string? RoomTypeName { get; set; }
@@ -1526,12 +1542,16 @@ namespace PickNBook.Api.Models.DTOs
         [JsonPropertyName("Remarks")]
         public string Remarks { get; set; } = "Cancellation requested by guest";
 
-        // Tolerated legacy parameters (accepted and ignored per v8 spec)
+        // Tolerated legacy/credential parameters (accepted and ignored per v8 spec)
         public int? BookingId { get; set; }
         public int? RequestType { get; set; }
         public int? BookingMode { get; set; }
         public string? SrdvType { get; set; }
         public string? SrdvIndex { get; set; }
         public string? EndUserIp { get; set; }
+        public string? ClientId { get; set; }
+        public string? UserName { get; set; }
+        public string? Password { get; set; }
+        public string? TokenId { get; set; }
     }
 }
