@@ -2132,7 +2132,7 @@ namespace PickNBook.Api.Services
                                 CancellationPolicyJson = rm.CancellationPolicies != null && rm.CancellationPolicies.Count > 0 
                                     ? JsonSerializer.Serialize(rm.CancellationPolicies) 
                                     : null,
-                                LastCancellationDate = DateTime.TryParse(rm.LastCancellationDate, out var parsedLcd) ? parsedLcd : null,
+                                LastCancellationDate = DateTime.TryParse(rm.LastCancellationDate, out var parsedLcd) ? IndiaTimeHelper.ToUtcFromIst(parsedLcd) : null,
                                 CreatedAt = DateTime.UtcNow
                             };
                             

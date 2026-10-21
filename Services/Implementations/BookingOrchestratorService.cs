@@ -1159,7 +1159,7 @@ namespace PickNBook.Api.Services.Implementations
                         .FirstOrDefaultAsync();
                 }
 
-                var dynamicLastCancellationDate = (DateTime.TryParse(firstRoom?.LastCancellationDate, out var lcd) ? lcd : (DateTime?)null)
+                var dynamicLastCancellationDate = (DateTime.TryParse(firstRoom?.LastCancellationDate, out var lcd) ? IndiaTimeHelper.ToUtcFromIst(lcd) : (DateTime?)null)
                     ?? blockedPrice?.LastCancellationDate;
 
                 var dynamicCancellationPolicyJson = (firstRoom?.CancellationPolicies != null && firstRoom.CancellationPolicies.Count > 0 

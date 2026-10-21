@@ -902,6 +902,9 @@ namespace PickNBook.Api.Controllers
                             MarkupAmount = agentMarkupAmount,
                             TotalPrice = Math.Max(0m, b2cFinalFare),
                             B2CFinalFare = Math.Max(0m, b2cFinalFare),
+                            PaymentMethod = "Cashfree",
+                            WalletPaidAmount = 0m,
+                            GatewayPaidAmount = Math.Max(0m, b2cFinalFare),
                             CouponCode = request.CouponCode,
                             CouponDiscount = couponDiscount,
                             BasePrice = Math.Max(0m, quotedPrice - (blockedPrice?.Tax ?? 0m)),
@@ -2213,8 +2216,10 @@ namespace PickNBook.Api.Controllers
                 cancellationFee = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained,
                 supplierCancellationCharge = calculatedRefund.SupplierCancellationCharge,
                 refundAmount = calculatedRefund.FinalCustomerRefundAmount,
-                lastCancellationDate = booking.LastCancellationDate,
-                isFreeCancellation = booking.LastCancellationDate.HasValue && DateTime.UtcNow <= booking.LastCancellationDate.Value,
+                lastCancellationDate = booking.LastCancellationDate.HasValue ? DateTime.SpecifyKind(booking.LastCancellationDate.Value, DateTimeKind.Utc) : (DateTime?)null,
+                lastCancellationDateIst = booking.LastCancellationDate.HasValue ? IndiaTimeHelper.ToIst(booking.LastCancellationDate.Value) : (DateTime?)null,
+                lastCancellationDateDisplay = booking.LastCancellationDate.HasValue ? IndiaTimeHelper.FormatIst(booking.LastCancellationDate.Value, "dd MMM yyyy, hh:mm tt") : null,
+                isFreeCancellation = calculatedRefund.SupplierCancellationCharge == 0 && calculatedRefund.FinalCustomerRefundAmount > 0,
                 cancellationPolicy = booking.CancellationPolicyJson,
                 cancellationPolicyJson = booking.CancellationPolicyJson
             });

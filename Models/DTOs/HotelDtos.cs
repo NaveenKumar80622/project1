@@ -238,6 +238,8 @@ namespace PickNBook.Api.Models.DTOs
         public int BookingId { get; set; }
         public string BookingReference { get; set; } = string.Empty;
         public DateTime? RequestDateUtc { get; set; }
+        public DateTime? RequestDateIst { get; set; }
+        public string? RequestDateDisplay { get; set; }
         public string HotelName { get; set; } = string.Empty;
         public string RoomType { get; set; } = string.Empty;
         public DateOnly? CheckInDate { get; set; }

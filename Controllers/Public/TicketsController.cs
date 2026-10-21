@@ -375,7 +375,16 @@ public class TicketsController : BaseApiController
                         gender = p.Gender
                     }),
                     status = booking.Status,
-                    totalFare = booking.TotalPriceInr
+                    totalFare = booking.TotalPriceInr,
+                    bookedAt = DateTime.SpecifyKind(booking.BookedAtUtc, DateTimeKind.Utc),
+                    bookedAtIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.BookedAtUtc),
+                    bookedAtDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.BookedAtUtc, "dd MMM yyyy, hh:mm tt"),
+                    cancelledAt = booking.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(booking.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
+                    cancelledAtIst = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.CancelledAtUtc.Value) : (DateTime?)null,
+                    cancelledAtDisplay = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.CancelledAtUtc.Value, "dd MMM yyyy, hh:mm tt") : null,
+                    cancellationReason = booking.CancellationReason,
+                    cancellationCharges = booking.CancellationChargeInr ?? 0m,
+                    refundAmount = booking.RefundAmountInr ?? 0m
                 });
             }
 
@@ -456,6 +465,18 @@ public class TicketsController : BaseApiController
                     guestPhone = booking.GuestPhone,
                     status = booking.Status,
                     totalFare = fare,
+                    bookedAt = DateTime.SpecifyKind(booking.CreatedAt, DateTimeKind.Utc),
+                    bookedAtIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.CreatedAt),
+                    bookedAtDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.CreatedAt, "dd MMM yyyy, hh:mm tt"),
+                    cancelledAt = booking.CancelledAt.HasValue ? DateTime.SpecifyKind(booking.CancelledAt.Value, DateTimeKind.Utc) : (DateTime?)null,
+                    cancelledAtIst = booking.CancelledAt.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.CancelledAt.Value) : (DateTime?)null,
+                    cancelledAtDisplay = booking.CancelledAt.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.CancelledAt.Value, "dd MMM yyyy, hh:mm tt") : null,
+                    cancellationReason = booking.CancellationReason,
+                    cancellationCharges = booking.CancellationCharges,
+                    refundAmount = booking.RefundAmount,
+                    lastCancellationDate = booking.LastCancellationDate.HasValue ? DateTime.SpecifyKind(booking.LastCancellationDate.Value, DateTimeKind.Utc) : (DateTime?)null,
+                    lastCancellationDateIst = booking.LastCancellationDate.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.LastCancellationDate.Value) : (DateTime?)null,
+                    lastCancellationDateDisplay = booking.LastCancellationDate.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.LastCancellationDate.Value, "dd MMM yyyy, hh:mm tt") : null,
                     passengers = new[]
                     {
                         new
