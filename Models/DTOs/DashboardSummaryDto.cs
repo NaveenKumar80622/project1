@@ -8,6 +8,7 @@ public class DashboardSummaryDto
     public DashboardRevenueSnapshotDto RevenueSnapshot { get; set; } = new();
     public DashboardBookingBreakdownDto FlightBookings { get; set; } = new();
     public DashboardBookingBreakdownDto BusBookings { get; set; } = new();
+    public DashboardBookingBreakdownDto HotelBookings { get; set; } = new();
     public List<DashboardRecentUpdateDto> RecentUpdates { get; set; } = [];
     public DashboardRecentUpdateCounterDto RecentUpdateCounters { get; set; } = new();
     public List<DashboardTopRouteDto> TopRoutes { get; set; } = [];

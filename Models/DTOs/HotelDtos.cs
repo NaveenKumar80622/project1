@@ -204,6 +204,8 @@ namespace PickNBook.Api.Models.DTOs
 
         // Payment & Contact Identifiers
         public int? PaymentId { get; set; }
+        public string? PaymentStatus { get; set; }
+        public string? PaymentMethod { get; set; }
         public string? CashfreePaymentId { get; set; }
         public string? CashfreeOrderId { get; set; }
         public string? PaymentReference { get; set; }

@@ -15,6 +15,7 @@ using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using System.Linq;
+using PickNBook.Api.Helpers;
 
 namespace PickNBook.Api.Services
 {
@@ -2128,6 +2129,10 @@ namespace PickNBook.Api.Services
                                 MarkupAmount = rm.Price.AgentMarkUp,
                                 DiscountAmount = rm.Price.Discount,
                                 GrandTotal = rm.Price.B2CTotalPrice,
+                                CancellationPolicyJson = rm.CancellationPolicies != null && rm.CancellationPolicies.Count > 0 
+                                    ? JsonSerializer.Serialize(rm.CancellationPolicies) 
+                                    : null,
+                                LastCancellationDate = DateTime.TryParse(rm.LastCancellationDate, out var parsedLcd) ? parsedLcd : null,
                                 CreatedAt = DateTime.UtcNow
                             };
                             
@@ -2648,6 +2653,19 @@ namespace PickNBook.Api.Services
         {
             if (booking == null) return (0m, 0m);
 
+            var nowIst = IndiaTimeHelper.ToIst(DateTime.UtcNow);
+
+            // 1. Free cancellation window check against LastCancellationDate
+            if (booking.LastCancellationDate.HasValue)
+            {
+                var lastCancelIst = IndiaTimeHelper.ToIst(booking.LastCancellationDate.Value);
+                if (nowIst <= lastCancelIst)
+                {
+                    return (0m, booking.Price);
+                }
+            }
+
+            // 2. Dynamic policy tiers evaluation
             if (!string.IsNullOrWhiteSpace(booking.CancellationPolicyJson))
             {
                 try
@@ -2655,31 +2673,33 @@ namespace PickNBook.Api.Services
                     var policies = JsonSerializer.Deserialize<List<HotelRoomCancellationPolicyDto>>(booking.CancellationPolicyJson);
                     if (policies != null && policies.Count > 0)
                     {
-                        var now = DateTime.UtcNow;
-
-                        if (booking.LastCancellationDate.HasValue && now <= booking.LastCancellationDate.Value)
-                        {
-                            return (0m, booking.Price);
-                        }
-
                         HotelRoomCancellationPolicyDto? matchingPolicy = null;
+                        DateTime latestToDt = DateTime.MinValue;
+
                         foreach (var p in policies)
                         {
                             if (DateTime.TryParse(p.FromDate, out var fromDt))
                             {
                                 if (DateTime.TryParse(p.ToDate, out var toDt))
                                 {
-                                    if (now >= fromDt && now <= toDt)
+                                    if (toDt > latestToDt) latestToDt = toDt;
+                                    if (nowIst >= fromDt && nowIst <= toDt)
                                     {
                                         matchingPolicy = p;
                                         break;
                                     }
                                 }
-                                else if (now >= fromDt)
+                                else if (nowIst >= fromDt)
                                 {
                                     matchingPolicy = p;
                                 }
                             }
+                        }
+
+                        // If past the latest policy tier window, 100% cancellation charge applies
+                        if (matchingPolicy == null && latestToDt != DateTime.MinValue && nowIst > latestToDt)
+                        {
+                            return (booking.Price, 0m);
                         }
 
                         if (matchingPolicy == null)
@@ -2713,16 +2733,24 @@ namespace PickNBook.Api.Services
                 }
             }
 
-            if (booking.LastCancellationDate.HasValue && DateTime.UtcNow <= booking.LastCancellationDate.Value)
+            // 3. Fallback when policy JSON is missing or empty
+            var checkInIst = IndiaTimeHelper.ToIst(booking.CheckInDate);
+            var hoursToCheckIn = (checkInIst - nowIst).TotalHours;
+
+            // If check-in already passed, non-refundable (100% cancellation charge)
+            if (hoursToCheckIn <= 0)
             {
-                return (0m, booking.Price);
-            }
-            if (DateTime.UtcNow < booking.CheckInDate)
-            {
-                return (0m, booking.Price);
+                return (booking.Price, 0m);
             }
 
-            return (booking.Price, 0m);
+            // If within 48 hours of check-in with no free policy, charge 100% supplier penalty
+            if (hoursToCheckIn <= 48)
+            {
+                return (booking.Price, 0m);
+            }
+
+            // More than 48 hours before check-in with missing policy: allow free cancellation
+            return (0m, booking.Price);
         }
 
         private static string NormalizeTitle(string? title)

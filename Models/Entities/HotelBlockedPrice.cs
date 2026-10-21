@@ -36,6 +36,10 @@ namespace PickNBook.Api.Models.Entities
         [Column(TypeName = "decimal(18,2)")]
         public decimal GrandTotal { get; set; }
 
+        public string? CancellationPolicyJson { get; set; }
+
+        public DateTime? LastCancellationDate { get; set; }
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     }
 }

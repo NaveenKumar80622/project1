@@ -75,6 +75,24 @@ namespace PickNBook.Api.Controllers
                     (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") &&
                     (x.BusBooking == null || x.BusBooking.DepartureTime > nowUtc) &&
                     x.UserId == userId);
+
+            var hotelTotal = await dbContext.HotelReservations.AsNoTracking()
+                .CountAsync(x => x.UserId == userId);
+
+            var hotelCancelled = await dbContext.HotelReservations.AsNoTracking()
+                .CountAsync(x => (x.Status == "Cancelled" || x.Status == "Partially Cancelled") && x.UserId == userId);
+
+            var hotelCompleted = await dbContext.HotelReservations.AsNoTracking()
+                .CountAsync(x =>
+                    (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") &&
+                    x.CheckInDate <= nowUtc &&
+                    x.UserId == userId);
+
+            var hotelUpcoming = await dbContext.HotelReservations.AsNoTracking()
+                .CountAsync(x =>
+                    (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") &&
+                    x.CheckInDate > nowUtc &&
+                    x.UserId == userId);
  
             var pendingFlightCancellations = await dbContext.FlightReservations.AsNoTracking()
                 .CountAsync(x =>
@@ -85,6 +103,12 @@ namespace PickNBook.Api.Controllers
  
             var pendingBusCancellations = await dbContext.BusReservations.AsNoTracking()
                 .CountAsync(x => x.Status == "Cancelled" && x.CancelledAtUtc != null && x.CancelledAtUtc >= recentCancellationFromUtc && x.UserId == userId);
+
+            var pendingHotelCancellations = await dbContext.HotelReservations.AsNoTracking()
+                .CountAsync(x => (x.Status == "Cancelled" || x.Status == "CancellationPending") &&
+                                 ((x.CancelledAt != null && x.CancelledAt >= recentCancellationFromUtc) ||
+                                  (x.UpdatedAt != null && x.UpdatedAt >= recentCancellationFromUtc)) &&
+                                 x.UserId == userId);
  
             var travelerPendingQuery = dbContext.Travelers.AsNoTracking()
                 .Where(x => x.UpdatedAtUtc >= travelerPendingFromUtc && x.UserId == userId);
@@ -105,6 +129,10 @@ namespace PickNBook.Api.Controllers
                 .Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && x.UserId == userId)
                 .Select(x => (decimal?)x.TotalPriceInr)
                 .SumAsync();
+            var hotelRevenue = await dbContext.HotelReservations.AsNoTracking()
+                .Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS") && x.UserId == userId)
+                .Select(x => (decimal?)x.TotalPrice)
+                .SumAsync();
  
             var flightCancelledValue = await dbContext.FlightReservations.AsNoTracking()
                 .Where(x => x.Status == "Cancelled" && x.UserId == userId)
@@ -113,6 +141,10 @@ namespace PickNBook.Api.Controllers
             var busCancelledValue = await dbContext.BusReservations.AsNoTracking()
                 .Where(x => x.Status == "Cancelled" && x.UserId == userId)
                 .Select(x => (decimal?)x.TotalPriceInr)
+                .SumAsync();
+            var hotelCancelledValue = await dbContext.HotelReservations.AsNoTracking()
+                .Where(x => (x.Status == "Cancelled" || x.Status == "Partially Cancelled") && x.UserId == userId)
+                .Select(x => (decimal?)x.TotalPrice)
                 .SumAsync();
  
             var flightBookedEvents = await dbContext.FlightReservations.AsNoTracking()
@@ -141,6 +173,20 @@ namespace PickNBook.Api.Controllers
                 .OrderByDescending(x => x.CancelledAtUtc)
                 .Take(recentLimit)
                 .Select(x => new { x.BookingReference, x.PassengerName, CancelledAtUtc = x.CancelledAtUtc!.Value })
+                .ToListAsync();
+
+            var hotelBookedEvents = await dbContext.HotelReservations.AsNoTracking()
+                .Where(x => x.UserId == userId)
+                .OrderByDescending(x => x.CreatedAt)
+                .Take(recentLimit)
+                .Select(x => new { x.BookingReference, PassengerName = x.GuestName, BookedAtUtc = x.CreatedAt, TotalPriceInr = x.TotalPrice })
+                .ToListAsync();
+
+            var hotelCancelledEvents = await dbContext.HotelReservations.AsNoTracking()
+                .Where(x => x.CancelledAt != null && x.UserId == userId)
+                .OrderByDescending(x => x.CancelledAt)
+                .Take(recentLimit)
+                .Select(x => new { x.BookingReference, PassengerName = x.GuestName, CancelledAtUtc = x.CancelledAt!.Value })
                 .ToListAsync();
  
             var travelerRecentQuery = dbContext.Travelers.AsNoTracking()
@@ -171,16 +217,16 @@ namespace PickNBook.Api.Controllers
                 .Take(10)
                 .ToListAsync();
 
-            var totalBookings = flightTotal + busTotal;
-            var totalCompleted = flightCompleted + busCompleted;
+            var totalBookings = flightTotal + busTotal + hotelTotal;
+            var totalCompleted = flightCompleted + busCompleted + hotelCompleted;
             var completionRate = totalBookings == 0
                 ? 0m
                 : decimal.Round((totalCompleted * 100m) / totalBookings, 2, MidpointRounding.AwayFromZero);
 
-            var pendingCancellations = pendingFlightCancellations + pendingBusCancellations;
+            var pendingCancellations = pendingFlightCancellations + pendingBusCancellations + pendingHotelCancellations;
 
-            var totalRevenueInr = (flightRevenue ?? 0m) + (busRevenue ?? 0m);
-            var totalCancelledValueInr = (flightCancelledValue ?? 0m) + (busCancelledValue ?? 0m);
+            var totalRevenueInr = (flightRevenue ?? 0m) + (busRevenue ?? 0m) + (hotelRevenue ?? 0m);
+            var totalCancelledValueInr = (flightCancelledValue ?? 0m) + (busCancelledValue ?? 0m) + (hotelCancelledValue ?? 0m);
 
             var recentUpdates = new List<DashboardRecentUpdateDto>();
 
@@ -209,6 +255,20 @@ namespace PickNBook.Api.Controllers
             {
                 Type = "BusCancellation",
                 Message = $"Bus cancelled ({x.BookingReference}) by {x.PassengerName}",
+                OccurredAtUtc = x.CancelledAtUtc
+            }));
+
+            recentUpdates.AddRange(hotelBookedEvents.Select(x => new DashboardRecentUpdateDto
+            {
+                Type = "HotelBooking",
+                Message = $"Hotel stay booked ({x.BookingReference}) for {x.PassengerName}",
+                OccurredAtUtc = x.BookedAtUtc
+            }));
+
+            recentUpdates.AddRange(hotelCancelledEvents.Select(x => new DashboardRecentUpdateDto
+            {
+                Type = "HotelCancellation",
+                Message = $"Hotel reservation cancelled ({x.BookingReference}) for {x.PassengerName}",
                 OccurredAtUtc = x.CancelledAtUtc
             }));
 
@@ -276,14 +336,21 @@ namespace PickNBook.Api.Controllers
                     Cancelled = busCancelled,
                     Total = busTotal
                 },
+                HotelBookings = new DashboardBookingBreakdownDto
+                {
+                    Completed = hotelCompleted,
+                    Upcoming = hotelUpcoming,
+                    Cancelled = hotelCancelled,
+                    Total = hotelTotal
+                },
                 RecentUpdates = recentUpdates
                     .OrderByDescending(x => x.OccurredAtUtc)
                     .Take(recentLimit)
                     .ToList(),
                 RecentUpdateCounters = new DashboardRecentUpdateCounterDto
                 {
-                    BookingUpdates = flightBookedEvents.Count + busBookedEvents.Count,
-                    CancellationUpdates = flightCancelledEvents.Count + busCancelledEvents.Count,
+                    BookingUpdates = flightBookedEvents.Count + busBookedEvents.Count + hotelBookedEvents.Count,
+                    CancellationUpdates = flightCancelledEvents.Count + busCancelledEvents.Count + hotelCancelledEvents.Count,
                     TravelerUpdates = travelerEvents.Count,
                     WalletPaymentUpdates = 0,
                     BankAddUpdates = 0
