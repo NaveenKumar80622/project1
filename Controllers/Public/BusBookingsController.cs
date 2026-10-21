@@ -2743,10 +2743,10 @@ namespace PickNBook.Api.Controllers
                         reservation.Status = BusBookingStatus.Success;
                         if (srdvRes != null)
                         {
-                            reservation.SrdvBookingId = srdvRes.SrdvBookingId;
+                            reservation.SrdvBookingId = srdvRes.TravelOperatorPNR ?? srdvRes.SrdvBookingId;
                             reservation.SrdvBookingResponseJson = srdvRes.ResponseJson;
                             reservation.SrdvTicketNo = srdvRes.TicketNo;
-                            reservation.Pnr = srdvRes.TravelOperatorPNR ?? srdvRes.TicketNo ?? reservation.Pnr;
+                            reservation.Pnr = srdvRes.SrdvBookingId ?? srdvRes.TravelOperatorPNR ?? srdvRes.TicketNo ?? reservation.Pnr;
                             bus.TraceId = !string.IsNullOrWhiteSpace(request.TraceId) ? request.TraceId : bus.TraceId;
                         }
 

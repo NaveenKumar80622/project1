@@ -83,7 +83,11 @@ public class AdminHotelController : AdminApiController
                     b.TotalPrice,
                     b.Currency,
                     b.Status,
-                    b.CreatedAt
+                    b.CreatedAt,
+                    b.CancelledAt,
+                    b.CancellationReason,
+                    b.CancellationCharges,
+                    b.RefundAmount
                 })
                 .ToListAsync();
 
@@ -458,7 +462,6 @@ public class AdminHotelController : AdminApiController
             booking.ProviderBookingId,
             booking.ConfirmationNo,
             booking.InvoiceNumber,
-            booking.LastCancellationDate,
             booking.SrdvOfferedPrice,
             booking.SrdvGstAmount,
             booking.HotelId,

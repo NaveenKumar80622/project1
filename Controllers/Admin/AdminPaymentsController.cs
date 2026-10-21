@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 
 using PickNBook.Api.Services.Interfaces;
 using Microsoft.Extensions.Logging;
+using PickNBook.Api.Helpers;
 
 namespace PickNBook.Api.Controllers.Admin
 {

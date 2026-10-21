@@ -75,6 +75,7 @@ public class AdminBusCancellationRequestDto
     public int BookingId { get; set; }
     public string TicketNo { get; set; } = string.Empty;
     public string Pnr { get; set; } = string.Empty;
+    public string? OperatorPnr { get; set; }
     public DateTime? RequestDateUtc { get; set; }
     public string Segment { get; set; } = string.Empty;
     public DateOnly? JourneyDate { get; set; }

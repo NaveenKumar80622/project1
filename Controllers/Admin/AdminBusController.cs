@@ -1730,12 +1730,15 @@ namespace PickNBook.Api.Controllers
                         cancellation?.Status,
                         refundAmount);
 
+                    var (cleanPnr, opPnr) = ResolvePnrAndOperatorPnr(x.Pnr, x.SrdvBookingId, x.SrdvBookingResponseJson);
+
                     return new AdminBusCancellationRequestDto
                     {
                         Id = x.Id,
                         BookingId = x.Id,
                         TicketNo = x.BookingReference,
-                        Pnr = x.Pnr,
+                        Pnr = cleanPnr,
+                        OperatorPnr = opPnr,
                         RequestDateUtc = x.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(x.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
                         Segment = segment,
                         JourneyDate = journeyDateIst,
@@ -2093,11 +2096,16 @@ namespace PickNBook.Api.Controllers
 
                     paymentsByBooking.TryGetValue(x.Id, out var payment);
 
+                    var (cleanPnr, opPnr) = ResolvePnrAndOperatorPnr(x.Pnr, x.SrdvBookingId, x.SrdvBookingResponseJson);
+
                     return new
                     {
                         x.Id,
                         x.BookingReference,
-                        x.Pnr,
+                        Pnr = cleanPnr,
+                        OperatorPnr = opPnr,
+                        SrdvBookingId = x.SrdvBookingId,
+                        TicketNo = x.SrdvTicketNo,
                         x.Status,
 
                         PaymentStatus = payment?.Status,
@@ -2234,6 +2242,47 @@ namespace PickNBook.Api.Controllers
             { 
                 message = "Bus boarding reminder functionality has been permanently decommissioned." 
             }));
+        }
+
+        private static (string Pnr, string? OperatorPnr) ResolvePnrAndOperatorPnr(string? pnr, string? srdvBookingId, string? srdvBookingResponseJson)
+        {
+            string cleanPnr = pnr ?? string.Empty;
+            string? opPnr = null;
+
+            bool pnrIsOperator = !string.IsNullOrWhiteSpace(cleanPnr) && (cleanPnr.StartsWith("TS", StringComparison.OrdinalIgnoreCase) || cleanPnr.Length > 20);
+            bool srdvIsOperator = !string.IsNullOrWhiteSpace(srdvBookingId) && (srdvBookingId.StartsWith("TS", StringComparison.OrdinalIgnoreCase) || srdvBookingId.Length > 20);
+
+            if (pnrIsOperator)
+            {
+                opPnr = cleanPnr;
+                cleanPnr = !string.IsNullOrWhiteSpace(srdvBookingId) && !srdvIsOperator ? srdvBookingId : cleanPnr;
+            }
+            else
+            {
+                if (srdvIsOperator)
+                {
+                    opPnr = srdvBookingId;
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(opPnr) && !string.IsNullOrWhiteSpace(srdvBookingResponseJson))
+            {
+                try
+                {
+                    using var sDoc = System.Text.Json.JsonDocument.Parse(srdvBookingResponseJson);
+                    if (sDoc.RootElement.TryGetProperty("Result", out var rElem) && rElem.TryGetProperty("TravelOperatorPNR", out var topElem))
+                    {
+                        var rawTop = topElem.GetString();
+                        if (!string.IsNullOrWhiteSpace(rawTop) && !rawTop.Equals(cleanPnr, StringComparison.OrdinalIgnoreCase))
+                        {
+                            opPnr = rawTop.Trim();
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return (cleanPnr, opPnr);
         }
     }
 }

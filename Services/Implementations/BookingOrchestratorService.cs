@@ -826,10 +826,14 @@ namespace PickNBook.Api.Services.Implementations
                 // 3. Save Tracking Records (Local Persistence)
                 var operatorPnr = !string.IsNullOrWhiteSpace(srdvTravelOperatorPnr)
                     ? srdvTravelOperatorPnr.Trim()
-                    : (!string.IsNullOrWhiteSpace(srdvTicketNo) ? srdvTicketNo.Trim() : (!string.IsNullOrWhiteSpace(srdvPnr) ? srdvPnr : reservation.Pnr));
+                    : (!string.IsNullOrWhiteSpace(srdvTicketNo) ? srdvTicketNo.Trim() : null);
 
-                reservation.Pnr = operatorPnr.Length > 100 ? operatorPnr[..100] : operatorPnr;
-                reservation.SrdvBookingId = srdvPnr ?? srdvTravelOperatorPnr;
+                var shortPnr = !string.IsNullOrWhiteSpace(srdvPnr)
+                    ? srdvPnr.Trim()
+                    : (operatorPnr ?? reservation.Pnr);
+
+                reservation.Pnr = shortPnr.Length > 100 ? shortPnr[..100] : shortPnr;
+                reservation.SrdvBookingId = operatorPnr ?? (srdvPnr ?? reservation.Pnr);
                 reservation.SrdvTicketNo = srdvTicketNo;
                 reservation.Status = "Booked";
                 reservation.SrdvBookingResponseJson = srdvResponseJson;
