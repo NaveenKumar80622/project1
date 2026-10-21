@@ -953,9 +953,10 @@ namespace PickNBook.Api.Controllers.Admin
                                     string.Equals(srdvStatus, "Booked", StringComparison.OrdinalIgnoreCase) ||
                                     string.Equals(srdvStatus, "Confirmed", StringComparison.OrdinalIgnoreCase);
 
-            bool isFulfillFailed = (p.FulfillmentStatus != null && p.FulfillmentStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
+            bool isFulfillFailed = !isFulfillSuccess && (
+                                   (p.FulfillmentStatus != null && p.FulfillmentStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
                                    (exec?.SupplierBookingStatus != null && exec.SupplierBookingStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
-                                   string.Equals(srdvStatus, "Failed", StringComparison.OrdinalIgnoreCase);
+                                   string.Equals(srdvStatus, "Failed", StringComparison.OrdinalIgnoreCase));
 
             string stage3Status;
             DateTime? stage3Time = null;

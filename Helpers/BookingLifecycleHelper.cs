@@ -246,9 +246,10 @@ namespace PickNBook.Api.Helpers
                                string.Equals(payment?.FulfillmentStatus, "Success", StringComparison.OrdinalIgnoreCase) ||
                                string.Equals(payment?.FulfillmentStatus, "CONFIRMED", StringComparison.OrdinalIgnoreCase);
 
-            bool isFulfillFailed = (payment != null && payment.FulfillmentStatus != null && payment.FulfillmentStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
+            bool isFulfillFailed = !isConfirmed && (
+                                   (payment != null && payment.FulfillmentStatus != null && payment.FulfillmentStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
                                    (exec != null && exec.SupplierBookingStatus != null && exec.SupplierBookingStatus.StartsWith("Failed", StringComparison.OrdinalIgnoreCase)) ||
-                                   string.Equals(bookingStatus, "Failed", StringComparison.OrdinalIgnoreCase);
+                                   string.Equals(bookingStatus, "Failed", StringComparison.OrdinalIgnoreCase));
 
             string stage2Status;
             DateTime? stage2Time = null;
