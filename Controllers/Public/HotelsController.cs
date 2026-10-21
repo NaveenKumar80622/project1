@@ -2251,6 +2251,11 @@ namespace PickNBook.Api.Controllers
                 return NotFound(new { message = "Booking not found." });
             }
 
+            if (booking.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Voucher is not available for an unconfirmed or failed booking." });
+            }
+
             try
             {
                 var pdfBytes = _ticketPdfService.GenerateHotelTicketPdf(booking);

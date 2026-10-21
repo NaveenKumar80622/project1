@@ -689,10 +689,11 @@ public class TicketPdfService : ITicketPdfService
     public byte[] GenerateHotelTicketPdf(HotelReservation reservation)
     {
         var isCancelled = reservation.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase);
+        var isFailed = reservation.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase);
         using var document = new PdfDocument();
         document.Info.Title = isCancelled 
             ? $"Hotel Voucher (CANCELLED) - {reservation.BookingReference}" 
-            : $"Hotel Confirmation Voucher - {reservation.BookingReference}";
+            : (isFailed ? $"Hotel Voucher (FAILED) - {reservation.BookingReference}" : $"Hotel Confirmation Voucher - {reservation.BookingReference}");
 
         BuildHotelTicketPage(document, reservation, isCancelled);
 
@@ -760,12 +761,17 @@ public class TicketPdfService : ITicketPdfService
             catch { }
         }
 
+        var isFailed = reservation.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase);
+        var isPending = reservation.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase);
+
         // Title
-        string voucherTitle = isCancelled ? "HOTEL BOOKING CANCELLATION" : "HOTEL CONFIRMATION VOUCHER";
+        string voucherTitle = isCancelled 
+            ? "HOTEL BOOKING CANCELLATION" 
+            : (isFailed ? "HOTEL BOOKING FAILED" : (isPending ? "HOTEL BOOKING PENDING" : "HOTEL CONFIRMATION VOUCHER"));
         gfx.DrawString(voucherTitle, new XFont("Arial", 11, XFontStyle.Bold), redBrush, left + 14, y + 46);
 
         // Booking Date in IST
-        var datePrefix = isCancelled ? "Cancelled on " : "Booked on ";
+        var datePrefix = isCancelled ? "Cancelled on " : (isFailed ? "Failed on " : "Booked on ");
         var effectiveDate = isCancelled && reservation.CancelledAt.HasValue
             ? IndiaTimeHelper.ToIst(reservation.CancelledAt.Value)
             : IndiaTimeHelper.ToIst(reservation.CreatedAt);
@@ -786,9 +792,9 @@ public class TicketPdfService : ITicketPdfService
         gfx.DrawString("Hotel Conf No:", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, metaLeft, y + 30);
         gfx.DrawString(confNo, new XFont("Arial", 9, XFontStyle.Bold), darkBrush, new XRect(metaLeft, y + 20, metaBoxW, 14), XStringFormats.TopRight);
 
-        string statusBadge = isCancelled ? "CANCELLED" : "CONFIRMED";
-        XBrush badgeBg = isCancelled ? redBgBrush : greenBgBrush;
-        XBrush badgeTextBrush = isCancelled ? redTextBrush : greenTextBrush;
+        string statusBadge = isCancelled ? "CANCELLED" : (isFailed ? "FAILED" : (isPending ? "PENDING" : "CONFIRMED"));
+        XBrush badgeBg = (isCancelled || isFailed) ? redBgBrush : (isPending ? amberBgBrush : greenBgBrush);
+        XBrush badgeTextBrush = (isCancelled || isFailed) ? redTextBrush : (isPending ? amberTextBrush : greenTextBrush);
         gfx.DrawRoundedRectangle(badgeBg, right - 95, y + 40, 75, 16, 3, 3);
         gfx.DrawString(statusBadge, new XFont("Arial", 8, XFontStyle.Bold), badgeTextBrush, new XRect(right - 95, y + 40, 75, 16), XStringFormats.Center);
 

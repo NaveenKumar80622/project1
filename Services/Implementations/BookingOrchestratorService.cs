@@ -1267,6 +1267,53 @@ namespace PickNBook.Api.Services.Implementations
                     
                     bool isConfirmed = result != null && (result.ResponseStatus == 1 || result.Status == 1 || string.Equals(result.HotelBookingStatus, "Confirmed", StringComparison.OrdinalIgnoreCase));
                     isPending = result != null && (result.ResponseStatus == 3 || result.Status == 3 || string.Equals(result.HotelBookingStatus, "Pending", StringComparison.OrdinalIgnoreCase));
+
+                    // Reconciliation Fallback: If SRDV returns ErrorCode 7211 ("Hotel booking outcome is not confirmed...")
+                    // or returns a valid BookingId > 0 without terminal confirmation, check BookingDetails immediately.
+                    if (!isConfirmed && !isPending && result != null && (result.Error?.ErrorCode == 7211 || result.BookingId > 0 || (result.Error?.ErrorMessage?.Contains("outcome is not confirmed", StringComparison.OrdinalIgnoreCase) ?? false)))
+                    {
+                        try
+                        {
+                            _logger.LogInformation("SRDV hotel booking unconfirmed initially (Code {Code}: {Msg}). Querying BookingDetails for TraceId {TraceId}...",
+                                result.Error?.ErrorCode, result.Error?.ErrorMessage, request.TraceId);
+
+                            await Task.Delay(1500);
+                            var details = await hotelService.GetBookingDetailsAsync(request.TraceId);
+                            if (details != null && (details.Success || details.Result != null || !string.IsNullOrEmpty(details.BookingStatus)))
+                            {
+                                var bStatus = details.Result?.BookingStatus ?? details.BookingStatus ?? string.Empty;
+                                if (string.Equals(bStatus, "SUCCESS", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(bStatus, "CONFIRMED", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    isConfirmed = true;
+                                    if (result.BookingId <= 0 && details.Result?.BookingId > 0)
+                                    {
+                                        result.BookingId = (int)details.Result.BookingId.Value;
+                                    }
+                                    if (!string.IsNullOrEmpty(details.Result?.ConfirmationNo))
+                                    {
+                                        result.ConfirmationNo = details.Result.ConfirmationNo;
+                                    }
+                                }
+                                else if (string.Equals(bStatus, "PENDING", StringComparison.OrdinalIgnoreCase) ||
+                                         string.Equals(bStatus, "AWAITING", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    isPending = true;
+                                }
+                            }
+                        }
+                        catch (Exception recEx)
+                        {
+                            _logger.LogWarning(recEx, "Immediate BookingDetails reconciliation query failed for TraceId {TraceId}", request.TraceId);
+                        }
+
+                        // If still unresolved but a provider BookingId was issued (money debited), keep as Pending rather than failing/refunding
+                        if (!isConfirmed && result.BookingId > 0)
+                        {
+                            isPending = true;
+                        }
+                    }
+
                     isSrdvSuccess = isConfirmed || isPending;
                     srdvErrorMessage = result?.Error?.ErrorMessage ?? "Unknown Error";
                     srdvProviderBookingId = result?.BookingId > 0 ? result.BookingId.ToString() : (!string.IsNullOrEmpty(result?.BookingRefNo) ? result.BookingRefNo : null);

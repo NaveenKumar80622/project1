@@ -2363,6 +2363,46 @@ namespace PickNBook.Api.Services
                     resDto.ConfirmationNo = cnoProp.GetString() ?? "";
                 if (target.TryGetProperty("InvoiceNumber", out var invProp))
                     resDto.InvoiceNumber = invProp.GetString() ?? "";
+                if (resDto.Error?.ErrorCode == 7211 || (resDto.Error?.ErrorMessage?.Contains("outcome is not confirmed", StringComparison.OrdinalIgnoreCase) ?? false))
+                {
+                    _logger?.LogInformation("SRDV Book response returned unconfirmed outcome (Code {Code}: {Msg}). Querying BookingDetails for TraceId {TraceId}...",
+                        resDto.Error.ErrorCode, resDto.Error.ErrorMessage, request.TraceId);
+                    try
+                    {
+                        await Task.Delay(1500);
+                        var details = await GetBookingDetailsAsync(request.TraceId);
+                        if (details != null && (details.Success || details.Result != null || !string.IsNullOrEmpty(details.BookingStatus)))
+                        {
+                            var bStatus = details.Result?.BookingStatus ?? details.BookingStatus ?? string.Empty;
+                            bool isConfirmed = string.Equals(bStatus, "SUCCESS", StringComparison.OrdinalIgnoreCase) ||
+                                               string.Equals(bStatus, "CONFIRMED", StringComparison.OrdinalIgnoreCase);
+                            bool isPending = string.Equals(bStatus, "PENDING", StringComparison.OrdinalIgnoreCase) ||
+                                             string.Equals(bStatus, "AWAITING", StringComparison.OrdinalIgnoreCase);
+
+                            if (isConfirmed || isPending)
+                            {
+                                resDto.ResponseStatus = isConfirmed ? 1 : 3;
+                                resDto.Status = isConfirmed ? 1 : 3;
+                                resDto.HotelBookingStatus = isConfirmed ? "Confirmed" : "Pending";
+                                resDto.SupplierBookingStatus = isConfirmed ? "Success" : "Pending";
+                                resDto.Error.ErrorCode = 0;
+                                resDto.Error.ErrorMessage = "";
+                                if (resDto.BookingId <= 0 && details.Result?.BookingId > 0)
+                                {
+                                    resDto.BookingId = (int)details.Result.BookingId.Value;
+                                }
+                                if (!string.IsNullOrEmpty(details.Result?.ConfirmationNo))
+                                {
+                                    resDto.ConfirmationNo = details.Result.ConfirmationNo;
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception recEx)
+                    {
+                        _logger?.LogWarning(recEx, "BookingDetails reconciliation failed for TraceId {TraceId}.", request.TraceId);
+                    }
+                }
 
                 return responseDto;
             }
