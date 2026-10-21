@@ -26,29 +26,10 @@ namespace PickNBook.Api.Services.Background
             _logger = logger;
         }
 
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            _logger.LogInformation("Hotel Check-In Reminder Hosted Service started.");
-
-            // Initial startup delay
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
-
-            while (!stoppingToken.IsCancellationRequested)
-            {
-                try
-                {
-                    await ProcessUpcomingCheckInRemindersAsync(stoppingToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error processing hotel check-in reminders.");
-                }
-
-                // Poll every 30 minutes
-                await Task.Delay(TimeSpan.FromMinutes(30), stoppingToken);
-            }
-
-            _logger.LogInformation("Hotel Check-In Reminder Hosted Service stopped.");
+            // Decommissioned: hotel reminder before check-in is removed per business requirements
+            return Task.CompletedTask;
         }
 
         public async Task ProcessUpcomingCheckInRemindersAsync(CancellationToken stoppingToken)

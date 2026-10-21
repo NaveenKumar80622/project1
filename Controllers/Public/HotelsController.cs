@@ -1202,9 +1202,9 @@ namespace PickNBook.Api.Controllers
                                         payload: new
                                         {
                                             Reference = reservation.BookingReference,
-                                            Status = "Cancelled",
+                                            Status = "Confirmed",
                                             Var1 = reservation.BookingReference,
-                                            Var2 = "Cancelled"
+                                            Var2 = "Confirmed"
                                         },
                                         bookingId: reservation.Id.ToString(),
                                         userId: reservation.UserId

@@ -1426,8 +1426,8 @@ namespace PickNBook.Api.Services.Implementations
                         payload: new { HotelName = reservation.HotelName, Name = reservation.GuestName, Amount = payment.FinalPayableAmount }
                     );
 
-                    string checkInFormatted = reservation.CheckInDate.ToString("dd/MM/yyyy");
-                    string checkOutFormatted = reservation.CheckOutDate.ToString("dd/MM/yyyy");
+                    string checkInFormatted = IndiaTimeHelper.FormatIst(reservation.CheckInDate, "dd/MM/yyyy");
+                    string checkOutFormatted = IndiaTimeHelper.FormatIst(reservation.CheckOutDate, "dd/MM/yyyy");
 
                     await _notificationService.EnqueueAsync(
                         eventType: "HotelBookingSuccess",

@@ -1412,141 +1412,248 @@ public class TicketEmailService : ITicketEmailService
             Content = pdfBytes
         };
 
-        var subject = $"Your Hotel Booking Confirmation - {reservation.BookingReference} - {reservation.HotelName}";
+        var subject = $"Your Hotel Confirmation Voucher - {reservation.BookingReference} - {reservation.HotelName}";
+
+        int nights = Math.Max(1, (reservation.CheckOutDate.Date - reservation.CheckInDate.Date).Days);
+        string roomTypeName = !string.IsNullOrWhiteSpace(reservation.RoomTypeName)
+            ? reservation.RoomTypeName.Trim()
+            : GetRoomCategory(reservation.OfferId);
+
+        string confNo = !string.IsNullOrWhiteSpace(reservation.ConfirmationNo)
+            ? reservation.ConfirmationNo
+            : (!string.IsNullOrWhiteSpace(reservation.ProviderBookingId) ? reservation.ProviderBookingId : reservation.BookingReference);
+
+        string bookingDateStr = IndiaTimeHelper.FormatIst(reservation.CreatedAt, "dd MMM yyyy, hh:mm tt");
+        string checkInDateStr = IndiaTimeHelper.FormatIst(reservation.CheckInDate, "ddd, dd MMM yyyy");
+        string checkOutDateStr = IndiaTimeHelper.FormatIst(reservation.CheckOutDate, "ddd, dd MMM yyyy");
+        string cityDisplay = !string.IsNullOrWhiteSpace(reservation.CityCode) ? reservation.CityCode : "Hotel Stay";
+
+        decimal basePrice = reservation.BasePrice > 0 ? reservation.BasePrice : reservation.Price;
+        decimal totalPrice = reservation.TotalPrice > 0 ? reservation.TotalPrice : reservation.Price;
+        string nationalityText = reservation.GuestNationality == "IN" ? "Indian (IN)" : (reservation.GuestNationality ?? "Indian (IN)");
+
+        // Dynamic Cancellation Policies (Zero fallbacks)
+        var parsedPolicies = ParseHotelCancellationPolicies(reservation);
+        var policyRowsHtml = new System.Text.StringBuilder();
+        if (parsedPolicies.Count > 0)
+        {
+            foreach (var cp in parsedPolicies)
+            {
+                policyRowsHtml.Append($@"
+                <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                  <td style=""padding: 5px 4px; color: #334155;"">{cp.TimeWindow}</td>
+                  <td style=""padding: 5px 4px; text-align: center; color: #16a34a; font-weight: 600;"">{cp.RefundPct}</td>
+                  <td style=""padding: 5px 4px; text-align: right; color: #0f172a; font-weight: 600;"">{cp.RefundAmt}</td>
+                </tr>");
+            }
+        }
+        else
+        {
+            policyRowsHtml.Append(@"
+                <tr>
+                  <td colspan=""3"" style=""padding: 6px 4px; color: #64748b; font-style: italic;"">Cancellation terms subject to hotel property rules.</td>
+                </tr>");
+        }
+
+        // Taxes Row
+        var taxesRowHtml = reservation.SrdvGstAmount > 0
+            ? $@"
+            <tr>
+              <td style=""padding: 3px 0; color: #64748b;"">Hotel Taxes &amp; Service GST:</td>
+              <td style=""padding: 3px 0; text-align: right; color: #0f172a; font-weight: 600;"">INR {reservation.SrdvGstAmount:0.00}</td>
+            </tr>"
+            : string.Empty;
+
+        // Discount Row
+        var discountRowHtml = reservation.CouponDiscount > 0
+            ? $@"
+            <tr>
+              <td style=""padding: 3px 0; color: #16a34a;"">{(!string.IsNullOrWhiteSpace(reservation.CouponCode) ? $"Discount ({reservation.CouponCode}):" : "Offer / Coupon Discount:")}</td>
+              <td style=""padding: 3px 0; text-align: right; color: #16a34a; font-weight: 600;"">- INR {reservation.CouponDiscount:0.00}</td>
+            </tr>"
+            : string.Empty;
 
         var body = $@"
-<div style=""font-family: Arial, sans-serif; background-color: #f4f6fa; padding: 30px 20px; max-width: 600px; margin: 0 auto; border-radius: 12px;"">
-    <div style=""background: linear-gradient(135deg, #0f2459 0%, #1e3a8a 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"">
-        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
-            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
-        </div>
-        <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Hotel Booking Confirmed!</h2>
-        <p style=""margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;"">Booking Reference: <b style=""color: #f8fafc;"">{reservation.BookingReference}</b></p>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"">
+  <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+  <title>Your Hotel Voucher - {reservation.BookingReference}</title>
+  <style>
+    @media only screen and (max-width: 600px) {{
+      .mobile-container {{
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 0 !important;
+      }}
+      .stack-col {{
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }}
+      .stack-col-border {{
+        border-right: none !important;
+        border-bottom: 1px solid #e2e8f0 !important;
+      }}
+      .text-mobile-left {{
+        text-align: left !important;
+        padding-top: 6px !important;
+      }}
+    }}
+  </style>
+</head>
+<body style=""font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 20px 10px; color: #1e293b;"">
+  
+  <div class=""mobile-container"" style=""max-width: 620px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06);"">
+    
+    <!-- 1. HEADER & META BAR -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #ffffff; border-top: 4px solid #dc2626; border-bottom: 1px solid #e2e8f0;"">
+      <tr>
+        <td class=""stack-col"" style=""padding: 18px 20px; vertical-align: middle;"">
+          <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
+          <div style=""font-weight: 800; font-size: 15px; letter-spacing: 0.5px; color: #dc2626; text-transform: uppercase; margin-top: 6px;"">HOTEL CONFIRMATION VOUCHER</div>
+          <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Booked on <b style=""color: #1e293b;"">{bookingDateStr}</b></div>
+        </td>
+        <td class=""stack-col text-mobile-left"" style=""padding: 18px 20px; text-align: right; vertical-align: middle; font-size: 12px;"">
+          <div><span style=""color: #64748b;"">Booking ID:</span> <b style=""color: #dc2626; font-size: 13px;"">{reservation.BookingReference}</b></div>
+          <div style=""margin-top: 4px;""><span style=""color: #64748b; font-size: 11px;"">Hotel Conf No:</span> <b style=""color: #1e293b; font-size: 12px;"">{confNo}</b></div>
+          <div style=""margin-top: 6px;""><span style=""display: inline-block; background-color: #dcfce7; color: #15803d; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;"">CONFIRMED</span></div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- 2. PROPERTY & ROOM DETAILS -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;"">
+      <tr>
+        <td class=""stack-col"" style=""padding: 16px 20px; vertical-align: top;"">
+          <div style=""font-size: 17px; font-weight: 800; color: #0f172a; word-break: break-word;"">{reservation.HotelName}</div>
+          <div style=""font-size: 12px; color: #334155; margin-top: 4px; font-weight: 700;"">{roomTypeName} &nbsp;&bull;&nbsp; <span style=""display: inline-block; background-color: #e2e8f0; color: #0f172a; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 3px;"">[ {nights} NIGHTS STAY ]</span></div>
+          <div style=""font-size: 11px; color: #64748b; margin-top: 5px;"">Standard Check-in: 12:00 PM | Standard Check-out: 11:00 AM</div>
+        </td>
+        <td class=""stack-col text-mobile-left"" style=""padding: 16px 20px; text-align: right; vertical-align: top; font-size: 12px;"">
+          <div style=""font-weight: 700; color: #0f172a;"">Voucher # {confNo}</div>
+          <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Location: {cityDisplay}</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- 3. STAY TIMELINE -->
+    <div style=""padding: 18px 20px; border-bottom: 1px solid #e2e8f0; background-color: #ffffff;"">
+      <table style=""width: 100%; border-collapse: collapse;"">
+        <tr>
+          <td class=""stack-col"" style=""width: 48%; vertical-align: top;"">
+            <div style=""font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px;"">CHECK-IN</div>
+            <div style=""font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 2px;"">{cityDisplay}</div>
+            <div style=""font-size: 12px; color: #334155; font-weight: 700; margin-top: 3px;"">{checkInDateStr}</div>
+            <div style=""font-size: 11px; color: #64748b; margin-top: 3px;"">From 12:00 PM (Standard Check-In)</div>
+          </td>
+          <td class=""stack-col text-mobile-left"" style=""width: 48%; vertical-align: top; text-align: right;"">
+            <div style=""font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px;"">CHECK-OUT</div>
+            <div style=""font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 2px;"">{cityDisplay}</div>
+            <div style=""font-size: 12px; color: #334155; font-weight: 700; margin-top: 3px;"">{checkOutDateStr}</div>
+            <div style=""font-size: 11px; color: #64748b; margin-top: 3px;"">Until 11:00 AM (Standard Check-Out)</div>
+          </td>
+        </tr>
+      </table>
+      <div style=""margin-top: 14px; padding: 10px 14px; background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 6px; font-size: 11px; color: #92400e; line-height: 1.4;"">
+        &bull; <b>Notice:</b> Standard check-in starts at 12:00 PM. Mandatory government-issued photo ID is required for all adult guests.
+      </div>
     </div>
 
-    <div style=""background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(15, 36, 89, 0.08);"">
-        <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
+    <!-- 4. GUEST & PAYMENT BREAKDOWN -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;"">
+      <tr>
+        <!-- GUEST DETAILS -->
+        <td class=""stack-col stack-col-border"" style=""width: 52%; vertical-align: top; padding: 16px 14px 16px 20px; border-right: 1px solid #e2e8f0;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;"">Guest Details</div>
+          <table style=""width: 100%; border-collapse: collapse; font-size: 11px; color: #334155;"">
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Primary Guest:</td><td style=""padding: 3px 0; font-weight: 700; color: #0f172a; text-align: right;"">{reservation.GuestName}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Email:</td><td style=""padding: 3px 0; text-align: right;"">{reservation.GuestEmail}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Mobile:</td><td style=""padding: 3px 0; text-align: right;"">{reservation.GuestPhone}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Occupancy:</td><td style=""padding: 3px 0; text-align: right;"">{reservation.Rooms} Room(s) &bull; {reservation.Adults} Ad, {reservation.Children} Ch</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Room Category:</td><td style=""padding: 3px 0; text-align: right;"">{roomTypeName}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Nationality:</td><td style=""padding: 3px 0; text-align: right;"">{nationalityText}</td></tr>
+          </table>
+        </td>
+        
+        <!-- PAYMENT DETAILS -->
+        <td class=""stack-col"" style=""width: 48%; vertical-align: top; padding: 16px 20px 16px 14px;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;"">Payment Details</div>
+          <table style=""width: 100%; border-collapse: collapse; font-size: 11px;"">
             <tr>
-                <td style=""vertical-align: middle;"">
-                    <div style=""display: inline-block; background-color: #0f2459; color: #ffffff; font-size: 14px; font-weight: bold; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 4px; margin-right: 8px; font-family: sans-serif;"">H</div>
-                    <span style=""font-size: 16px; font-weight: bold; color: #0f2459; vertical-align: middle;"">{reservation.HotelName} Ticket</span>
-                    <div style=""font-size: 11px; color: #78829b; margin-top: 4px;"">Reference: {reservation.BookingReference}</div>
-                </td>
-                <td style=""text-align: right; vertical-align: top;"">
-                    <span style=""background-color: #f8fafc; border: 1px solid #e2e8f0; color: #0f2459; font-size: 10px; font-weight: bold; padding: 4px 12px; border-radius: 5px; text-transform: uppercase;"">HOTEL</span>
-                </td>
+              <td style=""padding: 3px 0; color: #64748b;"">Room Base Charges:</td>
+              <td style=""padding: 3px 0; text-align: right; color: #0f172a; font-weight: 600;"">INR {basePrice:0.00}</td>
             </tr>
-        </table>
-
-        <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
-            <tr>
-                <td style=""width: 32%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; vertical-align: top;"">
-                    <div style=""font-size: 8px; font-weight: bold; color: #78829b; margin-bottom: 4px; text-transform: uppercase;"">STAY</div>
-                    <div style=""font-size: 11px; font-weight: bold; color: #0f2459;"">{reservation.HotelName} to {reservation.CityCode}</div>
-                    <div style=""font-size: 9px; color: #78829b; margin-top: 4px;"">{GetRoomCategory(reservation.OfferId)}</div>
-                </td>
-                <td style=""width: 2%;""></td>
-                <td style=""width: 32%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; vertical-align: top;"">
-                    <div style=""font-size: 8px; font-weight: bold; color: #78829b; margin-bottom: 4px; text-transform: uppercase;"">CHECK IN</div>
-                    <div style=""font-size: 11px; font-weight: bold; color: #0f2459;"">{reservation.CheckInDate:dd MMM yyyy}</div>
-                    <div style=""font-size: 9px; color: #78829b; margin-top: 4px;"">Check Out: {reservation.CheckOutDate:dd MMM yyyy}</div>
-                </td>
-                <td style=""width: 2%;""></td>
-                <td style=""width: 32%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; vertical-align: top;"">
-                    <div style=""font-size: 8px; font-weight: bold; color: #78829b; margin-bottom: 4px; text-transform: uppercase;"">STATUS</div>
-                    <div style=""font-size: 11px; font-weight: bold; color: #0f2459;"">{reservation.Status}</div>
-                    <div style=""font-size: 9px; color: #78829b; margin-top: 4px;"">Booked at {ToIst(reservation.CreatedAt):dd MMM yyyy, hh:mm tt}</div>
-                </td>
+            {taxesRowHtml}
+            {discountRowHtml}
+            <tr style=""border-top: 1px dashed #cbd5e1;"">
+              <td style=""padding: 6px 0 2px 0; font-weight: 700; color: #0f172a;"">Total Amount Paid:</td>
+              <td style=""padding: 6px 0 2px 0; text-align: right; font-weight: 800; color: #dc2626; font-size: 13px;"">INR {totalPrice:0.00}</td>
             </tr>
-        </table>
+          </table>
+        </td>
+      </tr>
+    </table>
 
-        <div style=""margin-bottom: 20px;"">
-            <div style=""font-size: 10px; font-weight: bold; color: #0f2459; margin-bottom: 6px;"">Passengers</div>
-            <table style=""width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #f8fafc;"">
-                <tr>
-                    <td style=""padding: 10px; font-size: 11px; color: #0f2459;"">{reservation.GuestName} - Primary Guest</td>
-                    <td style=""padding: 10px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Seat King Bed</td>
-                </tr>
-            </table>
-        </div>
-
-        <div style=""margin-bottom: 20px;"">
-            <div style=""font-size: 10px; font-weight: bold; color: #0f2459; margin-bottom: 6px;"">Contact and Delivery</div>
-            <table style=""width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;"">
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Seats</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">{GetRoomCategory(reservation.OfferId)}</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Email</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">{reservation.GuestEmail}</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Mobile</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">{reservation.GuestPhone}</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">WhatsApp</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Not selected</td>
-                </tr>
-                <tr>
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Payment Method</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Wallet</td>
-                </tr>
-            </table>
-        </div>
-
-        <div style=""margin-bottom: 20px;"">
-            <div style=""font-size: 10px; font-weight: bold; color: #0f2459; margin-bottom: 6px;"">Confirmation Delivery Status</div>
-            <table style=""width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;"">
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Email Confirmation</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Queued</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">SMS Confirmation</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Queued</td>
-                </tr>
-                <tr>
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">WhatsApp Confirmation</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Skipped</td>
-                </tr>
-            </table>
-        </div>
-
-        <div style=""border-top: 1px solid #e2e8f0; padding-top: 15px;"">
-            <table style=""width: 100%; border-collapse: collapse;"">
-                <tr>
-                    <td style=""font-size: 11px; color: #78829b; padding-bottom: 6px;"">Base Fare</td>
-                    <td style=""font-size: 11px; color: #0f2459; padding-bottom: 6px; text-align: right;"">INR {reservation.BasePrice:N2}</td>
-                </tr>
-
-                <tr>
-                    <td style=""font-size: 11px; color: #78829b; padding-bottom: 6px;"">Convenience Fee</td>
-                    <td style=""font-size: 11px; color: #0f2459; padding-bottom: 6px; text-align: right;"">INR {reservation.ConvenienceFee:N2}</td>
-                </tr>
-                <tr>
-                    <td style=""font-size: 11px; color: #78829b; padding-bottom: 12px;"">Discount</td>
-                    <td style=""font-size: 11px; color: #0f2459; padding-bottom: 12px; text-align: right;"">INR {reservation.CouponDiscount:N2}</td>
-                </tr>
-                <tr style=""border-top: 1px solid #e2e8f0;"">
-                    <td style=""font-size: 13px; font-weight: bold; color: #0f2459; padding-top: 10px;"">Total Paid</td>
-                    <td style=""font-size: 13px; font-weight: bold; color: #0f2459; padding-top: 10px; text-align: right;"">INR {reservation.TotalPrice:N2}</td>
-                </tr>
-            </table>
-        </div>
+    <!-- 5. IMPORTANT INFORMATION -->
+    <div style=""padding: 14px 20px; border-bottom: 1px solid #e2e8f0; background-color: #ffffff;"">
+      <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"">Important Information</div>
+      <ul style=""margin: 0; padding-left: 18px; font-size: 11px; color: #475569; line-height: 1.5;"">
+        <li>Mandatory Govt Photo ID Proof (Aadhaar, Passport, DL, Voter ID) required for all adult guests (PAN card not accepted).</li>
+        <li>Early check-in and late check-out are subject to availability and may incur additional charges directly at reception.</li>
+        <li>For concierge assistance, special requests, or queries, visit <a href=""https://picknbook.in/contact"" style=""color: #0284c7; text-decoration: none; font-weight: 600;"">https://picknbook.in/contact</a></li>
+      </ul>
     </div>
-</div>";
+
+    <!-- 6. TERMS & CANCELLATION POLICY -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #f8fafc;"">
+      <tr>
+        <td class=""stack-col stack-col-border"" style=""width: 50%; vertical-align: top; padding: 16px 14px 16px 20px; border-right: 1px solid #e2e8f0;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"">Hotel Terms and Conditions</div>
+          <div style=""font-size: 10.5px; color: #64748b; line-height: 1.5;"">
+            &bull; Primary guest must be at least 18 years of age with valid photo ID.<br/>
+            &bull; Unmarried couples &amp; local ID rules are governed by hotel policies.<br/>
+            &bull; Incidentals, mini-bar, and room service are payable directly at the hotel.<br/>
+            &bull; Extra bed and child charges are payable directly at reception.<br/>
+            &bull; For full booking policies, visit <a href=""https://picknbook.in/terms"" style=""color: #0284c7; text-decoration: none; font-weight: 600;"">https://picknbook.in/terms</a>
+          </div>
+        </td>
+        <td class=""stack-col"" style=""width: 50%; vertical-align: top; padding: 16px 20px 16px 14px;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"">Cancellation Policy</div>
+          <table style=""width: 100%; border-collapse: collapse; font-size: 10px; color: #334155;"">
+            <thead>
+              <tr style=""border-bottom: 1px solid #cbd5e1; color: #64748b;"">
+                <th style=""padding: 4px 2px; text-align: left;"">Cancellation Time</th>
+                <th style=""padding: 4px 2px; text-align: center;"">Refund (%)</th>
+                <th style=""padding: 4px 2px; text-align: right;"">Refund Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {policyRowsHtml}
+            </tbody>
+          </table>
+          <div style=""font-size: 9px; color: #64748b; margin-top: 6px; line-height: 1.4;"">
+            &bull; Calculated per hotel cancellation policy terms.
+          </div>
+        </td>
+      </tr>
+    </table>
+
+  </div>
+</body>
+</html>";
 
         await _emailService.SendEmailWithAttachmentsAsync(
             reservation.GuestEmail,
             subject,
             body,
-            [attachment]);
+            new List<EmailAttachment> { attachment });
     }
 
     public async Task SendHotelCancellationAsync(HotelReservation reservation)
     {
+        reservation.Status = "Cancelled";
         var pdfBytes = _ticketPdfService.GenerateHotelTicketPdf(reservation);
 
         var attachment = new EmailAttachment
@@ -1558,116 +1665,202 @@ public class TicketEmailService : ITicketEmailService
 
         var subject = $"Hotel Booking Cancelled - {reservation.BookingReference} - {reservation.HotelName}";
 
+        int nights = Math.Max(1, (reservation.CheckOutDate.Date - reservation.CheckInDate.Date).Days);
+        string roomTypeName = !string.IsNullOrWhiteSpace(reservation.RoomTypeName)
+            ? reservation.RoomTypeName.Trim()
+            : GetRoomCategory(reservation.OfferId);
+
+        string confNo = !string.IsNullOrWhiteSpace(reservation.ConfirmationNo)
+            ? reservation.ConfirmationNo
+            : (!string.IsNullOrWhiteSpace(reservation.ProviderBookingId) ? reservation.ProviderBookingId : reservation.BookingReference);
+
+        string cancelDateStr = reservation.CancelledAt.HasValue
+            ? IndiaTimeHelper.FormatIst(reservation.CancelledAt.Value, "dd MMM yyyy, hh:mm tt")
+            : IndiaTimeHelper.FormatIst(DateTime.UtcNow, "dd MMM yyyy, hh:mm tt");
+
+        string checkInDateStr = IndiaTimeHelper.FormatIst(reservation.CheckInDate, "ddd, dd MMM yyyy");
+        string checkOutDateStr = IndiaTimeHelper.FormatIst(reservation.CheckOutDate, "ddd, dd MMM yyyy");
+        string cityDisplay = !string.IsNullOrWhiteSpace(reservation.CityCode) ? reservation.CityCode : "Hotel Stay";
+
+        decimal totalPrice = reservation.TotalPrice > 0 ? reservation.TotalPrice : reservation.Price;
+        var applied = EvaluateAppliedHotelCancellationPolicy(reservation);
+
         var body = $@"
-<div style=""font-family: Arial, sans-serif; background-color: #f4f6fa; padding: 30px 20px; max-width: 600px; margin: 0 auto; border-radius: 12px;"">
-    <div style=""background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"">
-        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
-            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
-        </div>
-        <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Hotel Booking Cancelled</h2>
-        <p style=""margin: 6px 0 0 0; font-size: 13px; color: #fecaca;"">Booking Reference: <b style=""color: #ffffff;"">{reservation.BookingReference}</b></p>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset=""utf-8"">
+  <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+  <title>Hotel Booking Cancelled - {reservation.BookingReference}</title>
+  <style>
+    @media only screen and (max-width: 600px) {{
+      .mobile-container {{
+        width: 100% !important;
+        max-width: 100% !important;
+        border-radius: 0 !important;
+      }}
+      .stack-col {{
+        display: block !important;
+        width: 100% !important;
+        box-sizing: border-box !important;
+      }}
+      .stack-col-border {{
+        border-right: none !important;
+        border-bottom: 1px solid #e2e8f0 !important;
+      }}
+      .text-mobile-left {{
+        text-align: left !important;
+        padding-top: 6px !important;
+      }}
+    }}
+  </style>
+</head>
+<body style=""font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 20px 10px; color: #1e293b;"">
+  
+  <div class=""mobile-container"" style=""max-width: 620px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06);"">
+    
+    <!-- 1. HEADER & META BAR -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #ffffff; border-top: 4px solid #dc2626; border-bottom: 1px solid #e2e8f0;"">
+      <tr>
+        <td class=""stack-col"" style=""padding: 18px 20px; vertical-align: middle;"">
+          <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
+          <div style=""font-weight: 800; font-size: 15px; letter-spacing: 0.5px; color: #dc2626; text-transform: uppercase; margin-top: 6px;"">HOTEL BOOKING CANCELLATION</div>
+          <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Cancelled on <b style=""color: #1e293b;"">{cancelDateStr}</b></div>
+        </td>
+        <td class=""stack-col text-mobile-left"" style=""padding: 18px 20px; text-align: right; vertical-align: middle; font-size: 12px;"">
+          <div><span style=""color: #64748b;"">Booking ID:</span> <b style=""color: #dc2626; font-size: 13px;"">{reservation.BookingReference}</b></div>
+          <div style=""margin-top: 4px;""><span style=""color: #64748b; font-size: 11px;"">Hotel Conf No:</span> <b style=""color: #1e293b; font-size: 12px;"">{confNo}</b></div>
+          <div style=""margin-top: 6px;""><span style=""display: inline-block; background-color: #fee2e2; color: #dc2626; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;"">CANCELLED</span></div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- 2. PROPERTY & ROOM DETAILS -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;"">
+      <tr>
+        <td class=""stack-col"" style=""padding: 16px 20px; vertical-align: top;"">
+          <div style=""font-size: 17px; font-weight: 800; color: #0f172a; word-break: break-word;"">{reservation.HotelName}</div>
+          <div style=""font-size: 12px; color: #334155; margin-top: 4px; font-weight: 700;"">{roomTypeName} &nbsp;&bull;&nbsp; <span style=""display: inline-block; background-color: #e2e8f0; color: #0f172a; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 3px;"">[ {nights} NIGHTS STAY ]</span></div>
+          <div style=""font-size: 11px; color: #64748b; margin-top: 5px;"">Standard Check-in: 12:00 PM | Standard Check-out: 11:00 AM</div>
+        </td>
+        <td class=""stack-col text-mobile-left"" style=""padding: 16px 20px; text-align: right; vertical-align: top; font-size: 12px;"">
+          <div style=""font-weight: 700; color: #0f172a;"">Voucher # {confNo}</div>
+          <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Location: {cityDisplay}</div>
+        </td>
+      </tr>
+    </table>
+
+    <!-- 3. STAY TIMELINE & CANCEL CONFIRMATION -->
+    <div style=""padding: 18px 20px; border-bottom: 1px solid #e2e8f0; background-color: #ffffff;"">
+      <table style=""width: 100%; border-collapse: collapse;"">
+        <tr>
+          <td class=""stack-col"" style=""width: 48%; vertical-align: top;"">
+            <div style=""font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px;"">SCHEDULED CHECK-IN</div>
+            <div style=""font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 2px;"">{cityDisplay}</div>
+            <div style=""font-size: 12px; color: #334155; font-weight: 700; margin-top: 3px;"">{checkInDateStr}</div>
+          </td>
+          <td class=""stack-col text-mobile-left"" style=""width: 48%; vertical-align: top; text-align: right;"">
+            <div style=""font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700; letter-spacing: 0.5px;"">SCHEDULED CHECK-OUT</div>
+            <div style=""font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 2px;"">{cityDisplay}</div>
+            <div style=""font-size: 12px; color: #334155; font-weight: 700; margin-top: 3px;"">{checkOutDateStr}</div>
+          </td>
+        </tr>
+      </table>
+      <div style=""margin-top: 14px; padding: 10px 14px; background-color: #fef2f2; border: 1px solid #fee2e2; border-radius: 6px; font-size: 11px; color: #991b1b; line-height: 1.4;"">
+        &bull; <b>Cancellation Confirmation:</b> This hotel reservation has been cancelled. Hotel rooms have been released and this voucher is no longer valid for check-in.
+      </div>
     </div>
 
-    <div style=""background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(15, 36, 89, 0.08);"">
-        <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
+    <!-- 4. GUEST & REFUND BREAKDOWN -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;"">
+      <tr>
+        <!-- GUEST DETAILS -->
+        <td class=""stack-col stack-col-border"" style=""width: 52%; vertical-align: top; padding: 16px 14px 16px 20px; border-right: 1px solid #e2e8f0;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;"">Cancelled Guest Details</div>
+          <table style=""width: 100%; border-collapse: collapse; font-size: 11px; color: #334155;"">
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Primary Guest:</td><td style=""padding: 3px 0; font-weight: 700; color: #0f172a; text-align: right;"">{reservation.GuestName}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Email:</td><td style=""padding: 3px 0; text-align: right;"">{reservation.GuestEmail}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Mobile:</td><td style=""padding: 3px 0; text-align: right;"">{reservation.GuestPhone}</td></tr>
+            <tr><td style=""padding: 3px 0; color: #64748b;"">Room Category:</td><td style=""padding: 3px 0; text-align: right;"">{roomTypeName}</td></tr>
+          </table>
+        </td>
+        
+        <!-- REFUND BREAKDOWN -->
+        <td class=""stack-col"" style=""width: 48%; vertical-align: top; padding: 16px 20px 16px 14px;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;"">Refund &amp; Fare Breakdown</div>
+          <table style=""width: 100%; border-collapse: collapse; font-size: 11px;"">
             <tr>
-                <td style=""vertical-align: middle;"">
-                    <div style=""display: inline-block; background-color: #d9251c; color: #ffffff; font-size: 14px; font-weight: bold; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 4px; margin-right: 8px; font-family: sans-serif;"">H</div>
-                    <span style=""font-size: 16px; font-weight: bold; color: #d9251c; vertical-align: middle;"">{reservation.HotelName} Ticket</span>
-                    <div style=""font-size: 11px; color: #78829b; margin-top: 4px;"">Reference: {reservation.BookingReference}</div>
-                </td>
-                <td style=""text-align: right; vertical-align: top;"">
-                    <span style=""background-color: #f8fafc; border: 1px solid #e2e8f0; color: #d9251c; font-size: 10px; font-weight: bold; padding: 4px 12px; border-radius: 5px; text-transform: uppercase;"">CANCELLED</span>
-                </td>
+              <td style=""padding: 3px 0; color: #64748b;"">Original Total Paid:</td>
+              <td style=""padding: 3px 0; text-align: right; color: #0f172a; font-weight: 600;"">INR {totalPrice:0.00}</td>
             </tr>
-        </table>
-
-        <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
             <tr>
-                <td style=""width: 32%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; vertical-align: top;"">
-                    <div style=""font-size: 8px; font-weight: bold; color: #78829b; margin-bottom: 4px; text-transform: uppercase;"">STAY</div>
-                    <div style=""font-size: 11px; font-weight: bold; color: #0f2459;"">{reservation.HotelName} to {reservation.CityCode}</div>
-                    <div style=""font-size: 9px; color: #78829b; margin-top: 4px;"">{GetRoomCategory(reservation.OfferId)}</div>
-                </td>
-                <td style=""width: 2%;""></td>
-                <td style=""width: 32%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; vertical-align: top;"">
-                    <div style=""font-size: 8px; font-weight: bold; color: #78829b; margin-bottom: 4px; text-transform: uppercase;"">CHECK IN</div>
-                    <div style=""font-size: 11px; font-weight: bold; color: #0f2459;"">{reservation.CheckInDate:dd MMM yyyy}</div>
-                    <div style=""font-size: 9px; color: #78829b; margin-top: 4px;"">Check Out: {reservation.CheckOutDate:dd MMM yyyy}</div>
-                </td>
-                <td style=""width: 2%;""></td>
-                <td style=""width: 32%; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; vertical-align: top;"">
-                    <div style=""font-size: 8px; font-weight: bold; color: #78829b; margin-bottom: 4px; text-transform: uppercase;"">STATUS</div>
-                    <div style=""font-size: 11px; font-weight: bold; color: #d9251c;"">{reservation.Status}</div>
-                    <div style=""font-size: 9px; color: #78829b; margin-top: 4px;"">Booked at {ToIst(reservation.CreatedAt):dd MMM yyyy, hh:mm tt}</div>
-                </td>
+              <td style=""padding: 3px 0; color: #dc2626;"">Cancellation Charges:</td>
+              <td style=""padding: 3px 0; text-align: right; color: #dc2626; font-weight: 600;"">INR {reservation.CancellationCharges:0.00}</td>
             </tr>
-        </table>
+            <tr style=""border-top: 1px dashed #cbd5e1;"">
+              <td style=""padding: 6px 0 2px 0; font-weight: 700; color: #0f172a;"">Total Refund Amount:</td>
+              <td style=""padding: 6px 0 2px 0; text-align: right; font-weight: 800; color: #15803d; font-size: 13px;"">INR {reservation.RefundAmount:0.00}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
 
-        <div style=""margin-bottom: 20px;"">
-            <div style=""font-size: 10px; font-weight: bold; color: #0f2459; margin-bottom: 6px;"">Passengers</div>
-            <table style=""width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #f8fafc;"">
-                <tr>
-                    <td style=""padding: 10px; font-size: 11px; color: #0f2459;"">{reservation.GuestName} - Primary Guest</td>
-                    <td style=""padding: 10px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Seat King Bed</td>
-                </tr>
-            </table>
-        </div>
-
-        <div style=""margin-bottom: 20px;"">
-            <div style=""font-size: 10px; font-weight: bold; color: #0f2459; margin-bottom: 6px;"">Contact and Delivery</div>
-            <table style=""width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 8px; background-color: #ffffff;"">
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Seats</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">{GetRoomCategory(reservation.OfferId)}</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Email</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">{reservation.GuestEmail}</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Mobile</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">{reservation.GuestPhone}</td>
-                </tr>
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">WhatsApp</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Not selected</td>
-                </tr>
-                <tr>
-                    <td style=""padding: 8px 12px; font-size: 11px; color: #78829b;"">Payment Method</td>
-                    <td style=""padding: 8px 12px; font-size: 11px; font-weight: bold; color: #0f2459; text-align: right;"">Wallet</td>
-                </tr>
-            </table>
-        </div>
-
-        <div style=""border-top: 1px solid #e2e8f0; padding-top: 15px;"">
-            <table style=""width: 100%; border-collapse: collapse;"">
-                <tr>
-                    <td style=""font-size: 11px; color: #78829b; padding-bottom: 6px;"">Original Total Paid</td>
-                    <td style=""font-size: 11px; color: #0f2459; padding-bottom: 6px; text-align: right;"">INR {reservation.TotalPrice:N2}</td>
-                </tr>
-                <tr>
-                    <td style=""font-size: 11px; color: #78829b; padding-bottom: 6px;"">Cancellation Charges</td>
-                    <td style=""font-size: 11px; color: #0f2459; padding-bottom: 6px; text-align: right;"">INR {reservation.CancellationCharges:N2}</td>
-                </tr>
-                <tr>
-                    <td style=""font-size: 11px; color: #78829b; padding-bottom: 12px;"">Refund Amount</td>
-                    <td style=""font-size: 11px; color: #0f2459; padding-bottom: 12px; text-align: right;"">INR {reservation.RefundAmount:N2}</td>
-                </tr>
-                <tr style=""border-top: 1px solid #e2e8f0;"">
-                    <td style=""font-size: 13px; font-weight: bold; color: #d9251c; padding-top: 10px;"">Total Refunded</td>
-                    <td style=""font-size: 13px; font-weight: bold; color: #d9251c; padding-top: 10px; text-align: right;"">INR {reservation.RefundAmount:N2}</td>
-                </tr>
-            </table>
-        </div>
+    <!-- 5. IMPORTANT INFORMATION -->
+    <div style=""padding: 14px 20px; border-bottom: 1px solid #e2e8f0; background-color: #ffffff;"">
+      <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"">Important Information</div>
+      <ul style=""margin: 0; padding-left: 18px; font-size: 11px; color: #475569; line-height: 1.5;"">
+        <li>This reservation has been cancelled. Hotel rooms have been released back to hotel inventory.</li>
+        <li>For refund inquiries, concierge assistance, or booking help, visit <a href=""https://picknbook.in/contact"" style=""color: #0284c7; text-decoration: none; font-weight: 600;"">https://picknbook.in/contact</a></li>
+      </ul>
     </div>
-</div>";
+
+    <!-- 6. CANCELLATION SUMMARY & APPLIED POLICY -->
+    <table style=""width: 100%; border-collapse: collapse; background-color: #f8fafc;"">
+      <tr>
+        <td class=""stack-col stack-col-border"" style=""width: 50%; vertical-align: top; padding: 16px 14px 16px 20px; border-right: 1px solid #e2e8f0;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"">Cancellation Summary</div>
+          <div style=""font-size: 10.5px; color: #64748b; line-height: 1.5;"">
+            &bull; The booking is cancelled in accordance with supplier terms.<br/>
+            &bull; Refund has been processed to source payment method / wallet.<br/>
+            &bull; Bank settlement timeline: 3-7 business days if applicable.<br/>
+            &bull; For inquiries, visit <a href=""https://picknbook.in/contact"" style=""color: #0284c7; text-decoration: none; font-weight: 600;"">https://picknbook.in/contact</a>
+          </div>
+        </td>
+        <td class=""stack-col"" style=""width: 50%; vertical-align: top; padding: 16px 20px 16px 14px;"">
+          <div style=""font-size: 12px; font-weight: 700; color: #0f172a; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px;"">Cancellation Policy Applied</div>
+          <table style=""width: 100%; border-collapse: collapse; font-size: 10px; color: #334155;"">
+            <thead>
+              <tr style=""border-bottom: 1px solid #cbd5e1; color: #64748b;"">
+                <th style=""padding: 4px 2px; text-align: left;"">Window / Status</th>
+                <th style=""padding: 4px 2px; text-align: center;"">Refund (%)</th>
+                <th style=""padding: 4px 2px; text-align: right;"">Refund Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style=""border-bottom: 1px solid #e2e8f0;"">
+                <td style=""padding: 5px 4px; color: #334155;"">{applied.Window}</td>
+                <td style=""padding: 5px 4px; text-align: center; color: #16a34a; font-weight: 600;"">{applied.RefundPct}</td>
+                <td style=""padding: 5px 4px; text-align: right; color: #15803d; font-weight: 700;"">{applied.RefundAmt}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style=""font-size: 9px; color: #64748b; margin-top: 6px; line-height: 1.4;"">
+            &bull; *{applied.Note}
+          </div>
+        </td>
+      </tr>
+    </table>
+
+  </div>
+</body>
+</html>";
 
         await _emailService.SendEmailWithAttachmentsAsync(
             reservation.GuestEmail,
             subject,
             body,
-            [attachment]);
+            new List<EmailAttachment> { attachment });
     }
 
     private static string GetRoomCategory(string offerId)
@@ -1676,6 +1869,122 @@ public class TicketEmailService : ITicketEmailService
         if (offerId.Contains("suite", StringComparison.OrdinalIgnoreCase)) return "Executive Suite";
         if (offerId.Contains("deluxe", StringComparison.OrdinalIgnoreCase)) return "Deluxe Room";
         return "Standard Room";
+    }
+
+    private static List<(string TimeWindow, string RefundPct, string RefundAmt, decimal DeductionAmount)> ParseHotelCancellationPolicies(HotelReservation reservation)
+    {
+        var result = new List<(string TimeWindow, string RefundPct, string RefundAmt, decimal DeductionAmount)>();
+        if (string.IsNullOrWhiteSpace(reservation.CancellationPolicyJson)) return result;
+
+        try
+        {
+            var jsonStr = reservation.CancellationPolicyJson.Trim();
+            if (jsonStr.StartsWith("\"") && jsonStr.EndsWith("\""))
+            {
+                try
+                {
+                    var unescaped = System.Text.Json.JsonSerializer.Deserialize<string>(jsonStr);
+                    if (!string.IsNullOrWhiteSpace(unescaped)) jsonStr = unescaped.Trim();
+                }
+                catch { }
+            }
+
+            var options = new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true,
+                NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
+            };
+
+            List<HotelRoomCancellationPolicyDto>? policies = null;
+            if (jsonStr.StartsWith("["))
+            {
+                policies = System.Text.Json.JsonSerializer.Deserialize<List<HotelRoomCancellationPolicyDto>>(jsonStr, options);
+            }
+            else if (jsonStr.StartsWith("{"))
+            {
+                var single = System.Text.Json.JsonSerializer.Deserialize<HotelRoomCancellationPolicyDto>(jsonStr, options);
+                if (single != null) policies = new List<HotelRoomCancellationPolicyDto> { single };
+            }
+
+            if (policies != null && policies.Count > 0)
+            {
+                decimal totalPrice = reservation.TotalPrice > 0 ? reservation.TotalPrice : reservation.Price;
+                foreach (var p in policies)
+                {
+                    string timeWindow;
+                    DateTime? fromDt = null;
+                    DateTime? toDt = null;
+                    if (DateTime.TryParse(p.FromDate, out var f)) fromDt = f;
+                    if (DateTime.TryParse(p.ToDate, out var t)) toDt = t;
+
+                    if (fromDt.HasValue && toDt.HasValue)
+                    {
+                        timeWindow = $"{fromDt.Value:dd MMM} - {toDt.Value:dd MMM, hh:mm tt}";
+                    }
+                    else if (fromDt.HasValue)
+                    {
+                        timeWindow = $"From {fromDt.Value:dd MMM yyyy, hh:mm tt}";
+                    }
+                    else if (toDt.HasValue)
+                    {
+                        timeWindow = $"Until {toDt.Value:dd MMM yyyy, hh:mm tt}";
+                    }
+                    else
+                    {
+                        timeWindow = "Standard Window";
+                    }
+
+                    decimal refundPctVal = 0m;
+                    decimal refundAmtVal = 0m;
+                    decimal deductionVal = 0m;
+
+                    if (p.ChargeType == 1) // Percentage fee
+                    {
+                        deductionVal = totalPrice * (p.Charge / 100m);
+                        refundPctVal = Math.Max(0m, 100m - p.Charge);
+                        refundAmtVal = Math.Max(0m, totalPrice - deductionVal);
+                    }
+                    else // Fixed fee
+                    {
+                        deductionVal = p.Charge;
+                        refundAmtVal = Math.Max(0m, totalPrice - deductionVal);
+                        refundPctVal = totalPrice > 0 ? Math.Round((refundAmtVal / totalPrice) * 100m, 0) : 0m;
+                    }
+
+                    result.Add((timeWindow, $"{refundPctVal:0}%", $"INR {refundAmtVal:0.00}", deductionVal));
+                }
+            }
+        }
+        catch { }
+
+        return result;
+    }
+
+    private static (string Window, string RefundPct, string Deduction, string RefundAmt, string Note) EvaluateAppliedHotelCancellationPolicy(HotelReservation reservation)
+    {
+        var policies = ParseHotelCancellationPolicies(reservation);
+        var cancelTimeIst = reservation.CancelledAt.HasValue
+            ? IndiaTimeHelper.ToIst(reservation.CancelledAt.Value)
+            : IndiaTimeHelper.ToIst(DateTime.UtcNow);
+
+        decimal actualCharge = reservation.CancellationCharges;
+        decimal actualRefund = reservation.RefundAmount;
+        decimal totalPrice = reservation.TotalPrice > 0 ? reservation.TotalPrice : reservation.Price;
+        decimal refundPct = totalPrice > 0 ? Math.Round((actualRefund / totalPrice) * 100m, 0) : 0m;
+
+        string windowText = $"{cancelTimeIst:dd MMM yyyy, hh:mm tt}";
+        string note = $"Cancelled on {cancelTimeIst:dd MMM yyyy, hh:mm tt}";
+
+        if (policies.Count > 0)
+        {
+            var matching = policies.FirstOrDefault(p => Math.Abs(p.DeductionAmount - actualCharge) < 1.0m);
+            if (matching != default)
+            {
+                return (matching.TimeWindow, matching.RefundPct, $"INR {actualCharge:0.00} (Fee)", $"INR {actualRefund:0.00} (Refunded)", $"Cancelled within {matching.TimeWindow}");
+            }
+        }
+
+        return (windowText, $"{refundPct:0}% Refund", $"INR {actualCharge:0.00} (Fee)", $"INR {actualRefund:0.00} (Refunded)", note);
     }
 
     private static string GenerateSvgBarcode(string text)
