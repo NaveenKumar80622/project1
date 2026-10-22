@@ -184,6 +184,7 @@ namespace PickNBook.Api.Models.DTOs
 
     public class HotelBookingHistoryDto
     {
+        public int Id { get; set; }
         public string BookingId { get; set; } = string.Empty;
         public string BookingReference { get; set; } = string.Empty;
         public string HotelId { get; set; } = string.Empty;
@@ -213,6 +214,10 @@ namespace PickNBook.Api.Models.DTOs
         public string? PhoneNumber { get; set; }
         public string? Phone { get; set; }
         public string? GuestEmail { get; set; }
+        public string? CancellationReason { get; set; }
+        public decimal? CancellationCharges { get; set; }
+        public decimal? RefundAmount { get; set; }
+        public DateTime? CancelledAt { get; set; }
 
         public string? CanonicalStatus { get; set; }
         public string? CanonicalStatusLabel { get; set; }

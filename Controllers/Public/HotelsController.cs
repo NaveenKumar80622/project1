@@ -2026,10 +2026,12 @@ namespace PickNBook.Api.Controllers
                         x.TotalPrice,
                         cancelCharges,
                         refundAmt,
-                        x.CheckInDate);
+                        x.CheckInDate,
+                        x.CancellationReason ?? cancel?.FailureReason ?? payment?.RefundReason);
 
                     return new HotelBookingHistoryDto
                     {
+                        Id = x.Id,
                         BookingId = !string.IsNullOrWhiteSpace(x.ProviderBookingId) ? x.ProviderBookingId : (!string.IsNullOrWhiteSpace(x.BookingReference) ? x.BookingReference : x.Id.ToString()),
                         BookingReference = x.BookingReference,
                         HotelId = x.HotelId,
@@ -2060,6 +2062,11 @@ namespace PickNBook.Api.Controllers
                         Phone = x.GuestPhone,
                         GuestEmail = x.GuestEmail,
 
+                        CancellationReason = x.CancellationReason ?? cancel?.FailureReason ?? payment?.RefundReason,
+                        CancellationCharges = cancelCharges,
+                        RefundAmount = refundAmt,
+                        CancelledAt = x.CancelledAt,
+
                         CanonicalStatus = lifecycle.CanonicalStatus,
                         CanonicalStatusLabel = lifecycle.CanonicalStatusLabel,
                         LifecycleHierarchy = lifecycle.Hierarchy,
@@ -2078,16 +2085,57 @@ namespace PickNBook.Api.Controllers
             }
         }
 
-        private static bool TryParseBookingId(string bookingId, out int parsedId)
+        private async Task<HotelReservation?> FindUserHotelBookingAsync(string bookingId, string userId)
         {
-            parsedId = 0;
-            if (string.IsNullOrWhiteSpace(bookingId)) return false;
-            var raw = bookingId.Trim();
-            if (raw.StartsWith("bk-", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(bookingId)) return null;
+            var cleanBookingId = bookingId.Trim();
+            if (cleanBookingId.StartsWith("bk-", StringComparison.OrdinalIgnoreCase))
             {
-                raw = raw.Substring(3);
+                cleanBookingId = cleanBookingId.Substring(3);
             }
-            return int.TryParse(raw, out parsedId);
+
+            int.TryParse(cleanBookingId, out var id);
+
+            string? userPhone = null;
+            string? userEmail = null;
+            var phoneCandidates = new List<string>();
+
+            if (int.TryParse(userId, out int parsedUserId))
+            {
+                var userEntity = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == parsedUserId);
+                if (userEntity != null)
+                {
+                    userPhone = userEntity.PhoneNumber?.Trim();
+                    userEmail = userEntity.Email?.Trim();
+
+                    if (!string.IsNullOrWhiteSpace(userPhone))
+                    {
+                        phoneCandidates.Add(userPhone);
+                        var digits = new string(userPhone.Where(char.IsDigit).ToArray());
+                        if (!string.IsNullOrWhiteSpace(digits))
+                        {
+                            phoneCandidates.Add(digits);
+                            var last10 = digits.Length >= 10 ? digits.Substring(digits.Length - 10) : digits;
+                            phoneCandidates.Add(last10);
+                            phoneCandidates.Add("+91" + last10);
+                            phoneCandidates.Add("91" + last10);
+                            phoneCandidates.Add("0" + last10);
+                        }
+                    }
+                }
+            }
+
+            phoneCandidates = phoneCandidates.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
+
+            return await _dbContext.HotelReservations
+                .FirstOrDefaultAsync(b => (b.ProviderBookingId == cleanBookingId ||
+                                           b.SrdvBookingId == cleanBookingId ||
+                                           b.BookingReference == cleanBookingId ||
+                                           b.ConfirmationNo == cleanBookingId ||
+                                           (id > 0 && b.Id == id)) && 
+                                          (b.UserId == userId ||
+                                           (phoneCandidates.Count > 0 && phoneCandidates.Contains(b.GuestPhone)) ||
+                                           (!string.IsNullOrEmpty(userEmail) && b.GuestEmail != null && b.GuestEmail.ToLower() == userEmail.ToLower())));
         }
 
         // =====================================
@@ -2103,30 +2151,58 @@ namespace PickNBook.Api.Controllers
             }
             var userId = _currentUserService.GetUserOrGuestId();
 
-            var cleanBookingId = bookingId?.Trim() ?? string.Empty;
-            if (cleanBookingId.StartsWith("bk-", StringComparison.OrdinalIgnoreCase))
-            {
-                cleanBookingId = cleanBookingId.Substring(3);
-            }
-
-            int.TryParse(cleanBookingId, out var id);
-
-            var x = await _dbContext.HotelReservations
-                .FirstOrDefaultAsync(b => (b.ProviderBookingId == cleanBookingId ||
-                                           b.SrdvBookingId == cleanBookingId ||
-                                           b.BookingReference == cleanBookingId ||
-                                           b.ConfirmationNo == cleanBookingId ||
-                                           (id > 0 && b.Id == id)) && b.UserId == userId);
-
+            var x = await FindUserHotelBookingAsync(bookingId, userId);
             if (x == null)
             {
                 return NotFound(new { message = "Booking not found." });
             }
 
             var payment = await _dbContext.Payments.AsNoTracking()
-                .Where(p => (p.BookingId == id || p.BookingReferenceId == id || (x.BookingReference != null && p.PaymentReference == x.BookingReference)))
+                .Where(p => (p.BookingId == x.Id || 
+                             p.BookingReferenceId == x.Id || 
+                             (x.BookingReference != null && (p.PaymentReference == x.BookingReference || p.CashfreeOrderId == x.BookingReference))))
                 .OrderByDescending(p => p.Id)
                 .FirstOrDefaultAsync();
+
+            var walletTx = await _dbContext.WalletTransactions.AsNoTracking()
+                .Where(w => !string.IsNullOrEmpty(x.BookingReference) && w.RefCode == x.BookingReference)
+                .OrderByDescending(w => w.Id)
+                .FirstOrDefaultAsync();
+
+            int? effectivePaymentId = payment?.Id != null && payment.Id > 0 
+                ? payment.Id 
+                : (walletTx != null ? (int)walletTx.Id : (int?)null);
+
+            string bookingStatus;
+            if (x.Status == "Cancelled" || x.Status == "Partially Cancelled")
+            {
+                bookingStatus = "Cancelled";
+            }
+            else if (x.Status == "Failed" || x.Status == "FAILED" ||
+                     (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
+                     ((x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
+            {
+                bookingStatus = "Payment Failed";
+            }
+            else if (x.CheckInDate <= DateTime.UtcNow && (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS"))
+            {
+                bookingStatus = "Past";
+            }
+            else if (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS")
+            {
+                bookingStatus = "Upcoming";
+            }
+            else
+            {
+                bookingStatus = x.Status;
+            }
+
+            string tripState = bookingStatus switch
+            {
+                "Cancelled" => "Cancelled",
+                "Payment Failed" or "Failed" => "Payment Failed",
+                _ => x.CheckInDate <= DateTime.UtcNow ? "Completed" : "Upcoming"
+            };
 
             var cancel = await _dbContext.BookingCancellations.AsNoTracking()
                 .Where(c => (c.BookingType == "Hotel" || c.BookingType.ToLower() == "hotel") &&
@@ -2165,7 +2241,8 @@ namespace PickNBook.Api.Controllers
                 x.TotalPrice,
                 cancelCharges,
                 refundAmt,
-                x.CheckInDate);
+                x.CheckInDate,
+                x.CancellationReason ?? cancel?.FailureReason ?? payment?.RefundReason);
 
             return Ok(new
             {
@@ -2177,28 +2254,34 @@ namespace PickNBook.Api.Controllers
                 hotelId = x.HotelId,
                 hotelName = x.HotelName,
                 roomTypeName = x.RoomTypeName,
+                dates = $"{x.CheckInDate:dd MMM yyyy} - {x.CheckOutDate:dd MMM yyyy}",
                 checkInDate = x.CheckInDate.ToString("yyyy-MM-dd"),
                 checkOutDate = x.CheckOutDate.ToString("yyyy-MM-dd"),
                 adults = x.Adults,
                 children = x.Children,
                 rooms = x.Rooms,
+                amount = x.TotalPrice,
                 totalPrice = x.TotalPrice,
                 price = x.Price,
                 currency = x.Currency ?? "INR",
                 status = x.Status,
+                bookingStatus = bookingStatus,
+                tripState = tripState,
                 guestName = x.GuestName,
                 guestEmail = x.GuestEmail,
                 guestPhone = x.GuestPhone,
                 createdAt = DateTime.SpecifyKind(x.CreatedAt, DateTimeKind.Utc),
+                bookedAtUtc = x.CreatedAt,
+                bookingTime = x.CreatedAt.ToString("dd MMM yyyy HH:mm"),
                 cancellationPolicy = x.CancellationPolicyJson,
                 cancellationPolicyJson = x.CancellationPolicyJson,
-                cancellationReason = x.CancellationReason,
-                cancellationCharges = x.CancellationCharges,
-                refundAmount = x.RefundAmount,
+                cancellationReason = x.CancellationReason ?? cancel?.FailureReason ?? payment?.RefundReason,
+                cancellationCharges = cancelCharges,
+                refundAmount = refundAmt,
                 cancelledAt = x.CancelledAt,
-                paymentId = payment?.Id,
-                paymentStatus = payment?.Status,
-                paymentMethod = payment?.PaymentMethod,
+                paymentId = effectivePaymentId,
+                paymentStatus = payment?.Status ?? (walletTx != null ? "SUCCESS" : null),
+                paymentMethod = payment?.PaymentMethod ?? (walletTx != null ? "Wallet" : null),
                 paymentReference = payment?.PaymentReference,
                 cashfreePaymentId = payment?.CashfreePaymentId,
                 cashfreeOrderId = payment?.CashfreeOrderId,
@@ -2224,14 +2307,7 @@ namespace PickNBook.Api.Controllers
             }
             var userId = _currentUserService.GetUserOrGuestId();
 
-            if (!TryParseBookingId(bookingId, out var id))
-            {
-                return BadRequest(new { message = "Invalid booking ID format." });
-            }
-
-            var booking = await _dbContext.HotelReservations
-                .FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
-
+            var booking = await FindUserHotelBookingAsync(bookingId, userId);
             if (booking == null)
             {
                 return NotFound(new { message = "Booking not found." });
@@ -2288,14 +2364,7 @@ namespace PickNBook.Api.Controllers
             }
             var userId = _currentUserService.GetUserOrGuestId();
 
-            if (!TryParseBookingId(bookingId, out var id))
-            {
-                return BadRequest(new { message = "Invalid booking ID format." });
-            }
-
-            var booking = await _dbContext.HotelReservations
-                .FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
-
+            var booking = await FindUserHotelBookingAsync(bookingId, userId);
             if (booking == null)
             {
                 return NotFound(new { message = "Booking not found." });
@@ -2309,12 +2378,12 @@ namespace PickNBook.Api.Controllers
             try
             {
                 var pdfBytes = _ticketPdfService.GenerateHotelTicketPdf(booking);
-                var filename = $"hotel-voucher-{(string.IsNullOrWhiteSpace(booking.BookingReference) ? id.ToString() : booking.BookingReference)}.pdf";
+                var filename = $"hotel-voucher-{(string.IsNullOrWhiteSpace(booking.BookingReference) ? booking.Id.ToString() : booking.BookingReference)}.pdf";
                 return File(pdfBytes, "application/pdf", filename);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to generate hotel ticket PDF for user booking {Id}", id);
+                _logger.LogError(ex, "Failed to generate hotel ticket PDF for user booking {Id}", booking.Id);
                 return StatusCode(500, new { message = "Failed to generate voucher PDF: " + ex.Message });
             }
         }
@@ -2332,14 +2401,7 @@ namespace PickNBook.Api.Controllers
             }
             var userId = _currentUserService.GetUserOrGuestId();
 
-            if (!TryParseBookingId(bookingId, out var id))
-            {
-                return BadRequest(new { message = "Invalid booking ID format." });
-            }
-
-            var booking = await _dbContext.HotelReservations
-                .FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
-
+            var booking = await FindUserHotelBookingAsync(bookingId, userId);
             if (booking == null)
             {
                 return NotFound(new { message = "Booking not found." });
@@ -2352,7 +2414,7 @@ namespace PickNBook.Api.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to send hotel confirmation email for booking {Id}", id);
+                _logger.LogError(ex, "Failed to send hotel confirmation email for booking {Id}", booking.Id);
                 return StatusCode(500, new { message = "Failed to send email: " + ex.Message });
             }
         }
@@ -2384,15 +2446,10 @@ namespace PickNBook.Api.Controllers
                 return BadRequest(new { message = "bookingId is required." });
             }
 
-            int parsedBookingId;
-            var rawId = bookingId.Trim();
-            if (rawId.StartsWith("bk-", StringComparison.OrdinalIgnoreCase))
+            var bookingTarget = await FindUserHotelBookingAsync(bookingId, userId);
+            if (bookingTarget == null)
             {
-                rawId = rawId.Substring(3);
-            }
-            if (!int.TryParse(rawId, out parsedBookingId))
-            {
-                return BadRequest(new { message = "Invalid bookingId format." });
+                return NotFound(new { message = "Booking not found." });
             }
 
             var strategy = _dbContext.Database.CreateExecutionStrategy();
@@ -2403,7 +2460,7 @@ namespace PickNBook.Api.Controllers
                     await using var transaction = await _dbContext.Database.BeginTransactionAsync();
 
                     var booking = await _dbContext.HotelReservations
-                        .FirstOrDefaultAsync(x => x.Id == parsedBookingId && x.UserId == userId);
+                        .FirstOrDefaultAsync(x => x.Id == bookingTarget.Id);
 
                     if (booking == null)
                     {
@@ -2428,7 +2485,7 @@ namespace PickNBook.Api.Controllers
                             providerCancelled = await _hotelService.CancelBookingAsync(booking, endUserIp);
                             if (!providerCancelled)
                             {
-                                _logger.LogWarning("Cancellation at provider was unsuccessful for BookingId {BookingId}. Aborting local cancellation.", parsedBookingId);
+                                _logger.LogWarning("Cancellation at provider was unsuccessful for BookingId {BookingId}. Aborting local cancellation.", booking.Id);
                                 return StatusCode(502, new { message = "Supplier failed to cancel the booking. Please contact support or try again later." });
                             }
                         }
@@ -2437,7 +2494,7 @@ namespace PickNBook.Api.Controllers
                     if (!string.IsNullOrEmpty(booking.CouponCode))
                     {
                         var usage = await _dbContext.HotelCouponUsages
-                            .FirstOrDefaultAsync(u => u.HotelReservationId == parsedBookingId);
+                            .FirstOrDefaultAsync(u => u.HotelReservationId == booking.Id);
                         if (usage != null)
                         {
                             usage.BookingStatus = "Cancelled";
