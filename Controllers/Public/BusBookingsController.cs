@@ -2981,16 +2981,51 @@ namespace PickNBook.Api.Controllers
             }
             var userId = currentUserService.GetUserOrGuestId();
 
+            string? userPhone = null;
+            string? userEmail = null;
+            var phoneCandidates = new List<string>();
+
+            if (int.TryParse(userId, out int parsedUserId))
+            {
+                var userEntity = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == parsedUserId);
+                if (userEntity != null)
+                {
+                    userPhone = userEntity.PhoneNumber?.Trim();
+                    userEmail = userEntity.Email?.Trim();
+
+                    if (!string.IsNullOrWhiteSpace(userPhone))
+                    {
+                        phoneCandidates.Add(userPhone);
+                        var digits = new string(userPhone.Where(char.IsDigit).ToArray());
+                        if (!string.IsNullOrWhiteSpace(digits))
+                        {
+                            phoneCandidates.Add(digits);
+                            var last10 = digits.Length >= 10 ? digits.Substring(digits.Length - 10) : digits;
+                            phoneCandidates.Add(last10);
+                            phoneCandidates.Add("+91" + last10);
+                            phoneCandidates.Add("91" + last10);
+                            phoneCandidates.Add("0" + last10);
+                        }
+                    }
+                }
+            }
+
+            phoneCandidates = phoneCandidates.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
+
             var queryable = dbContext.BusReservations
                 .AsNoTracking()
                 .Include(x => x.BusBooking)
-                .Where(x => x.UserId == userId)
+                .Where(x => x.UserId == userId ||
+                            (!string.IsNullOrEmpty(userEmail) && x.PassengerEmail != null && x.PassengerEmail.ToLower() == userEmail.ToLower()) ||
+                            (phoneCandidates.Count > 0 && phoneCandidates.Contains(x.PassengerPhone)))
                 .AsQueryable();
 
             if (!string.IsNullOrWhiteSpace(passengerPhone))
             {
                 var phone = passengerPhone.Trim();
-                queryable = queryable.Where(x => EF.Functions.Like(x.PassengerPhone, phone));
+                var digitsOnly = new string(phone.Where(char.IsDigit).ToArray());
+                var searchPattern = digitsOnly.Length >= 10 ? digitsOnly.Substring(digitsOnly.Length - 10) : digitsOnly;
+                queryable = queryable.Where(x => EF.Functions.Like(x.PassengerPhone, $"%{searchPattern}%"));
             }
 
             if (!string.IsNullOrWhiteSpace(status))
@@ -3038,10 +3073,14 @@ namespace PickNBook.Api.Controllers
                              (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
                 .ToListAsync();
 
-            var walletTxMap = await dbContext.WalletTransactions.AsNoTracking()
+            var walletTxList = await dbContext.WalletTransactions.AsNoTracking()
                 .Where(w => bookingRefs.Contains(w.RefCode ?? ""))
+                .ToListAsync();
+
+            var walletTxMap = walletTxList
+                .Where(w => !string.IsNullOrEmpty(w.RefCode))
                 .GroupBy(w => w.RefCode!)
-                .ToDictionaryAsync(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
 
             var paymentMapById = payments
                 .Where(p => p.BookingId.HasValue)
@@ -3068,6 +3107,7 @@ namespace PickNBook.Api.Controllers
                 .GroupBy(c => c.PaymentId)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
             var cancelMapByRef = cancellations
+                .Where(c => !string.IsNullOrEmpty(c.BookingReference))
                 .GroupBy(c => c.BookingReference)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.Id).FirstOrDefault());
 

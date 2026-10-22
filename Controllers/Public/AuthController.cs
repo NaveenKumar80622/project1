@@ -1623,6 +1623,16 @@ namespace PickNBook.Api.Controllers
                     .ExecuteUpdateAsync(setters => setters
                         .SetProperty(x => x.UserOrGuestId, userId)
                         .SetProperty(x => x.IsGuest, false));
+
+                await _context.BusReservations
+                    .Where(x => x.UserId == guestId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(x => x.UserId, userId));
+
+                await _context.HotelReservations
+                    .Where(x => x.UserId == guestId)
+                    .ExecuteUpdateAsync(setters => setters
+                        .SetProperty(x => x.UserId, userId));
             }
         }
 
