@@ -428,6 +428,32 @@ public class AdminHotelController : AdminApiController
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(booking.GuestPhone))
+        {
+            try
+            {
+                await _notificationService.EnqueueAsync(
+                    eventType: "HotelBookingCancelled",
+                    channel: "SMS",
+                    recipient: booking.GuestPhone.Trim(),
+                    templateKey: "HOTEL_BOOKING_CANCELLED",
+                    payload: new
+                    {
+                        Reference = booking.BookingReference,
+                        Status = "Cancelled",
+                        Var1 = booking.BookingReference,
+                        Var2 = "Cancelled"
+                    },
+                    bookingId: booking.Id.ToString(),
+                    userId: booking.UserId
+                );
+            }
+            catch (Exception smsEx)
+            {
+                _logger.LogError(smsEx, "Failed to enqueue hotel cancellation SMS for booking {BookingId}", booking.Id);
+            }
+        }
+
         await _context.SaveChangesAsync();
 
         try

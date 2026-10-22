@@ -1204,13 +1204,14 @@ namespace PickNBook.Api.Controllers
                                         payload: new
                                         {
                                             Reference = reservation.BookingReference,
-                                            Status = "Confirmed",
+                                            Status = "Cancelled",
                                             Var1 = reservation.BookingReference,
-                                            Var2 = "Confirmed"
+                                            Var2 = "Cancelled"
                                         },
                                         bookingId: reservation.Id.ToString(),
                                         userId: reservation.UserId
                                     );
+                                    await _dbContext.SaveChangesAsync();
                                 }
                                 catch (Exception smsEx)
                                 {
@@ -1414,13 +1415,14 @@ namespace PickNBook.Api.Controllers
                                     payload: new
                                     {
                                         Reference = reservation.BookingReference,
-                                        Status = "Confirmed",
+                                        Status = "Cancelled",
                                         Var1 = reservation.BookingReference,
-                                        Var2 = "Confirmed"
+                                        Var2 = "Cancelled"
                                     },
                                     bookingId: reservation.Id.ToString(),
                                     userId: reservation.UserId
                                 );
+                                await _dbContext.SaveChangesAsync();
                             }
                             catch (Exception smsEx)
                             {
@@ -2537,7 +2539,7 @@ namespace PickNBook.Api.Controllers
                         _logger.LogError(mailEx, "Failed to send hotel booking cancellation email for booking {BookingReference}", booking.BookingReference);
                     }
 
-                    if (providerCancelled &&
+                    if ((providerCancelled || booking.Status == "Cancelled") &&
                         !string.IsNullOrEmpty(booking.ProviderBookingId) &&
                         !booking.ProviderBookingId.StartsWith("MOCK-BK-", StringComparison.OrdinalIgnoreCase) &&
                         !string.IsNullOrWhiteSpace(booking.GuestPhone))
@@ -2552,13 +2554,14 @@ namespace PickNBook.Api.Controllers
                                 payload: new
                                 {
                                     Reference = booking.BookingReference,
-                                    Status = "Confirmed",
+                                    Status = "Cancelled",
                                     Var1 = booking.BookingReference,
-                                    Var2 = "Confirmed"
+                                    Var2 = "Cancelled"
                                 },
                                 bookingId: booking.Id.ToString(),
                                 userId: booking.UserId
                             );
+                            await _dbContext.SaveChangesAsync();
                         }
                         catch (Exception smsEx)
                         {
