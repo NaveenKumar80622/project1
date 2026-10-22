@@ -1224,6 +1224,7 @@ namespace PickNBook.Api.Services.Implementations
                 bool isPending = false;
                 string? srdvErrorMessage = null;
                 string? srdvProviderBookingId = null;
+                string? srdvBookingRefNo = null;
                 string? srdvConfirmationNo = null;
                 string? srdvInvoiceNumber = null;
                 string? srdvResponseJson = null;
@@ -1317,6 +1318,7 @@ namespace PickNBook.Api.Services.Implementations
                     isSrdvSuccess = isConfirmed || isPending;
                     srdvErrorMessage = result?.Error?.ErrorMessage ?? "Unknown Error";
                     srdvProviderBookingId = result?.BookingId > 0 ? result.BookingId.ToString() : (!string.IsNullOrEmpty(result?.BookingRefNo) ? result.BookingRefNo : null);
+                    srdvBookingRefNo = !string.IsNullOrEmpty(result?.BookingRefNo) ? result.BookingRefNo : (result?.BookingId > 0 ? result.BookingId.ToString() : null);
                     srdvConfirmationNo = result?.ConfirmationNo;
                     srdvInvoiceNumber = result?.InvoiceNumber;
                     srdvResponseJson = JsonSerializer.Serialize(new
@@ -1446,9 +1448,21 @@ namespace PickNBook.Api.Services.Implementations
                 }
 
                 // 3. Save Tracking Records (Local Persistence)
-                reservation.ProviderBookingId = srdvProviderBookingId;
-                reservation.SrdvBookingId = srdvProviderBookingId;
-                reservation.ConfirmationNo = srdvConfirmationNo;
+                string finalBookingRefNo = !string.IsNullOrWhiteSpace(srdvBookingRefNo)
+                    ? srdvBookingRefNo.Trim()
+                    : (!string.IsNullOrWhiteSpace(srdvProviderBookingId) ? srdvProviderBookingId.Trim() : "");
+
+                string finalBookingId = !string.IsNullOrWhiteSpace(srdvProviderBookingId)
+                    ? srdvProviderBookingId.Trim()
+                    : finalBookingRefNo;
+
+                if (!string.IsNullOrWhiteSpace(finalBookingRefNo))
+                {
+                    reservation.BookingReference = finalBookingRefNo;
+                }
+                reservation.ProviderBookingId = finalBookingId;
+                reservation.SrdvBookingId = finalBookingId;
+                reservation.ConfirmationNo = !string.IsNullOrWhiteSpace(srdvConfirmationNo) ? srdvConfirmationNo : (!string.IsNullOrWhiteSpace(finalBookingRefNo) ? finalBookingRefNo : finalBookingId);
                 reservation.InvoiceNumber = srdvInvoiceNumber;
                 reservation.Status = isPending ? "Pending" : "Confirmed";
                 reservation.SrdvBookingResponseJson = srdvResponseJson;
@@ -1460,6 +1474,10 @@ namespace PickNBook.Api.Services.Implementations
                 payment.FulfillmentStatus = isPending ? "Pending_Reconciliation" : "Success";
                 payment.BookingReferenceId = reservation.Id;
                 payment.BookingId = reservation.Id;
+                if (!string.IsNullOrWhiteSpace(reservation.BookingReference))
+                {
+                    payment.PaymentReference = reservation.BookingReference;
+                }
 
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Hotel");
 

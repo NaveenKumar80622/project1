@@ -782,12 +782,16 @@ public class TicketPdfService : ITicketPdfService
         double metaBoxW = 230;
         double metaLeft = right - metaBoxW - 14;
 
+        string displayBookingId = !string.IsNullOrWhiteSpace(reservation.ProviderBookingId)
+            ? reservation.ProviderBookingId
+            : (!string.IsNullOrWhiteSpace(reservation.SrdvBookingId) ? reservation.SrdvBookingId : reservation.BookingReference);
+
         gfx.DrawString("Booking ID:", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, metaLeft, y + 16);
-        gfx.DrawString(reservation.BookingReference, new XFont("Arial", 9.5, XFontStyle.Bold), redBrush, new XRect(metaLeft, y + 6, metaBoxW, 14), XStringFormats.TopRight);
+        gfx.DrawString(displayBookingId, new XFont("Arial", 9.5, XFontStyle.Bold), redBrush, new XRect(metaLeft, y + 6, metaBoxW, 14), XStringFormats.TopRight);
 
         string confNo = !string.IsNullOrWhiteSpace(reservation.ConfirmationNo) 
             ? reservation.ConfirmationNo 
-            : (!string.IsNullOrWhiteSpace(reservation.ProviderBookingId) ? reservation.ProviderBookingId : reservation.BookingReference);
+            : (!string.IsNullOrWhiteSpace(reservation.BookingReference) ? reservation.BookingReference : displayBookingId);
 
         gfx.DrawString("Hotel Conf No:", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, metaLeft, y + 30);
         gfx.DrawString(confNo, new XFont("Arial", 9, XFontStyle.Bold), darkBrush, new XRect(metaLeft, y + 20, metaBoxW, 14), XStringFormats.TopRight);

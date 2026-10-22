@@ -145,9 +145,7 @@ namespace PickNBook.Api.Controllers
                     x.ConvenienceFeeInr,
                     x.BaseFareInr,
                     x.MarkupAmountInr,
-                    x.TaxableFareInr,
-                    x.GstPercent,
-                    x.GstAmountInr
+                    x.TaxableFareInr
                 };
             })
             .Where(x => !string.IsNullOrWhiteSpace(status)
@@ -2127,9 +2125,6 @@ namespace PickNBook.Api.Controllers
                         x.ConvenienceFeeInr,
                         x.BaseFareInr,
                         x.MarkupAmountInr,
-
-                        x.GstPercent,
-                        x.GstAmountInr,
 
                         x.CouponCode,
                         x.AutoPromotionCode,

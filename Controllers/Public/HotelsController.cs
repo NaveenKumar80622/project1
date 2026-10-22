@@ -865,7 +865,9 @@ namespace PickNBook.Api.Controllers
                 {
                     try
                     {
-                        var bookingRef = !string.IsNullOrWhiteSpace(bRes.BookingRefNo) ? bRes.BookingRefNo : $"HT-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(100, 1000)}";
+                        var bookingRef = !string.IsNullOrWhiteSpace(bRes.BookingRefNo) 
+                            ? bRes.BookingRefNo 
+                            : (bRes.BookingId.HasValue && bRes.BookingId.Value > 0 ? bRes.BookingId.Value.ToString() : "");
                         var firstRoom = request.HotelRoomsDetails.FirstOrDefault();
                         string hotelCode = !string.IsNullOrWhiteSpace(request.HotelCode) ? request.HotelCode : (blockedPrice?.HotelCode ?? "HOTEL");
                         string hotelName = !string.IsNullOrWhiteSpace(request.HotelName) ? request.HotelName : hotelCode;
@@ -1818,7 +1820,22 @@ namespace PickNBook.Api.Controllers
 
             try
             {
-                var query = _dbContext.HotelReservations.Where(x => x.UserId == userId);
+                string? userPhone = null;
+                string? userEmail = null;
+                if (int.TryParse(userId, out int parsedUserId))
+                {
+                    var userEntity = await _dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == parsedUserId);
+                    if (userEntity != null)
+                    {
+                        userPhone = userEntity.PhoneNumber?.Trim();
+                        userEmail = userEntity.Email?.Trim();
+                    }
+                }
+
+                var query = _dbContext.HotelReservations.Where(x =>
+                    x.UserId == userId ||
+                    (!string.IsNullOrEmpty(userPhone) && x.GuestPhone == userPhone) ||
+                    (!string.IsNullOrEmpty(userEmail) && x.GuestEmail == userEmail));
 
                 if (!string.IsNullOrWhiteSpace(status))
                 {
@@ -1863,10 +1880,14 @@ namespace PickNBook.Api.Controllers
                                  (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
                     .ToListAsync();
 
-                var walletTxMap = await _dbContext.WalletTransactions.AsNoTracking()
+                var walletTxList = await _dbContext.WalletTransactions.AsNoTracking()
                     .Where(w => bookingRefs.Contains(w.RefCode ?? ""))
+                    .ToListAsync();
+
+                var walletTxMap = walletTxList
+                    .Where(w => !string.IsNullOrEmpty(w.RefCode))
                     .GroupBy(w => w.RefCode!)
-                    .ToDictionaryAsync(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
 
                 var paymentMapById = payments
                     .Where(p => p.BookingId.HasValue)
@@ -1987,7 +2008,7 @@ namespace PickNBook.Api.Controllers
 
                     return new HotelBookingHistoryDto
                     {
-                        BookingId = "bk-" + x.Id,
+                        BookingId = !string.IsNullOrWhiteSpace(x.ProviderBookingId) ? x.ProviderBookingId : (!string.IsNullOrWhiteSpace(x.BookingReference) ? x.BookingReference : x.Id.ToString()),
                         BookingReference = x.BookingReference,
                         HotelId = x.HotelId,
                         HotelName = x.HotelName,
@@ -2060,13 +2081,20 @@ namespace PickNBook.Api.Controllers
             }
             var userId = _currentUserService.GetUserOrGuestId();
 
-            if (!TryParseBookingId(bookingId, out var id))
+            var cleanBookingId = bookingId?.Trim() ?? string.Empty;
+            if (cleanBookingId.StartsWith("bk-", StringComparison.OrdinalIgnoreCase))
             {
-                return BadRequest(new { message = "Invalid booking ID format." });
+                cleanBookingId = cleanBookingId.Substring(3);
             }
 
+            int.TryParse(cleanBookingId, out var id);
+
             var x = await _dbContext.HotelReservations
-                .FirstOrDefaultAsync(b => b.Id == id && b.UserId == userId);
+                .FirstOrDefaultAsync(b => (b.ProviderBookingId == cleanBookingId ||
+                                           b.SrdvBookingId == cleanBookingId ||
+                                           b.BookingReference == cleanBookingId ||
+                                           b.ConfirmationNo == cleanBookingId ||
+                                           (id > 0 && b.Id == id)) && b.UserId == userId);
 
             if (x == null)
             {

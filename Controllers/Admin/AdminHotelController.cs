@@ -66,10 +66,13 @@ public class AdminHotelController : AdminApiController
                     b.BookingReference,
                     b.ProviderBookingId,
                     b.ConfirmationNo,
-                    b.InvoiceNumber,
                     b.LastCancellationDate,
                     b.SrdvOfferedPrice,
-                    b.SrdvGstAmount,
+                    b.NetPrice,
+                    b.BasePrice,
+                    b.MarkupAmount,
+                    b.CouponDiscount,
+                    b.ConvenienceFee,
                     b.HotelId,
                     b.HotelName,
                     b.GuestName,
@@ -133,14 +136,20 @@ public class AdminHotelController : AdminApiController
 
                 return new
                 {
-                    BookingId = b.Id,
+                    BookingId = !string.IsNullOrEmpty(b.ProviderBookingId) ? b.ProviderBookingId : b.Id.ToString(),
+                    InternalBookingId = b.Id,
                     BookingReference = b.BookingReference ?? "",
                     ProviderBookingId = b.ProviderBookingId ?? "",
                     ConfirmationNo = b.ConfirmationNo ?? "",
-                    InvoiceNumber = b.InvoiceNumber ?? "",
                     LastCancellationDate = b.LastCancellationDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                     SrdvOfferedPrice = b.SrdvOfferedPrice,
-                    SrdvGstAmount = b.SrdvGstAmount,
+                    NetFare = b.NetPrice > 0 ? b.NetPrice : (b.SrdvOfferedPrice > 0 ? b.SrdvOfferedPrice : b.TotalPrice),
+                    BaseFare = b.BasePrice > 0 ? b.BasePrice : b.TotalPrice,
+                    MarkupAmount = b.MarkupAmount,
+                    DiscountAmount = b.CouponDiscount,
+                    ConvenienceFee = b.ConvenienceFee,
+                    Profit = b.TotalPrice - (b.NetPrice > 0 ? b.NetPrice : (b.SrdvOfferedPrice > 0 ? b.SrdvOfferedPrice : b.TotalPrice)),
+                    CalculatedProfit = b.TotalPrice - (b.NetPrice > 0 ? b.NetPrice : (b.SrdvOfferedPrice > 0 ? b.SrdvOfferedPrice : b.TotalPrice)),
                     HotelId = b.HotelId ?? "",
                     HotelName = b.HotelName ?? "",
                     GuestName = b.GuestName ?? "",
@@ -445,25 +454,41 @@ public class AdminHotelController : AdminApiController
         });
     }
 
-    // 3b. Single Booking Details: GET /api/admin/hotel/bookings/{id:int}
-    [HttpGet("bookings/{id:int}")]
-    public async Task<IActionResult> GetBookingDetails(int id)
+    // 3b. Single Booking Details: GET /api/admin/hotel/bookings/{id}
+    [HttpGet("bookings/{id}")]
+    public async Task<IActionResult> GetBookingDetails(string id)
     {
-        var booking = await _context.HotelReservations.FirstOrDefaultAsync(b => b.Id == id);
+        var cleanId = id?.Trim() ?? string.Empty;
+        int.TryParse(cleanId, out int parsedId);
+
+        var booking = await _context.HotelReservations.FirstOrDefaultAsync(b => 
+            b.ProviderBookingId == cleanId || 
+            b.SrdvBookingId == cleanId || 
+            b.BookingReference == cleanId || 
+            b.ConfirmationNo == cleanId ||
+            (parsedId > 0 && b.Id == parsedId));
+
         if (booking == null) return NotFound(new { message = "Booking not found." });
 
-        var payment = await _context.Payments.AsNoTracking().FirstOrDefaultAsync(p => p.BookingType == "Hotel" && (p.BookingReferenceId == id || p.BookingId == id || (booking.BookingReference != null && p.PaymentReference == booking.BookingReference)));
+        var payment = await _context.Payments.AsNoTracking().FirstOrDefaultAsync(p => p.BookingType == "Hotel" && (p.BookingReferenceId == booking.Id || p.BookingId == booking.Id || (booking.BookingReference != null && p.PaymentReference == booking.BookingReference)));
         var cancellation = await _context.BookingCancellations.AsNoTracking().FirstOrDefaultAsync(c => c.BookingType == "Hotel" && c.BookingReference == booking.BookingReference);
 
         return Ok(new
         {
+            BookingId = !string.IsNullOrEmpty(booking.ProviderBookingId) ? booking.ProviderBookingId : booking.Id.ToString(),
+            InternalBookingId = booking.Id,
             booking.Id,
             booking.BookingReference,
             booking.ProviderBookingId,
             booking.ConfirmationNo,
-            booking.InvoiceNumber,
             booking.SrdvOfferedPrice,
-            booking.SrdvGstAmount,
+            NetFare = booking.NetPrice > 0 ? booking.NetPrice : (booking.SrdvOfferedPrice > 0 ? booking.SrdvOfferedPrice : booking.TotalPrice),
+            BaseFare = booking.BasePrice > 0 ? booking.BasePrice : booking.TotalPrice,
+            MarkupAmount = booking.MarkupAmount,
+            DiscountAmount = booking.CouponDiscount,
+            ConvenienceFee = booking.ConvenienceFee,
+            Profit = booking.TotalPrice - (booking.NetPrice > 0 ? booking.NetPrice : (booking.SrdvOfferedPrice > 0 ? booking.SrdvOfferedPrice : booking.TotalPrice)),
+            CalculatedProfit = booking.TotalPrice - (booking.NetPrice > 0 ? booking.NetPrice : (booking.SrdvOfferedPrice > 0 ? booking.SrdvOfferedPrice : booking.TotalPrice)),
             booking.HotelId,
             booking.HotelName,
             booking.RoomTypeName,

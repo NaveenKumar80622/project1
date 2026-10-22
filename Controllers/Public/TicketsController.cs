@@ -439,12 +439,17 @@ public class TicketsController : BaseApiController
                 var roomName = !string.IsNullOrWhiteSpace(booking.RoomTypeName) ? booking.RoomTypeName : "Standard Room";
                 var fare = booking.TotalPrice > 0 ? booking.TotalPrice : (booking.B2CFinalFare > 0 ? booking.B2CFinalFare : booking.Price);
 
+                string displayBookingId = !string.IsNullOrWhiteSpace(booking.ProviderBookingId)
+                    ? booking.ProviderBookingId
+                    : (!string.IsNullOrWhiteSpace(booking.SrdvBookingId) ? booking.SrdvBookingId : booking.BookingReference);
+
                 result.Add(new
                 {
+                    bookingId = displayBookingId,
                     bookingReference = booking.BookingReference,
                     ticketType = "hotel",
-                    pnr = !string.IsNullOrWhiteSpace(booking.ConfirmationNo) ? booking.ConfirmationNo : booking.BookingReference,
-                    confirmationNo = booking.ConfirmationNo ?? booking.ProviderBookingId ?? "",
+                    pnr = !string.IsNullOrWhiteSpace(booking.ConfirmationNo) ? booking.ConfirmationNo : (!string.IsNullOrWhiteSpace(booking.BookingReference) ? booking.BookingReference : displayBookingId),
+                    confirmationNo = booking.ConfirmationNo ?? booking.ProviderBookingId ?? booking.BookingReference,
                     hotelName = booking.HotelName,
                     providerName = booking.HotelName,
                     operatorName = booking.HotelName,
