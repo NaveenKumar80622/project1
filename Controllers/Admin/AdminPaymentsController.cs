@@ -688,10 +688,23 @@ namespace PickNBook.Api.Controllers.Admin
                     var existingRefundsDoc = await _cashfreeService.GetRefundsForOrderAsync(payment.CashfreeOrderId);
                     if (existingRefundsDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && existingRefundsDoc.RootElement.GetArrayLength() > 0)
                     {
-                        var latestRefund = existingRefundsDoc.RootElement.EnumerateArray().Last();
+                        System.Text.Json.JsonElement? targetRefund = null;
+                        foreach (var el in existingRefundsDoc.RootElement.EnumerateArray())
+                        {
+                            if (el.TryGetProperty("refund_status", out var st) && st.GetString()?.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) == true)
+                            {
+                                targetRefund = el;
+                                break;
+                            }
+                        }
+                        var latestRefund = targetRefund ?? existingRefundsDoc.RootElement.EnumerateArray().FirstOrDefault();
                         if (latestRefund.TryGetProperty("refund_id", out var rIdEl))
                         {
                             resolvedRefundId = rIdEl.GetString();
+                        }
+                        if (latestRefund.TryGetProperty("cf_refund_id", out var cfIdEl) && string.IsNullOrEmpty(resolvedRefundId))
+                        {
+                            resolvedRefundId = cfIdEl.GetString();
                         }
                         if (latestRefund.TryGetProperty("refund_status", out var rStEl))
                         {
@@ -700,6 +713,10 @@ namespace PickNBook.Api.Controllers.Admin
                         if (latestRefund.TryGetProperty("status_description", out var rDescEl))
                         {
                             statusDescription = rDescEl.GetString();
+                        }
+                        if (latestRefund.TryGetProperty("refund_amount", out var rAmtEl) && rAmtEl.TryGetDecimal(out var parsedAmt) && parsedAmt > 0)
+                        {
+                            refundAmount = parsedAmt;
                         }
                     }
                 }
@@ -736,10 +753,23 @@ namespace PickNBook.Api.Controllers.Admin
                         var liveRefundsDoc = await _cashfreeService.GetRefundsForOrderAsync(payment.CashfreeOrderId);
                         if (liveRefundsDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && liveRefundsDoc.RootElement.GetArrayLength() > 0)
                         {
-                            var latestRefund = liveRefundsDoc.RootElement.EnumerateArray().Last();
+                            System.Text.Json.JsonElement? targetRefund = null;
+                            foreach (var el in liveRefundsDoc.RootElement.EnumerateArray())
+                            {
+                                if (el.TryGetProperty("refund_status", out var st) && st.GetString()?.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) == true)
+                                {
+                                    targetRefund = el;
+                                    break;
+                                }
+                            }
+                            var latestRefund = targetRefund ?? liveRefundsDoc.RootElement.EnumerateArray().FirstOrDefault();
                             if (latestRefund.TryGetProperty("refund_id", out var rIdEl))
                             {
                                 resolvedRefundId = rIdEl.GetString();
+                            }
+                            if (latestRefund.TryGetProperty("cf_refund_id", out var cfIdEl) && string.IsNullOrEmpty(resolvedRefundId))
+                            {
+                                resolvedRefundId = cfIdEl.GetString();
                             }
                             if (latestRefund.TryGetProperty("refund_status", out var rStEl))
                             {
@@ -748,6 +778,10 @@ namespace PickNBook.Api.Controllers.Admin
                             if (latestRefund.TryGetProperty("status_description", out var rDescEl))
                             {
                                 statusDescription = rDescEl.GetString();
+                            }
+                            if (latestRefund.TryGetProperty("refund_amount", out var rAmtEl) && rAmtEl.TryGetDecimal(out var parsedAmt) && parsedAmt > 0)
+                            {
+                                refundAmount = parsedAmt;
                             }
                         }
                         else
@@ -815,6 +849,21 @@ namespace PickNBook.Api.Controllers.Admin
                     else
                     {
                         cancelRecord.RefundStatus = "PROCESSING";
+                    }
+                }
+
+                // Sync associated hotel reservation if present
+                if (payment.BookingId.HasValue && payment.BookingId.Value > 0)
+                {
+                    var hotelRes = await _dbContext.HotelReservations.FirstOrDefaultAsync(h => h.Id == payment.BookingId.Value);
+                    if (hotelRes != null && hotelRes.Status == "Cancelled")
+                    {
+                        if (string.Equals(payment.RefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase))
+                        {
+                            hotelRes.RefundAmount = refundAmount;
+                            hotelRes.CancellationCharges = Math.Max(0, payment.FinalPayableAmount - refundAmount);
+                        }
+                        hotelRes.UpdatedAt = DateTime.UtcNow;
                     }
                 }
 

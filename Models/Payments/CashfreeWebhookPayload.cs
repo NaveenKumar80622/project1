@@ -100,5 +100,8 @@ namespace PickNBook.Api.Models.Payments
 
         [JsonPropertyName("refund_amount")]
         public decimal RefundAmount { get; set; }
+
+        [JsonPropertyName("order_id")]
+        public string? OrderId { get; set; }
     }
 }

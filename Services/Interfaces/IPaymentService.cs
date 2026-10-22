@@ -42,7 +42,7 @@ namespace PickNBook.Api.Services.Interfaces
             string paymentStatus, decimal amount, string? paymentId, string? paymentMethod,
             string? failureReason = null);
 
-        Task<bool> ProcessRefundWebhookAsync(string cashfreeRefundId, string refundStatus);
+        Task<bool> ProcessRefundWebhookAsync(string cashfreeRefundId, string refundStatus, string? cfRefundId = null, string? orderId = null, decimal? refundAmount = null);
             
         Task<PaymentVerificationResponse> VerifyPaymentAsync(string cashfreeOrderId);
         
