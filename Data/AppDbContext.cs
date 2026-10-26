@@ -38,6 +38,7 @@ namespace PickNBook.Api.Data
         public DbSet<BusReservation> BusReservations => Set<BusReservation>();
         public DbSet<BusReservationPassenger> BusReservationPassengers => Set<BusReservationPassenger>();
         public DbSet<FlightReservationPassenger> FlightReservationPassengers => Set<FlightReservationPassenger>();
+        public DbSet<FlightReservationSegment> FlightReservationSegments => Set<FlightReservationSegment>();
         public DbSet<Traveler> Travelers => Set<Traveler>();
         public DbSet<FlightRouteStat> FlightRouteStats => Set<FlightRouteStat>();
         public DbSet<BusRouteStat> BusRouteStats => Set<BusRouteStat>();

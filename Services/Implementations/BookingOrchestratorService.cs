@@ -1909,11 +1909,37 @@ namespace PickNBook.Api.Services.Implementations
                 // Extract itinerary fields from response if present
                 string flightAirline = "", flightAirlineCode = "", flightNum = "", fromCity = "", toCity = "";
                 DateTime depTime = DateTime.UtcNow, arrTime = DateTime.UtcNow;
+                string segmentsJson = "", fareRulesJson = "", cancellationCharges = "", cancellationPolicyJson = "";
+                bool nonRefundable = false;
 
                 if (resp.TryGetProperty("FlightItinerary", out var itinerary))
                 {
+                    nonRefundable = itinerary.TryGetProperty("NonRefundable", out var isRef) && isRef.ValueKind == JsonValueKind.True;
+
+                    if (itinerary.TryGetProperty("FareRules", out var fr))
+                        fareRulesJson = fr.ToString();
+                    else if (itinerary.TryGetProperty("MiniFareRules", out var mfr))
+                        fareRulesJson = mfr.ToString();
+                    else if (resp.TryGetProperty("FareRules", out var rfr))
+                        fareRulesJson = rfr.ToString();
+                    else if (resp.TryGetProperty("MiniFareRules", out var rmfr))
+                        fareRulesJson = rmfr.ToString();
+
+                    if (itinerary.TryGetProperty("CancellationCharges", out var cancNode))
+                        cancellationCharges = cancNode.ToString();
+                    else if (resp.TryGetProperty("CancellationCharges", out var rcancNode))
+                        cancellationCharges = rcancNode.ToString();
+
+                    if (itinerary.TryGetProperty("CancellationPolicy", out var cpNode))
+                        cancellationPolicyJson = cpNode.ToString();
+                    else if (itinerary.TryGetProperty("CancellationPolicies", out var cpsNode))
+                        cancellationPolicyJson = cpsNode.ToString();
+                    else if (!string.IsNullOrEmpty(cancellationCharges))
+                        cancellationPolicyJson = cancellationCharges;
+
                     if (itinerary.TryGetProperty("Segments", out var segs) && segs.ValueKind == JsonValueKind.Array && segs.GetArrayLength() > 0)
                     {
+                        segmentsJson = segs.ToString();
                         var firstSeg = segs[0];
                         if (firstSeg.TryGetProperty("Airline", out var alNode))
                         {
@@ -1927,15 +1953,25 @@ namespace PickNBook.Api.Services.Implementations
                             fromCity = origCity.ToString() ?? "";
                         if (firstSeg.TryGetProperty("Destination", out var dest) && dest.TryGetProperty("CityCode", out var destCity))
                             toCity = destCity.ToString() ?? "";
-                        if (firstSeg.TryGetProperty("DepTime", out var dTime) && DateTime.TryParse(dTime.ToString(), out var parsedDep))
-                            depTime = parsedDep;
+                        if (firstSeg.TryGetProperty("DepTime", out var dTime))
+                            depTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(dTime.ToString());
 
                         var lastSeg = segs[segs.GetArrayLength() - 1];
                         if (lastSeg.TryGetProperty("Destination", out var dest2) && dest2.TryGetProperty("CityCode", out var destCity2))
                             toCity = destCity2.ToString() ?? toCity;
-                        if (lastSeg.TryGetProperty("ArrTime", out var aTime) && DateTime.TryParse(aTime.ToString(), out var parsedArr))
-                            arrTime = parsedArr;
+                        if (lastSeg.TryGetProperty("ArrTime", out var aTime))
+                            arrTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(aTime.ToString());
                     }
+                }
+                else
+                {
+                    if (resp.TryGetProperty("FareRules", out var rfr2))
+                        fareRulesJson = rfr2.ToString();
+                    else if (resp.TryGetProperty("MiniFareRules", out var rmfr2))
+                        fareRulesJson = rmfr2.ToString();
+
+                    if (resp.TryGetProperty("CancellationCharges", out var rcancNode2))
+                        cancellationCharges = rcancNode2.ToString();
                 }
 
                 // LCC: Create Reservation
@@ -1950,10 +1986,15 @@ namespace PickNBook.Api.Services.Implementations
                     ToCity = toCity,
                     DepartureTime = depTime,
                     ArrivalTime = arrTime,
+                    SegmentsJson = segmentsJson,
                     Status = "Booked",
                     BookedAtUtc = DateTime.UtcNow,
                     TraceId = traceId,
                     ResultIndex = resultIndex,
+                    NonRefundable = nonRefundable,
+                    FareRulesJson = fareRulesJson,
+                    CancellationCharges = cancellationCharges,
+                    CancellationPolicyJson = cancellationPolicyJson,
                     TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
                     CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
                     PaymentMethod = payment.PaymentMethod ?? "Cashfree",
@@ -1975,6 +2016,43 @@ namespace PickNBook.Api.Services.Implementations
                     ReturnPnr = !string.IsNullOrEmpty(returnPnr) ? returnPnr : (resp.TryGetProperty("ReturnPNR", out var rpNode) ? rpNode.ToString() : null),
                     TicketStatus = resp.TryGetProperty("TicketStatus", out var tsNode) ? tsNode.ToString() : null
                 };
+
+                if (!string.IsNullOrEmpty(segmentsJson))
+                {
+                    try
+                    {
+                        var parsedSegments = System.Text.Json.JsonSerializer.Deserialize<List<System.Text.Json.JsonElement>>(segmentsJson);
+                        if (parsedSegments != null)
+                        {
+                            foreach (var seg in parsedSegments)
+                            {
+                                int ti = seg.TryGetProperty("TripIndicator", out var tiProp) && tiProp.ValueKind == System.Text.Json.JsonValueKind.Number ? tiProp.GetInt32() : 0;
+                                var segPnr = (ti == 2 && !string.IsNullOrEmpty(reservation.ReturnPnr)) ? reservation.ReturnPnr : pnr;
+                                var segObj = new PickNBook.Api.Models.FlightReservationSegment
+                                {
+                                    FlightReservation = reservation,
+                                    TripIndicator = ti,
+                                    SegmentIndicator = seg.TryGetProperty("SegmentIndicator", out var siProp) && siProp.ValueKind == System.Text.Json.JsonValueKind.Number ? siProp.GetInt32() : 0,
+                                    Baggage = seg.TryGetProperty("Baggage", out var bag) ? bag.ToString() : null,
+                                    CabinBaggage = seg.TryGetProperty("CabinBaggage", out var cBag) ? cBag.ToString() : null,
+                                    Duration = seg.TryGetProperty("Duration", out var dur) && dur.ValueKind == System.Text.Json.JsonValueKind.Number ? dur.GetInt32() : 0,
+                                    Airline = seg.TryGetProperty("Airline", out var al) && al.TryGetProperty("AirlineName", out var aln) ? aln.ToString() ?? "" : "",
+                                    FlightNumber = seg.TryGetProperty("Airline", out var al2) && al2.TryGetProperty("FlightNumber", out var fn) ? fn.ToString() ?? "" : "",
+                                    FromCity = seg.TryGetProperty("Origin", out var orig) && orig.TryGetProperty("CityCode", out var cc) ? cc.ToString() ?? "" : "",
+                                    ToCity = seg.TryGetProperty("Destination", out var dest) && dest.TryGetProperty("CityCode", out var dc) ? dc.ToString() ?? "" : "",
+                                    DepartureTime = seg.TryGetProperty("DepTime", out var dt) ? PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(dt.ToString()) : DateTime.MinValue,
+                                    ArrivalTime = seg.TryGetProperty("ArrTime", out var at) ? PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(at.ToString()) : DateTime.MinValue,
+                                    Pnr = segPnr
+                                };
+                                reservation.Segments.Add(segObj);
+                            }
+                        }
+                    }
+                    catch (Exception segEx)
+                    {
+                        _logger.LogWarning(segEx, "Failed to parse flight segments for reservation {PaymentId}", payment.Id);
+                    }
+                }
                 
                 _dbContext.FlightReservations.Add(reservation);
                 await _dbContext.SaveChangesAsync();

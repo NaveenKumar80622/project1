@@ -1,5 +1,7 @@
 namespace PickNBook.Api.Models.DTOs;
 
+using PickNBook.Api.Helpers;
+
 public class FlightDiscountRequestDto
 {
     public decimal Value { get; set; }
@@ -148,9 +150,20 @@ public class AdminFlightBookingResponseDto
 
     // Cancellation Details
     public DateTime? CancelledAtUtc { get; set; }
+    public DateTime? CancelledAtIst { get; set; }
     public string? CancellationReason { get; set; }
     public decimal? CancellationChargeInr { get; set; }
     public decimal? RefundAmountInr { get; set; }
+
+    // SRDV & Dynamic Cancellation Policy Fields
+    public string? SrdvBookingId { get; set; }
+    public string? ReturnPnr { get; set; }
+    public string? GdsPnr { get; set; }
+    public string? CancellationPolicyJson { get; set; }
+    public string? FareRulesJson { get; set; }
+    public bool NonRefundable { get; set; }
+    public DateTime? DepartureTimeIst { get; set; }
+    public DateTime? ArrivalTimeIst { get; set; }
 }
 
 public class FlightSegmentDto
@@ -187,6 +200,7 @@ public class AdminFlightCancellationRequestDto
     public string? BookingReference { get; set; }
     public string? Pnr { get; set; }
     public DateTime RequestDateUtc { get; set; }
+    public DateTime RequestDateIst => IndiaTimeHelper.ToIst(RequestDateUtc);
     public string Segment { get; set; } = string.Empty;
     public string Customer { get; set; } = string.Empty;
     public string? CustomerPhone { get; set; }
@@ -195,6 +209,9 @@ public class AdminFlightCancellationRequestDto
     public decimal CustomerRefundAmountInr { get; set; }
     public decimal AdminRefundAmountInr { get; set; }
     public string? Remark { get; set; }
+    public string? CancellationPolicyJson { get; set; }
+    public string? FareRulesJson { get; set; }
+    public bool NonRefundable { get; set; }
     public AdminFlightCancellationDetailsDto Details { get; set; } = new();
 }
 

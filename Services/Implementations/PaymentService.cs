@@ -748,6 +748,11 @@ namespace PickNBook.Api.Services.Implementations
             if (string.Equals(payment.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
                 (payment.GatewayPaidAmount == 0 && !string.Equals(payment.PaymentMethod, "Cashfree", StringComparison.OrdinalIgnoreCase)))
             {
+                if (payment.FulfillmentStatus == "Pending" || string.IsNullOrEmpty(payment.FulfillmentStatus))
+                {
+                    EnqueueImmediateFulfillment(payment.Id);
+                }
+
                 return new PaymentVerificationResponse
                 {
                     PaymentReference = payment.PaymentReference,
@@ -758,7 +763,9 @@ namespace PickNBook.Api.Services.Implementations
                     Currency = payment.Currency,
                     PaymentMethod = payment.PaymentMethod,
                     PaidAt = payment.PaidAt,
-                    FailureReason = payment.FailureReason
+                    FailureReason = payment.FailureReason,
+                    FulfillmentStatus = payment.FulfillmentStatus,
+                    BookingReferenceId = payment.BookingReferenceId
                 };
             }
 

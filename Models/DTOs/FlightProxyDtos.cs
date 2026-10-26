@@ -291,11 +291,11 @@ namespace PickNBook.Api.Models.DTOs
 
         [JsonPropertyName("RequestType")]
         [JsonConverter(typeof(SafeIntConverter))]
-        public int RequestType { get; set; } = 2;
+        public int RequestType { get; set; }
 
         [JsonPropertyName("CancellationType")]
         [JsonConverter(typeof(SafeIntConverter))]
-        public int CancellationType { get; set; } = 3;
+        public int CancellationType { get; set; }
 
         [JsonPropertyName("Remarks")]
         public string Remarks { get; set; } = string.Empty;

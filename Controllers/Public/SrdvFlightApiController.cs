@@ -18,6 +18,7 @@ using PickNBook.Api.Helpers;
 using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
 using PickNBook.Api.Services.Implementations;
+using PickNBook.Api.Extensions;
 
 namespace PickNBook.Api.Controllers.Public
 {
@@ -1538,6 +1539,9 @@ namespace PickNBook.Api.Controllers.Public
                         
                         NonRefundable = nonRefundable,
                         FareRulesJson = fareRulesJson,
+                        CancellationCharges = cancellationCharges,
+                        CancellationPolicyJson = !string.IsNullOrEmpty(cancellationCharges) ? cancellationCharges : fareRulesJson,
+                        PartialSegmentCancellation = partialSegmentCancellation,
 
                         TotalPriceInr = pricingBreakdown.FinalAmount + ssrFromResponse,
                         CustomerFareInr = pricingBreakdown.FinalAmount + ssrFromResponse,
@@ -1580,9 +1584,10 @@ namespace PickNBook.Api.Controllers.Public
                             {
                                 foreach (var seg in parsedSegments)
                                 {
+                                    int tripIndicator = seg.TryGetProperty("TripIndicator", out var ti) && ti.ValueKind == System.Text.Json.JsonValueKind.Number ? ti.GetInt32() : 0;
                                     var segObj = new PickNBook.Api.Models.FlightReservationSegment
                                     {
-                                        TripIndicator = seg.TryGetProperty("TripIndicator", out var ti) && ti.ValueKind == System.Text.Json.JsonValueKind.Number ? ti.GetInt32() : 0,
+                                        TripIndicator = tripIndicator,
                                         SegmentIndicator = seg.TryGetProperty("SegmentIndicator", out var si) && si.ValueKind == System.Text.Json.JsonValueKind.Number ? si.GetInt32() : 0,
                                         Baggage = seg.TryGetProperty("Baggage", out var bag) ? bag.ToString() : null,
                                         CabinBaggage = seg.TryGetProperty("CabinBaggage", out var cBag) ? cBag.ToString() : null,
@@ -1593,7 +1598,7 @@ namespace PickNBook.Api.Controllers.Public
                                         ToCity = seg.TryGetProperty("Destination", out var dest) && dest.TryGetProperty("CityCode", out var dc) ? dc.ToString() ?? "" : "",
                                         DepartureTime = seg.TryGetProperty("DepTime", out var dt) && DateTime.TryParse(dt.ToString(), out var dtv) ? dtv : DateTime.MinValue,
                                         ArrivalTime = seg.TryGetProperty("ArrTime", out var at) && DateTime.TryParse(at.ToString(), out var atv) ? atv : DateTime.MinValue,
-                                        Pnr = pnr
+                                        Pnr = (tripIndicator == 2 && !string.IsNullOrEmpty(reservation.ReturnPnr)) ? reservation.ReturnPnr : pnr
                                     };
                                     reservation.Segments.Add(segObj);
                                 }
@@ -1969,8 +1974,18 @@ namespace PickNBook.Api.Controllers.Public
                     DateTime depTime = DateTime.MinValue, arrTime = DateTime.MinValue;
                     bool nonRefundable = false;
                     string segmentsJson = "", fareRulesJson = "", travelClassStr = "Economy";
+                    string cancellationCharges = "";
+                    string partialSegmentCancellation = "";
 
-                    nonRefundable = resp.TryGetProperty("IsRefundable", out var isRef) && isRef.ValueKind == JsonValueKind.True ? false : true;
+                    if (resp.TryGetProperty("IsRefundable", out var isRef))
+                        nonRefundable = isRef.ValueKind != JsonValueKind.True;
+                    else if (resp.TryGetProperty("NonRefundable", out var nonRef))
+                        nonRefundable = nonRef.ValueKind == JsonValueKind.True;
+
+                    if (resp.TryGetProperty("CancellationCharges", out var cancProp))
+                        cancellationCharges = cancProp.ToString();
+                    if (resp.TryGetProperty("PartialSegmentCancellation", out var pscProp))
+                        partialSegmentCancellation = pscProp.ToString();
 
                     if (resp.TryGetProperty("FareRules", out var fr))
                         fareRulesJson = fr.ToString();
@@ -1979,6 +1994,19 @@ namespace PickNBook.Api.Controllers.Public
 
                     if (resp.TryGetProperty("FlightItinerary", out var itinerary))
                     {
+                        if (itinerary.TryGetProperty("NonRefundable", out var itNonRef))
+                            nonRefundable = itNonRef.ValueKind == JsonValueKind.True;
+                        if (itinerary.TryGetProperty("CancellationCharges", out var itCanc))
+                            cancellationCharges = itCanc.ToString();
+                        if (itinerary.TryGetProperty("PartialSegmentCancellation", out var itPsc))
+                            partialSegmentCancellation = itPsc.ToString();
+                        if (string.IsNullOrEmpty(fareRulesJson))
+                        {
+                            if (itinerary.TryGetProperty("FareRules", out var itFr))
+                                fareRulesJson = itFr.ToString();
+                            else if (itinerary.TryGetProperty("MiniFareRules", out var itMfr))
+                                fareRulesJson = itMfr.ToString();
+                        }
                         if (itinerary.TryGetProperty("Fare", out var fare))
                         {
                             totalFare = fare.TryGetProperty("PublishedFare", out var pubFare) && pubFare.ValueKind == JsonValueKind.Number ? pubFare.GetDecimal() : 0;
@@ -2140,6 +2168,9 @@ namespace PickNBook.Api.Controllers.Public
                         
                         NonRefundable = nonRefundable,
                         FareRulesJson = fareRulesJson,
+                        CancellationCharges = cancellationCharges,
+                        CancellationPolicyJson = !string.IsNullOrEmpty(cancellationCharges) ? cancellationCharges : fareRulesJson,
+                        PartialSegmentCancellation = partialSegmentCancellation,
 
                         TotalPriceInr = pricingBreakdown.FinalAmount + ssrFromResponse,
                         CustomerFareInr = pricingBreakdown.FinalAmount + ssrFromResponse,
@@ -2522,16 +2553,39 @@ namespace PickNBook.Api.Controllers.Public
                     DateTime depTime = DateTime.MinValue, arrTime = DateTime.MinValue;
                     bool nonRefundable = false;
                     string segmentsJson = "", fareRulesJson = "", travelClassStr = "Economy";
+                    string cancellationCharges = "";
+                    string partialSegmentCancellation = "";
 
-                    nonRefundable = resp.TryGetProperty("IsRefundable", out var isRef) && isRef.ValueKind == JsonValueKind.True ? false : true;
+                    if (resp.TryGetProperty("IsRefundable", out var isRef2))
+                        nonRefundable = isRef2.ValueKind != JsonValueKind.True;
+                    else if (resp.TryGetProperty("NonRefundable", out var nonRef2))
+                        nonRefundable = nonRef2.ValueKind == JsonValueKind.True;
 
-                    if (resp.TryGetProperty("FareRules", out var fr))
-                        fareRulesJson = fr.ToString();
-                    else if (resp.TryGetProperty("MiniFareRules", out var mfr))
-                        fareRulesJson = mfr.ToString();
+                    if (resp.TryGetProperty("CancellationCharges", out var cancProp2))
+                        cancellationCharges = cancProp2.ToString();
+                    if (resp.TryGetProperty("PartialSegmentCancellation", out var pscProp2))
+                        partialSegmentCancellation = pscProp2.ToString();
+
+                    if (resp.TryGetProperty("FareRules", out var fr2))
+                        fareRulesJson = fr2.ToString();
+                    else if (resp.TryGetProperty("MiniFareRules", out var mfr2))
+                        fareRulesJson = mfr2.ToString();
 
                     if (resp.TryGetProperty("FlightItinerary", out var itinerary))
                     {
+                        if (itinerary.TryGetProperty("NonRefundable", out var itNonRef2))
+                            nonRefundable = itNonRef2.ValueKind == JsonValueKind.True;
+                        if (itinerary.TryGetProperty("CancellationCharges", out var itCanc2))
+                            cancellationCharges = itCanc2.ToString();
+                        if (itinerary.TryGetProperty("PartialSegmentCancellation", out var itPsc2))
+                            partialSegmentCancellation = itPsc2.ToString();
+                        if (string.IsNullOrEmpty(fareRulesJson))
+                        {
+                            if (itinerary.TryGetProperty("FareRules", out var itFr2))
+                                fareRulesJson = itFr2.ToString();
+                            else if (itinerary.TryGetProperty("MiniFareRules", out var itMfr2))
+                                fareRulesJson = itMfr2.ToString();
+                        }
                         if (itinerary.TryGetProperty("Fare", out var fare))
                         {
                             totalFare = fare.TryGetProperty("PublishedFare", out var pubFare) && pubFare.ValueKind == JsonValueKind.Number ? pubFare.GetDecimal() : 0;
@@ -2643,6 +2697,9 @@ namespace PickNBook.Api.Controllers.Public
                         
                         NonRefundable = nonRefundable,
                         FareRulesJson = fareRulesJson,
+                        CancellationCharges = cancellationCharges,
+                        CancellationPolicyJson = !string.IsNullOrEmpty(cancellationCharges) ? cancellationCharges : fareRulesJson,
+                        PartialSegmentCancellation = partialSegmentCancellation,
 
                         TotalPriceInr = pricingBreakdown.FinalAmount + ssrFromResponse,
                         CustomerFareInr = pricingBreakdown.FinalAmount + ssrFromResponse,
@@ -2773,6 +2830,74 @@ namespace PickNBook.Api.Controllers.Public
         }
 
 
+        private async Task<(bool IsAllowed, IActionResult? ErrorResult, string? CurrentUserId, bool IsPartnerApi)> ValidateV8AuthAndWhitelistAsync()
+        {
+            var tokenHeader = Request.Headers["Api-Token"].FirstOrDefault()
+                              ?? Request.Headers["X-SRDV-Token"].FirstOrDefault();
+
+            var clientIp = HttpContext.GetClientIpAddress();
+
+            // 1. Partner API authentication via Api-Token header
+            if (!string.IsNullOrWhiteSpace(tokenHeader))
+            {
+                if (!string.IsNullOrWhiteSpace(_srdvSettings.ApiToken) &&
+                    !string.Equals(tokenHeader, _srdvSettings.ApiToken, StringComparison.Ordinal))
+                {
+                    _logger.LogWarning("V8 endpoint called with invalid Api-Token: {Token}", tokenHeader);
+                    return (false, StatusCode(StatusCodes.Status401Unauthorized, new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 6000,
+                            ErrorMessage = "The account behind the token no longer exists or the Api-Token is invalid."
+                        }
+                    }), null, false);
+                }
+
+                // Check IP Whitelist for Partner API
+                if (!string.IsNullOrEmpty(clientIp) && clientIp != "127.0.0.1" && clientIp != "::1" && clientIp != "localhost")
+                {
+                    var isWhitelisted = await _dbContext.SecurityIpRules
+                        .AnyAsync(r => r.IpAddress == clientIp && r.Action == "WHITELIST" && r.Status == "ACTIVE");
+
+                    var anyWhitelist = await _dbContext.SecurityIpRules.AnyAsync(r => r.Action == "WHITELIST" && r.Status == "ACTIVE");
+                    if (anyWhitelist && !isWhitelisted)
+                    {
+                        _logger.LogWarning("V8 endpoint rejected caller IP {ClientIp}: Not in account IP whitelist", clientIp);
+                        return (false, StatusCode(StatusCodes.Status403Forbidden, new SrdvV8ErrorResponseDto
+                        {
+                            Error = new SrdvV8ErrorDto
+                            {
+                                ErrorCode = 900,
+                                ErrorMessage = "IP not whitelisted"
+                            }
+                        }), null, false);
+                    }
+                }
+
+                return (true, null, "partner_api", true);
+            }
+
+            // 2. Fallback to JWT authenticated portal user identity
+            if (User.Identity != null && User.Identity.IsAuthenticated)
+            {
+                var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                    ?? User.FindFirst("sub")?.Value
+                    ?? User.FindFirst("id")?.Value;
+
+                return (true, null, currentUserId, false);
+            }
+
+            return (false, StatusCode(StatusCodes.Status401Unauthorized, new SrdvV8ErrorResponseDto
+            {
+                Error = new SrdvV8ErrorDto
+                {
+                    ErrorCode = 6000,
+                    ErrorMessage = "The account behind the token no longer exists or the Api-Token is invalid. Please login or provide a valid Api-Token header."
+                }
+            }), null, false);
+        }
+
         [AllowAnonymous]
         [InjectClientIp]
         [HttpPost("SendChangeRequest")]
@@ -2781,62 +2906,71 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("/api/flight/srdv/SendChangeRequest")]
         public async Task<IActionResult> SendChangeRequest([FromBody] FlightSendChangeProxyRequestDto proxyRequest)
         {
-            string? currentUserId = null;
-            bool isPartnerApi = false;
-            if (Request.Headers.TryGetValue("Api-Token", out var apiTok) && !string.IsNullOrWhiteSpace(apiTok))
-            {
-                isPartnerApi = true;
-                currentUserId = "partner_api";
-            }
-            else if (User.Identity != null && User.Identity.IsAuthenticated)
-            {
-                currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-                    ?? User.FindFirst("sub")?.Value
-                    ?? User.FindFirst("id")?.Value;
-            }
-            else
-            {
-                return Unauthorized(new { ErrorCode = 1, ErrorMessage = "Please login or provide a valid Api-Token header." });
-            }
+            var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
+            if (!isAllowed) return authError!;
 
             if (proxyRequest == null)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Request body cannot be empty." }
+                });
             }
 
             if (proxyRequest.BookingId <= 0)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive BookingId is required." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "A valid positive BookingId is required." }
+                });
             }
 
             if (proxyRequest.RequestType < 0 || proxyRequest.RequestType > 3)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "RequestType must be 0, 1, 2, or 3." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "RequestType must be 0, 1, 2, or 3." }
+                });
             }
 
             if (proxyRequest.CancellationType < 0 || proxyRequest.CancellationType > 3)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "CancellationType must be 0, 1, 2, or 3." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "CancellationType must be 0, 1, 2, or 3." }
+                });
             }
 
             if (string.IsNullOrWhiteSpace(proxyRequest.PNR) || proxyRequest.PNR.Trim().Length > 50)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "PNR is required and must be between 1 and 50 characters." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "PNR is required and must be between 1 and 50 characters." }
+                });
             }
 
             if (string.IsNullOrWhiteSpace(proxyRequest.Remarks) || proxyRequest.Remarks.Trim().Length > 2000)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Remarks is required and must be between 1 and 2000 characters." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Remarks is required and must be between 1 and 2000 characters." }
+                });
             }
 
             if (!string.IsNullOrWhiteSpace(proxyRequest.ClientRefId) && proxyRequest.ClientRefId.Trim().Length > 200)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "ClientRefId cannot exceed 200 characters." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "ClientRefId cannot exceed 200 characters." }
+                });
             }
 
             if (proxyRequest.Sectors == null || !proxyRequest.Sectors.Any() || proxyRequest.Sectors.Count > 6)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Between 1 and 6 sectors are required." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Between 1 and 6 sectors are required." }
+                });
             }
 
             foreach (var s in proxyRequest.Sectors)
@@ -2844,13 +2978,19 @@ namespace PickNBook.Api.Controllers.Public
                 if (string.IsNullOrWhiteSpace(s.Origin) || s.Origin.Trim().Length != 3 ||
                     string.IsNullOrWhiteSpace(s.Destination) || s.Destination.Trim().Length != 3)
                 {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Sector Origin and Destination must be 3-character IATA airport codes." });
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Sector Origin and Destination must be 3-character IATA airport codes." }
+                    });
                 }
             }
 
             if (proxyRequest.TicketData == null || !proxyRequest.TicketData.Any() || proxyRequest.TicketData.Count > 9)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "Between 1 and 9 passenger tickets are required in TicketData." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Between 1 and 9 passenger tickets are required in TicketData." }
+                });
             }
 
             foreach (var t in proxyRequest.TicketData)
@@ -2858,11 +2998,17 @@ namespace PickNBook.Api.Controllers.Public
                 if (string.IsNullOrWhiteSpace(t.FirstName) || t.FirstName.Trim().Length > 100 ||
                     string.IsNullOrWhiteSpace(t.LastName) || t.LastName.Trim().Length > 100)
                 {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Passenger FirstName and LastName are required (1-100 characters)." });
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Passenger FirstName and LastName are required (1-100 characters)." }
+                    });
                 }
                 if (!string.IsNullOrEmpty(t.TicketId) && t.TicketId.Trim().Length > 100)
                 {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "TicketId cannot exceed 100 characters." });
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "TicketId cannot exceed 100 characters." }
+                    });
                 }
             }
 
@@ -2874,40 +3020,96 @@ namespace PickNBook.Api.Controllers.Public
                 var reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.SrdvBookingId == bookingIdStr);
                 if (reservation == null && !string.IsNullOrEmpty(proxyRequest.PNR))
                 {
-                    reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.Pnr == proxyRequest.PNR.Trim());
+                    reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.Pnr == proxyRequest.PNR.Trim() || r.ReturnPnr == proxyRequest.PNR.Trim() || r.BookingReference == proxyRequest.PNR.Trim());
+                }
+                if (reservation == null && int.TryParse(bookingIdStr, out var bIdInt))
+                {
+                    reservation = await _dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(r => r.Id == bIdInt);
                 }
 
                 if (reservation == null)
                 {
-                    return NotFound(new { ErrorCode = 1, ErrorMessage = "Flight reservation not found for the provided BookingId or PNR." });
+                    return Ok(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 100,
+                            ErrorMessage = "PNR is not matching with your client id. Please check the PNR or contact the support team."
+                        }
+                    });
                 }
 
                 // Strict Tenant Isolation / IDOR Protection (for portal users/agents)
                 if (!isPartnerApi && !isAdmin && !string.Equals(reservation.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
                 {
-                    return StatusCode(StatusCodes.Status403Forbidden, new { ErrorCode = 1, ErrorMessage = "Unauthorized: You do not have permission to modify or cancel this booking." });
-                }
-
-                // Status Guards
-                if (string.Equals(reservation.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-                {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "This flight booking is already cancelled." });
-                }
-
-                if (string.Equals(reservation.Status, "Cancellation Requested", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(reservation.Status, "Partial Cancellation Requested", StringComparison.OrdinalIgnoreCase))
-                {
-                    var hasActiveCancel = await _dbContext.FlightCancellationRequests
-                        .AnyAsync(c => c.FlightReservationId == reservation.Id && (c.CancellationStatus == "Pending" || c.CancellationStatus == "IN_PROCESS"));
-                    if (hasActiveCancel)
+                    return StatusCode(StatusCodes.Status403Forbidden, new SrdvV8ErrorResponseDto
                     {
-                        return BadRequest(new { ErrorCode = 1, ErrorMessage = "A cancellation request is already pending for this booking." });
-                    }
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 100,
+                            ErrorMessage = "PNR is not matching with your client id. Please check the PNR or contact the support team."
+                        }
+                    });
                 }
+
+                // Status Guards per spec: "This booking is not confirmed yet, so it cannot be cancelled. Please contact the support team."
+                if (!string.Equals(reservation.Status, "Booked", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(reservation.Status, "Ticketed", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(reservation.Status, "Confirmed", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(reservation.Status, "Cancellation Requested", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(reservation.Status, "Partial Cancellation Requested", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Ok(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 100,
+                            ErrorMessage = "This booking is not confirmed yet, so it cannot be cancelled. Please contact the support team."
+                        }
+                    });
+                }
+
+                // Open request idempotency per spec:
+                // "Sending the same request while one is still open returns the open request instead of raising a second one."
+                var openCancel = await _dbContext.FlightCancellationRequests
+                    .FirstOrDefaultAsync(c => c.FlightReservationId == reservation.Id && (c.CancellationStatus == "Pending" || c.CancellationStatus == "IN_PROCESS"));
+                if (openCancel != null && !string.IsNullOrWhiteSpace(openCancel.SrdvChangeRequestId))
+                {
+                    long openCrId = long.TryParse(openCancel.SrdvChangeRequestId, out var parsedCrId) ? parsedCrId : 0;
+                    var existingCrInfo = new List<SrdvV8TicketCRInfoDto>();
+                    foreach (var t in proxyRequest.TicketData)
+                    {
+                        existingCrInfo.Add(new SrdvV8TicketCRInfoDto
+                        {
+                            ChangeRequestId = openCrId,
+                            TicketId = string.IsNullOrWhiteSpace(t.TicketId) ? $"{t.FirstName} {t.LastName}".Trim() : t.TicketId.Trim(),
+                            Status = 1,
+                            Remarks = "",
+                            ChangeRequestStatus = 1
+                        });
+                    }
+
+                    long parsedTrace = long.TryParse(reservation.TraceId, out var tr) ? tr : 0;
+                    int srdvIdx = int.TryParse(openCancel.SrdvIndex ?? reservation.ResultIndex, out var idx) ? idx : 1;
+
+                    return Ok(new SrdvV8SendChangeResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 0, ErrorMessage = "" },
+                        ResponseStatus = 1,
+                        SrdvType = "MixAPI",
+                        SrdvIndex = srdvIdx,
+                        TraceId = parsedTrace,
+                        TicketCRInfo = existingCrInfo
+                    });
+                }
+
+                long resolvedBookingId = (reservation != null && long.TryParse(reservation.SrdvBookingId, out var sBid) && sBid > 0)
+                    ? sBid
+                    : proxyRequest.BookingId;
 
                 var request = new SendChangeRequestDto
                 {
-                    BookingId = proxyRequest.BookingId,
+                    BookingId = resolvedBookingId,
                     RequestType = proxyRequest.RequestType,
                     CancellationType = proxyRequest.CancellationType,
                     Remarks = proxyRequest.Remarks.Trim(),
@@ -2921,146 +3123,164 @@ namespace PickNBook.Api.Controllers.Public
                 using var doc = JsonDocument.Parse(responseRaw);
                 var root = doc.RootElement;
                 
-                if (reservation != null)
+                JsonElement resp = root;
+                if (root.TryGetProperty("Response", out var responseNode))
                 {
-                    var isSuccess = false;
-                    JsonElement resp = root;
-                    if (root.TryGetProperty("Response", out var responseNode))
+                    resp = responseNode;
+                }
+                else if (root.TryGetProperty("Results", out var resultsNode))
+                {
+                    resp = resultsNode;
+                }
+
+                // Check Error code in root or nested
+                var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
+                if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCodeProp))
+                {
+                    int code = 0;
+                    if (errCodeProp.ValueKind == JsonValueKind.Number) code = errCodeProp.GetInt32();
+                    else if (errCodeProp.ValueKind == JsonValueKind.String && int.TryParse(errCodeProp.GetString(), out var cVal)) code = cVal;
+
+                    if (code != 0)
                     {
-                        resp = responseNode;
-                    }
-                    else if (root.TryGetProperty("Results", out var resultsNode))
-                    {
-                        resp = resultsNode;
-                    }
-                    
-                    if (resp.TryGetProperty("ResponseStatus", out var status))
-                    {
-                        if (status.ValueKind == JsonValueKind.Number && status.GetInt32() == 1) isSuccess = true;
-                        if (status.ValueKind == JsonValueKind.String && status.ToString() == "1") isSuccess = true;
-                    }
-                    
-                    var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
-                    if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCode))
-                    {
-                        if (errCode.ValueKind == JsonValueKind.Number && errCode.GetInt32() == 0) isSuccess = true;
-                        if (errCode.ValueKind == JsonValueKind.String && (errCode.ToString() == "0" || errCode.ToString() == "")) isSuccess = true;
-                        if (errCode.ValueKind == JsonValueKind.Null) isSuccess = true;
-                    }
-                    
-                    if (isSuccess)
-                    {
-                        bool anyAccepted = false;
-                        string changeRequestId = "";
-                        if (resp.TryGetProperty("TicketCRInfo", out var crInfo) && crInfo.ValueKind == JsonValueKind.Array && crInfo.GetArrayLength() > 0)
+                        string msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "";
+                        return Ok(new SrdvV8ErrorResponseDto
                         {
-                            foreach (var row in crInfo.EnumerateArray())
+                            Error = new SrdvV8ErrorDto
                             {
-                                var rowStatus = row.TryGetProperty("Status", out var stProp) && stProp.ValueKind == JsonValueKind.Number ? stProp.GetInt32() : 0;
-                                if (rowStatus == 1) // Pending / Accepted
-                                {
-                                    anyAccepted = true;
-                                    if (string.IsNullOrEmpty(changeRequestId) && row.TryGetProperty("ChangeRequestId", out var crIdNode))
-                                        changeRequestId = crIdNode.ToString();
-                                }
+                                ErrorCode = code,
+                                ErrorMessage = msg
                             }
-                        }
-
-                        if (anyAccepted)
-                        {
-                            var isPartial = false;
-                            var reqSectors = request.Sectors != null && request.Sectors.Any() ? System.Text.Json.JsonSerializer.Serialize(request.Sectors) : null;
-                            var reqTickets = request.TicketData != null && request.TicketData.Any() ? System.Text.Json.JsonSerializer.Serialize(request.TicketData) : null;
-
-                            if (request.Sectors != null && request.Sectors.Any() && request.Sectors.Count < reservation.Segments.Count)
-                                isPartial = true;
-                            if (request.TicketData != null && request.TicketData.Any() && request.TicketData.Count < reservation.SeatsBooked)
-                                isPartial = true;
-
-                            var cancelReq = new FlightCancellationRequest
-                            {
-                                FlightReservationId = reservation.Id,
-                                RequestDateUtc = DateTime.UtcNow,
-                                CancellationStatus = "Pending",
-                                CustomerRefundStatus = "Pending",
-                                AdminRefundStatus = "Pending",
-                                SrdvChangeRequestId = changeRequestId,
-                                SrdvBookingId = bookingIdStr,
-                                CustomerRemark = request.Remarks,
-                                IsPartialCancellation = isPartial,
-                                CancelledSectorsJson = reqSectors,
-                                CancelledPassengersJson = reqTickets
-                            };
-                            
-                            reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
-                            
-                            _dbContext.FlightCancellationRequests.Add(cancelReq);
-                            
-                            // Create BookingCancellation as the single financial ledger
-                            var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
-                            var bookingCancellation = new BookingCancellation
-                            {
-                                BookingReference = reservation.BookingReference,
-                                BookingType = "Flight",
-                                PaymentId = payment?.Id ?? 0,
-                                UserId = reservation.UserId,
-                                OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
-                                SupplierAmount = reservation.NetFareInr,
-                                MarkupAmount = reservation.MarkupAmount,
-                                DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
-                                ConvenienceFee = payment?.ConvenienceFee ?? 0m,
-                                SrdvChangeRequestId = changeRequestId,
-                                Status = "Pending",
-                                SrdvStatus = "Pending",
-                                CreatedAtUtc = DateTime.UtcNow
-                            };
-                            _dbContext.BookingCancellations.Add(bookingCancellation);
-                            
-                            await _dbContext.SaveChangesAsync();
-
-                            // Additive In-App Notifications
-                            try
-                            {
-                                var inAppNotificationService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.IInAppNotificationService>();
-                                if (inAppNotificationService != null)
-                                {
-                                    await inAppNotificationService.CreateNotificationAsync(
-                                        type: "Cancellation",
-                                        category: "Customer",
-                                        title: "Flight Cancellation Requested",
-                                        message: $"Your cancellation request for flight booking ({reservation.BookingReference}) has been submitted and is processing.",
-                                        severity: "Info",
-                                        referenceType: "FlightReservation",
-                                        referenceId: reservation.BookingReference,
-                                        actionUrl: $"/bookings/{reservation.BookingReference}",
-                                        idempotencyKey: $"CANCEL_REQ_FLIGHT_{reservation.BookingReference}_{changeRequestId}",
-                                        targetUserId: reservation.UserId
-                                    );
-                                }
-                            }
-                            catch (Exception inAppEx)
-                            {
-                                _logger.LogWarning(inAppEx, "Failed to create in-app notification for flight cancellation request {BookingReference}. Non-fatal.", reservation.BookingReference);
-                            }
-                        }
-                        else
-                        {
-                            _logger.LogWarning("SendChangeRequest returned 0 ErrorCode but all tickets were refused (Status 4) for BookingId {BookingId}", proxyRequest.BookingId);
-                        }
+                        });
                     }
                 }
 
-                return Ok(doc.RootElement.Clone());
+                var isSuccess = false;
+                if (resp.TryGetProperty("ResponseStatus", out var statusProp))
+                {
+                    if (statusProp.ValueKind == JsonValueKind.Number && statusProp.GetInt32() == 1) isSuccess = true;
+                    if (statusProp.ValueKind == JsonValueKind.String && statusProp.ToString() == "1") isSuccess = true;
+                }
+
+                if (isSuccess && reservation != null)
+                {
+                    bool anyAccepted = false;
+                    string changeRequestId = "";
+                    if (resp.TryGetProperty("TicketCRInfo", out var crInfo) && crInfo.ValueKind == JsonValueKind.Array && crInfo.GetArrayLength() > 0)
+                    {
+                        foreach (var row in crInfo.EnumerateArray())
+                        {
+                            var rowStatus = row.TryGetProperty("Status", out var stProp) && stProp.ValueKind == JsonValueKind.Number ? stProp.GetInt32() : 0;
+                            if (rowStatus == 1) // Pending / Accepted
+                            {
+                                anyAccepted = true;
+                                if (string.IsNullOrEmpty(changeRequestId) && row.TryGetProperty("ChangeRequestId", out var crIdNode))
+                                    changeRequestId = crIdNode.ToString();
+                            }
+                        }
+                    }
+
+                    if (anyAccepted)
+                    {
+                        var isPartial = false;
+                        var reqSectors = request.Sectors != null && request.Sectors.Any() ? System.Text.Json.JsonSerializer.Serialize(request.Sectors) : null;
+                        var reqTickets = request.TicketData != null && request.TicketData.Any() ? System.Text.Json.JsonSerializer.Serialize(request.TicketData) : null;
+
+                        if (request.Sectors != null && request.Sectors.Any() && request.Sectors.Count < reservation.Segments.Count)
+                            isPartial = true;
+                        if (request.TicketData != null && request.TicketData.Any() && request.TicketData.Count < reservation.SeatsBooked)
+                            isPartial = true;
+
+                        var cancelReq = new FlightCancellationRequest
+                        {
+                            FlightReservationId = reservation.Id,
+                            RequestDateUtc = DateTime.UtcNow,
+                            CancellationStatus = "Pending",
+                            CustomerRefundStatus = "Pending",
+                            AdminRefundStatus = "Pending",
+                            SrdvChangeRequestId = changeRequestId,
+                            SrdvBookingId = bookingIdStr,
+                            CustomerRemark = request.Remarks,
+                            IsPartialCancellation = isPartial,
+                            CancelledSectorsJson = reqSectors,
+                            CancelledPassengersJson = reqTickets
+                        };
+                        
+                        reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
+                        
+                        _dbContext.FlightCancellationRequests.Add(cancelReq);
+                        
+                        // Create BookingCancellation as the single financial ledger
+                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                        var bookingCancellation = new BookingCancellation
+                        {
+                            BookingReference = reservation.BookingReference,
+                            BookingType = "Flight",
+                            PaymentId = payment?.Id ?? 0,
+                            UserId = reservation.UserId,
+                            OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
+                            SupplierAmount = reservation.NetFareInr,
+                            MarkupAmount = reservation.MarkupAmount,
+                            DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
+                            ConvenienceFee = payment?.ConvenienceFee ?? 0m,
+                            SrdvChangeRequestId = changeRequestId,
+                            Status = "Pending",
+                            SrdvStatus = "Pending",
+                            CreatedAtUtc = DateTime.UtcNow
+                        };
+                        _dbContext.BookingCancellations.Add(bookingCancellation);
+                        
+                        await _dbContext.SaveChangesAsync();
+
+                        // Additive In-App Notifications
+                        try
+                        {
+                            var inAppNotificationService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.IInAppNotificationService>();
+                            if (inAppNotificationService != null)
+                            {
+                                await inAppNotificationService.CreateNotificationAsync(
+                                    type: "Cancellation",
+                                    category: "Customer",
+                                    title: "Flight Cancellation Requested",
+                                    message: $"Your cancellation request for flight booking ({reservation.BookingReference}) has been submitted and is processing.",
+                                    severity: "Info",
+                                    referenceType: "FlightReservation",
+                                    referenceId: reservation.BookingReference,
+                                    actionUrl: $"/bookings/{reservation.BookingReference}",
+                                    idempotencyKey: $"CANCEL_REQ_FLIGHT_{reservation.BookingReference}_{changeRequestId}",
+                                    targetUserId: reservation.UserId
+                                );
+                            }
+                        }
+                        catch (Exception inAppEx)
+                        {
+                            _logger.LogWarning(inAppEx, "Failed to create in-app notification for flight cancellation request {BookingReference}. Non-fatal.", reservation.BookingReference);
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("SendChangeRequest returned 0 ErrorCode but all tickets were refused (Status 4) for BookingId {BookingId}", proxyRequest.BookingId);
+                    }
+                }
+
+                // Guarantee root properties unwrapped
+                return Ok(resp.Clone());
             }
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "HTTP exception during SendChangeRequest for BookingId {BookingId}, PNR {PNR}", proxyRequest?.BookingId, proxyRequest?.PNR);
-                return StatusCode(502, new { ErrorCode = 502, ErrorMessage = "Supplier communication error.", Details = ex.Message });
+                return StatusCode(502, new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 502, ErrorMessage = "Supplier communication error." }
+                });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error sending change request for BookingId {BookingId}, PNR {PNR}", proxyRequest?.BookingId, proxyRequest?.PNR);
-                return StatusCode(500, new { ErrorCode = 500, ErrorMessage = "Failed to send change request.", Details = ex.Message });
+                return StatusCode(500, new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 500, ErrorMessage = "Failed to send change request." }
+                });
             }
         }
 
@@ -3072,21 +3292,37 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("/api/flight/srdv/GetCancelStatus")]
         public async Task<IActionResult> GetCancelStatus([FromBody] FlightGetCancelStatusProxyRequestDto proxyRequest)
         {
-            if (!Request.Headers.TryGetValue("Api-Token", out var apiTok) || string.IsNullOrWhiteSpace(apiTok))
-            {
-                if (User.Identity == null || !User.Identity.IsAuthenticated)
-                {
-                    return Unauthorized(new { ErrorCode = 1, ErrorMessage = "Please login or provide a valid Api-Token header." });
-                }
-            }
+            var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
+            if (!isAllowed) return authError!;
 
             if (proxyRequest == null || proxyRequest.ChangeRequestId <= 0)
             {
-                return BadRequest(new { ErrorCode = 1, ErrorMessage = "A valid positive ChangeRequestId is required." });
+                return BadRequest(new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "A valid positive ChangeRequestId is required." }
+                });
             }
 
             try
             {
+                var crIdStr = proxyRequest.ChangeRequestId.ToString();
+                var cancelReq = await _dbContext.FlightCancellationRequests
+                    .Include(c => c.FlightReservation)
+                    .FirstOrDefaultAsync(c => c.SrdvChangeRequestId == crIdStr);
+
+                bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
+                if (cancelReq != null && !isPartnerApi && !isAdmin && !string.Equals(cancelReq.FlightReservation?.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 100,
+                            ErrorMessage = "Change request not found. Please check the ChangeRequestId or contact the support team."
+                        }
+                    });
+                }
+
                 var request = new GetCancelStatusRequestDto
                 {
                     ChangeRequestId = proxyRequest.ChangeRequestId
@@ -3095,19 +3331,39 @@ namespace PickNBook.Api.Controllers.Public
                 using var doc = JsonDocument.Parse(responseRaw);
                 var root = doc.RootElement;
 
-                // Synchronize real-time DB state
-                var crIdStr = proxyRequest.ChangeRequestId.ToString();
-                var cancelReq = await _dbContext.FlightCancellationRequests
-                    .Include(c => c.FlightReservation)
-                    .FirstOrDefaultAsync(c => c.SrdvChangeRequestId == crIdStr);
+                JsonElement resp = root;
+                if (root.TryGetProperty("Response", out var responseNode)) resp = responseNode;
+                else if (root.TryGetProperty("Results", out var resultsNode)) resp = resultsNode;
 
+                var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
+                if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCodeProp))
+                {
+                    int code = 0;
+                    if (errCodeProp.ValueKind == JsonValueKind.Number) code = errCodeProp.GetInt32();
+                    else if (errCodeProp.ValueKind == JsonValueKind.String && int.TryParse(errCodeProp.GetString(), out var cVal)) code = cVal;
+
+                    if (code != 0)
+                    {
+                        string msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "Change request not found.";
+                        return Ok(new SrdvV8ErrorResponseDto
+                        {
+                            Error = new SrdvV8ErrorDto
+                            {
+                                ErrorCode = code,
+                                ErrorMessage = msg
+                            }
+                        });
+                    }
+                }
+
+                // Synchronize real-time DB state
                 if (cancelReq != null)
                 {
-                    var cStatus = root.TryGetProperty("CancellationStatus", out var csProp) ? csProp.GetString() : null;
-                    var rStatus = root.TryGetProperty("RefundStatus", out var rsProp) ? rsProp.GetString() : null;
-                    var isSettled = root.TryGetProperty("IsSettled", out var isProp) && isProp.ValueKind == JsonValueKind.True;
-                    decimal? refundAmt = root.TryGetProperty("RefundAmount", out var raProp) && raProp.ValueKind == JsonValueKind.Number ? raProp.GetDecimal() : null;
-                    decimal? cancelCharge = root.TryGetProperty("CancellationCharge", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number ? ccProp.GetDecimal() : null;
+                    var cStatus = resp.TryGetProperty("CancellationStatus", out var csProp) ? csProp.GetString() : null;
+                    var rStatus = resp.TryGetProperty("RefundStatus", out var rsProp) ? rsProp.GetString() : null;
+                    var isSettled = resp.TryGetProperty("IsSettled", out var isProp) && isProp.ValueKind == JsonValueKind.True;
+                    decimal? refundAmt = resp.TryGetProperty("RefundAmount", out var raProp) && raProp.ValueKind == JsonValueKind.Number ? raProp.GetDecimal() : null;
+                    decimal? cancelCharge = resp.TryGetProperty("CancellationCharge", out var ccProp) && ccProp.ValueKind == JsonValueKind.Number ? ccProp.GetDecimal() : null;
 
                     if (!string.IsNullOrEmpty(cStatus)) cancelReq.CancellationStatus = cStatus;
                     if (refundAmt.HasValue) cancelReq.AdminRefundAmountInr = refundAmt.Value;
@@ -3115,7 +3371,10 @@ namespace PickNBook.Api.Controllers.Public
 
                     if (cancelReq.FlightReservation != null)
                     {
-                        if (cStatus == "CANCELLED")
+                        if (string.Equals(cStatus, "CANCELLED", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(cStatus, "Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(cStatus, "Completed", StringComparison.OrdinalIgnoreCase) ||
+                            cStatus == "3" || cStatus == "4")
                         {
                             cancelReq.FlightReservation.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
                             cancelReq.FlightReservation.CancelledAtUtc ??= DateTime.UtcNow;
@@ -3138,17 +3397,23 @@ namespace PickNBook.Api.Controllers.Public
                     await _dbContext.SaveChangesAsync();
                 }
 
-                return Ok(doc.RootElement.Clone());
+                return Ok(resp.Clone());
             }
             catch (HttpRequestException ex)
             {
                 _logger.LogError(ex, "HTTP exception during GetCancelStatus for ChangeRequestId {ChangeRequestId}", proxyRequest?.ChangeRequestId);
-                return StatusCode(502, new { ErrorCode = 502, ErrorMessage = "Supplier communication error.", Details = ex.Message });
+                return StatusCode(502, new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 502, ErrorMessage = "Supplier communication error." }
+                });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting cancel status for ChangeRequestId {ChangeRequestId}", proxyRequest?.ChangeRequestId);
-                return StatusCode(500, new { ErrorCode = 500, ErrorMessage = "Failed to get cancel status.", Details = ex.Message });
+                return StatusCode(500, new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 500, ErrorMessage = "Failed to get cancel status." }
+                });
             }
         }
 
@@ -3160,29 +3425,48 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("/api/flight/srdv/GetCancellationCharges")]
         public async Task<IActionResult> GetCancellationCharges([FromBody] FlightGetCancellationChargesProxyRequestDto proxyRequest)
         {
-            if (!Request.Headers.TryGetValue("Api-Token", out var apiTok) || string.IsNullOrWhiteSpace(apiTok))
-            {
-                if (User.Identity == null || !User.Identity.IsAuthenticated)
-                {
-                    return Unauthorized(new { ErrorCode = 1, ErrorMessage = "Please login or provide a valid Api-Token header." });
-                }
-            }
+            var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
+            if (!isAllowed) return authError!;
 
             try
             {
                 if (proxyRequest == null || proxyRequest.TraceId <= 0)
                 {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "TraceId is required and must be greater than 0." });
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "TraceId is required and must be greater than 0." }
+                    });
                 }
 
                 if (!string.IsNullOrEmpty(proxyRequest.PNR) && proxyRequest.PNR.Length > 50)
                 {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "PNR cannot exceed 50 characters." });
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "PNR cannot exceed 50 characters." }
+                    });
                 }
 
                 if (!string.IsNullOrEmpty(proxyRequest.Remarks) && proxyRequest.Remarks.Length > 500)
                 {
-                    return BadRequest(new { ErrorCode = 1, ErrorMessage = "Remarks cannot exceed 500 characters." });
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "Remarks cannot exceed 500 characters." }
+                    });
+                }
+
+                bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
+                var traceStr = proxyRequest.TraceId.ToString();
+                var reservation = await _dbContext.FlightReservations.FirstOrDefaultAsync(r => r.TraceId == traceStr);
+                if (reservation != null && !isPartnerApi && !isAdmin && !string.Equals(reservation.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 100,
+                            ErrorMessage = "PNR is not matching with your client id. Please check the PNR or contact the support team."
+                        }
+                    });
                 }
 
                 var request = new GetCancellationChargesRequestDto
@@ -3194,12 +3478,65 @@ namespace PickNBook.Api.Controllers.Public
 
                 var responseRaw = await _srdvFlightService.GetCancellationChargesRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
-                return Ok(doc.RootElement.Clone());
+                var root = doc.RootElement;
+
+                JsonElement resp = root;
+                if (root.TryGetProperty("Response", out var responseNode)) resp = responseNode;
+                else if (root.TryGetProperty("Results", out var resultsNode)) resp = resultsNode;
+
+                var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
+                if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCodeProp))
+                {
+                    int code = 0;
+                    if (errCodeProp.ValueKind == JsonValueKind.Number) code = errCodeProp.GetInt32();
+                    else if (errCodeProp.ValueKind == JsonValueKind.String && int.TryParse(errCodeProp.GetString(), out var cVal)) code = cVal;
+
+                    if (code != 0)
+                    {
+                        if (reservation != null && (!string.IsNullOrEmpty(reservation.CancellationPolicyJson) || !string.IsNullOrEmpty(reservation.FareRulesJson) || reservation.NonRefundable || !string.IsNullOrEmpty(reservation.CancellationCharges)))
+                        {
+                            return Ok(new
+                            {
+                                success = true,
+                                isDynamicBookingPolicy = true,
+                                nonRefundable = reservation.NonRefundable,
+                                cancellationCharges = reservation.CancellationCharges,
+                                cancellationPolicy = reservation.CancellationPolicyJson,
+                                cancellationPolicyJson = reservation.CancellationPolicyJson,
+                                fareRules = reservation.FareRulesJson,
+                                fareRulesJson = reservation.FareRulesJson
+                            });
+                        }
+
+                        string msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "Cancellation charges are not available for this Trace Id.";
+                        return Ok(new SrdvV8ErrorResponseDto
+                        {
+                            Error = new SrdvV8ErrorDto
+                            {
+                                ErrorCode = code,
+                                ErrorMessage = msg
+                            }
+                        });
+                    }
+                }
+
+                return Ok(resp.Clone());
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "HTTP exception during GetCancellationCharges for TraceId {TraceId}", proxyRequest?.TraceId);
+                return StatusCode(502, new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 502, ErrorMessage = "Supplier communication error." }
+                });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting cancellation charges for TraceId: {TraceId}", proxyRequest?.TraceId);
-                return StatusCode(500, new { message = "Failed to get cancellation charges.", error = ex.Message });
+                return StatusCode(500, new SrdvV8ErrorResponseDto
+                {
+                    Error = new SrdvV8ErrorDto { ErrorCode = 500, ErrorMessage = "Failed to get cancellation charges." }
+                });
             }
         }
         [HttpPost("GetApiBalanceCheck")]
@@ -3646,6 +3983,11 @@ namespace PickNBook.Api.Controllers.Public
                     .ToListAsync();
                 var paxMap = allPassengers.GroupBy(p => p.FlightReservationId).ToDictionary(g => g.Key, g => g.ToList());
 
+                var allSegments = await _dbContext.FlightReservationSegments.AsNoTracking()
+                    .Where(s => flightIds.Contains(s.FlightReservationId))
+                    .ToListAsync();
+                var segMap = allSegments.GroupBy(s => s.FlightReservationId).ToDictionary(g => g.Key, g => g.ToList());
+
                 var result = new List<MyFlightBookingResponseDto>();
 
                 foreach (var booking in bookings)
@@ -3785,6 +4127,84 @@ namespace PickNBook.Api.Controllers.Public
                         refundAmt,
                         depTime != default ? depTime : booking.DepartureTime);
 
+                    segMap.TryGetValue(booking.Id, out var dbSegs);
+                    dbSegs ??= new List<FlightReservationSegment>();
+
+                    var segmentDtos = dbSegs.Any()
+                        ? dbSegs.Select(s => new MyFlightSegmentDto
+                        {
+                            Id = s.Id,
+                            SegmentIndicator = s.SegmentIndicator,
+                            TripIndicator = s.TripIndicator,
+                            Airline = s.Airline,
+                            FlightNumber = s.FlightNumber,
+                            FromCity = s.FromCity,
+                            ToCity = s.ToCity,
+                            DepartureTime = s.DepartureTime,
+                            ArrivalTime = s.ArrivalTime,
+                            Duration = s.Duration,
+                            Baggage = s.Baggage,
+                            CabinBaggage = s.CabinBaggage,
+                            Pnr = s.Pnr,
+                            Status = s.Status
+                        }).ToList()
+                        : new List<MyFlightSegmentDto>
+                        {
+                            new MyFlightSegmentDto
+                            {
+                                Id = 1,
+                                SegmentIndicator = 0,
+                                TripIndicator = 1,
+                                Airline = resolvedAirlineName,
+                                FlightNumber = flightNum,
+                                FromCity = booking.FromCity,
+                                ToCity = booking.ToCity,
+                                DepartureTime = depTime != default ? depTime : booking.DepartureTime,
+                                ArrivalTime = arrTime != default ? arrTime : booking.ArrivalTime,
+                                Pnr = booking.Pnr,
+                                Status = booking.Status
+                            }
+                        };
+
+                    if (!dbSegs.Any() && !string.IsNullOrEmpty(booking.ReturnPnr))
+                    {
+                        segmentDtos.Add(new MyFlightSegmentDto
+                        {
+                            Id = 2,
+                            SegmentIndicator = 1,
+                            TripIndicator = 2,
+                            Airline = resolvedAirlineName,
+                            FlightNumber = flightNum,
+                            FromCity = booking.ToCity,
+                            ToCity = booking.FromCity,
+                            DepartureTime = arrTime != default ? arrTime : booking.ArrivalTime,
+                            ArrivalTime = arrTime != default ? arrTime.AddHours(2) : booking.ArrivalTime.AddHours(2),
+                            Pnr = booking.ReturnPnr,
+                            Status = booking.Status
+                        });
+                    }
+
+                    var passengerDtos = passengers.Select(p =>
+                    {
+                        var pName = (p.FullName ?? "").Trim();
+                        var parts = pName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        var first = !string.IsNullOrEmpty(p.FirstName) ? p.FirstName.Trim() : (parts.Length > 0 ? parts[0] : "Passenger");
+                        var last = !string.IsNullOrEmpty(p.LastName) ? p.LastName.Trim() : (parts.Length > 1 ? string.Join(" ", parts.Skip(1)) : first);
+                        return new MyFlightPassengerDto
+                        {
+                            Id = p.Id,
+                            FullName = pName,
+                            FirstName = first,
+                            LastName = last,
+                            Title = p.Title,
+                            SeatNumber = p.SeatNumber,
+                            TicketId = p.TicketId,
+                            TicketNumber = p.TicketNumber,
+                            Status = p.Status,
+                            IsCancelled = p.IsCancelled
+                        };
+                    }).ToList();
+
                     var responseDto = new MyFlightBookingResponseDto
                     {
                         BookingReference = booking.BookingReference,
@@ -3808,15 +4228,12 @@ namespace PickNBook.Api.Controllers.Public
                         TraceId = booking.TraceId,
                         BookingId = booking.SrdvBookingId,
                         PNR = booking.Pnr,
+                        ReturnPnr = booking.ReturnPnr,
                         SrdvType = booking.SrdvType,
                         SrdvIndex = booking.SrdvIndex,
 
-                        Passengers = passengers.Select(p => new MyFlightPassengerDto
-                        {
-                            FullName = p.FullName,
-                            SeatNumber = p.SeatNumber,
-                            TicketId = p.TicketId
-                        }).ToList(),
+                        Passengers = passengerDtos,
+                        Segments = segmentDtos,
 
                         // Payment & Contact Identifiers
                         PaymentId = effectivePaymentId,
@@ -3834,7 +4251,29 @@ namespace PickNBook.Api.Controllers.Public
                         LifecycleHierarchy = lifecycle.Hierarchy,
                         Timeline = lifecycle.Timeline,
                         PaymentBreakdown = lifecycle.PaymentBreakdown,
-                        CancellationAudit = lifecycle.CancellationAudit
+                        CancellationAudit = lifecycle.CancellationAudit,
+
+                        // Dynamic Cancellation Policy & Fare Rules
+                        CancellationPolicyJson = booking.CancellationPolicyJson,
+                        FareRulesJson = booking.FareRulesJson,
+                        NonRefundable = booking.NonRefundable,
+                        CancellationCharges = booking.CancellationCharges,
+
+                        // IST Presentation Dates
+                        DepartureTimeIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(depTime != default ? depTime : booking.DepartureTime),
+                        DepartureTimeDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(depTime != default ? depTime : booking.DepartureTime, "dd MMM yyyy, hh:mm tt"),
+                        ArrivalTimeIst = arrTime != default ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(arrTime) : (DateTime?)null,
+                        ArrivalTimeDisplay = arrTime != default ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(arrTime, "dd MMM yyyy, hh:mm tt") : null,
+                        BookedAtIst = PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.BookedAtUtc),
+                        BookedAtDisplay = PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.BookedAtUtc, "dd MMM yyyy, hh:mm tt"),
+                        CancelledAtUtc = booking.CancelledAtUtc,
+                        CancelledAtIst = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.CancelledAtUtc.Value) : (DateTime?)null,
+                        CancelledAtDisplay = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.CancelledAtUtc.Value, "dd MMM yyyy, hh:mm tt") : null,
+                        CancellationReason = booking.CancellationReason,
+                        CancellationChargeInr = booking.CancellationChargeInr,
+                        RefundAmountInr = booking.RefundAmountInr,
+                        CustomerFareInr = booking.CustomerFareInr > 0 ? booking.CustomerFareInr : booking.TotalPriceInr,
+                        NetFareInr = booking.NetFareInr > 0 ? booking.NetFareInr : booking.TotalPriceInr
                     };
 
                     result.Add(responseDto);

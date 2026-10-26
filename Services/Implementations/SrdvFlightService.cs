@@ -981,9 +981,17 @@ namespace PickNBook.Api.Services
             }
 
             var response = await _httpClient.SendAsync(requestMessage);
-            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                if (!string.IsNullOrWhiteSpace(content) && content.TrimStart().StartsWith("{"))
+                {
+                    return content;
+                }
+                response.EnsureSuccessStatusCode();
+            }
 
-            return await response.Content.ReadAsStringAsync();
+            return content;
         }
 
         public async Task<string> GetCancelStatusRawAsync(GetCancelStatusRequestDto request)
@@ -1009,9 +1017,17 @@ namespace PickNBook.Api.Services
             }
 
             var response = await _httpClient.SendAsync(requestMessage);
-            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                if (!string.IsNullOrWhiteSpace(content) && content.TrimStart().StartsWith("{"))
+                {
+                    return content;
+                }
+                response.EnsureSuccessStatusCode();
+            }
 
-            return await response.Content.ReadAsStringAsync();
+            return content;
         }
 
         public async Task<string> GetCancellationChargesRawAsync(GetCancellationChargesRequestDto request)
@@ -1040,9 +1056,17 @@ namespace PickNBook.Api.Services
             }
 
             var response = await _httpClient.SendAsync(requestMessage);
-            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                if (!string.IsNullOrWhiteSpace(content) && content.TrimStart().StartsWith("{"))
+                {
+                    return content;
+                }
+                response.EnsureSuccessStatusCode();
+            }
 
-            return await response.Content.ReadAsStringAsync();
+            return content;
         }
         public async Task<string> GetApiBalanceCheckRawAsync(ApiBalanceRequestDto? request = null)
         {

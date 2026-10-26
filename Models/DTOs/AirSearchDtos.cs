@@ -777,9 +777,34 @@ namespace PickNBook.Api.Models.DTOs
 
     public class MyFlightPassengerDto
     {
+        public int Id { get; set; }
         public string FullName { get; set; } = string.Empty;
+        public string? FirstName { get; set; }
+        public string? LastName { get; set; }
+        public string? Title { get; set; }
         public string? SeatNumber { get; set; }
         public string? TicketId { get; set; }
+        public string? TicketNumber { get; set; }
+        public string Status { get; set; } = "Booked";
+        public bool IsCancelled { get; set; } = false;
+    }
+
+    public class MyFlightSegmentDto
+    {
+        public int Id { get; set; }
+        public int SegmentIndicator { get; set; }
+        public int TripIndicator { get; set; }
+        public string Airline { get; set; } = string.Empty;
+        public string FlightNumber { get; set; } = string.Empty;
+        public string FromCity { get; set; } = string.Empty;
+        public string ToCity { get; set; } = string.Empty;
+        public DateTime DepartureTime { get; set; }
+        public DateTime ArrivalTime { get; set; }
+        public int Duration { get; set; }
+        public string? Baggage { get; set; }
+        public string? CabinBaggage { get; set; }
+        public string? Pnr { get; set; }
+        public string Status { get; set; } = "Booked";
     }
 
     public class MyFlightBookingResponseDto
@@ -805,10 +830,13 @@ namespace PickNBook.Api.Models.DTOs
         public string? TraceId { get; set; }
         public string? BookingId { get; set; } // maps to SrdvBookingId
         public string? PNR { get; set; }
+        public string? ReturnPnr { get; set; }
+        public string? ReturnPNR => ReturnPnr;
         public string? SrdvType { get; set; }
         public string? SrdvIndex { get; set; }
 
         public List<MyFlightPassengerDto> Passengers { get; set; } = new();
+        public List<MyFlightSegmentDto> Segments { get; set; } = new();
 
         // Payment & Contact Identifiers
         public int? PaymentId { get; set; }
@@ -827,6 +855,28 @@ namespace PickNBook.Api.Models.DTOs
         public List<PickNBook.Api.Helpers.UserBookingTimelineEventDto>? Timeline { get; set; }
         public object? PaymentBreakdown { get; set; }
         public object? CancellationAudit { get; set; }
+
+        // Dynamic Cancellation Policy & Fare Rules Fields
+        public string? CancellationPolicyJson { get; set; }
+        public string? FareRulesJson { get; set; }
+        public bool NonRefundable { get; set; }
+        public string? CancellationCharges { get; set; }
+
+        // IST & Formatted Times
+        public DateTime? DepartureTimeIst { get; set; }
+        public string? DepartureTimeDisplay { get; set; }
+        public DateTime? ArrivalTimeIst { get; set; }
+        public string? ArrivalTimeDisplay { get; set; }
+        public DateTime? BookedAtIst { get; set; }
+        public string? BookedAtDisplay { get; set; }
+        public DateTime? CancelledAtUtc { get; set; }
+        public DateTime? CancelledAtIst { get; set; }
+        public string? CancelledAtDisplay { get; set; }
+        public string? CancellationReason { get; set; }
+        public decimal? CancellationChargeInr { get; set; }
+        public decimal? RefundAmountInr { get; set; }
+        public decimal CustomerFareInr { get; set; }
+        public decimal NetFareInr { get; set; }
     }
 }
 

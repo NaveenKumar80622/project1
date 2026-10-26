@@ -197,14 +197,25 @@ namespace PickNBook.Api.Controllers
 
                     // Cancellation details
                     CancelledAtUtc = x.CancelledAtUtc,
+                    CancelledAtIst = x.CancelledAtUtc.HasValue ? ToIst(x.CancelledAtUtc.Value) : (DateTime?)null,
                     CancellationReason = x.CancellationReason,
                     CancellationChargeInr = x.CancellationChargeInr,
-                    RefundAmountInr = x.RefundAmountInr
+                    RefundAmountInr = x.RefundAmountInr,
+
+                    // SRDV & Dynamic Cancellation Policy Fields
+                    SrdvBookingId = x.SrdvBookingId,
+                    ReturnPnr = x.ReturnPnr,
+                    GdsPnr = x.GdsPnr,
+                    CancellationPolicyJson = x.CancellationPolicyJson,
+                    FareRulesJson = x.FareRulesJson,
+                    NonRefundable = x.NonRefundable,
+                    DepartureTimeIst = ToIst(x.DepartureTime),
+                    ArrivalTimeIst = ToIst(x.ArrivalTime)
                 };
             })
-            .Where(x => !string.IsNullOrWhiteSpace(status)
+            .Where(x => !string.IsNullOrWhiteSpace(status) && !status.Equals("all", StringComparison.OrdinalIgnoreCase)
                 ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
-                : (x.Status == "Booked" || x.Status == "Cancelled"))
+                : true)
             .ToList();
 
             return Ok(response);
@@ -732,6 +743,9 @@ namespace PickNBook.Api.Controllers
                         CustomerRefundAmountInr = x.CustomerRefundAmountInr,
                         AdminRefundAmountInr = x.AdminRefundAmountInr,
                         Remark = x.AdminRemark,
+                        CancellationPolicyJson = booking.CancellationPolicyJson,
+                        FareRulesJson = booking.FareRulesJson,
+                        NonRefundable = booking.NonRefundable,
                         Details = new AdminFlightCancellationDetailsDto
                         {
                             CancellationStatus = x.CancellationStatus,
@@ -842,32 +856,52 @@ namespace PickNBook.Api.Controllers
             row.AdminRemark = request.AdminRemark;
 
             // When admin approves and marks cancellation status "Completed", route refund
-            if (string.Equals(row.CancellationStatus, "Completed", StringComparison.OrdinalIgnoreCase) &&
-                row.CustomerRefundAmountInr > 0 &&
-                !string.Equals(row.CustomerRefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(row.CancellationStatus, "Completed", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.CancellationStatus, "Approved", StringComparison.OrdinalIgnoreCase))
             {
                 var reservation = await dbContext.FlightReservations.FirstOrDefaultAsync(r => r.Id == row.FlightReservationId);
-                if (reservation != null && int.TryParse(reservation.UserId, out int uId))
+                if (reservation != null)
                 {
-                    var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
-                    var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
-                    {
-                        UserId = uId,
-                        BookingType = "Flight",
-                        BookingReference = reservation.BookingReference,
-                        RefundAmount = row.CustomerRefundAmountInr,
-                        PaymentMethod = payment?.PaymentMethod ?? reservation.PaymentMethod ?? "Cashfree",
-                        CashfreeOrderId = payment?.CashfreeOrderId,
-                        RefundPreference = row.RefundPreference,
-                        Reason = row.CustomerRemark ?? row.AdminRemark,
-                        TotalPaidAmount = payment?.TotalAmount ?? payment?.FinalPayableAmount ?? reservation.TotalPriceInr,
-                        WalletPaidAmount = payment?.WalletUsedAmount ?? reservation.WalletPaidAmount,
-                        GatewayPaidAmount = payment?.GatewayPaidAmount ?? reservation.GatewayPaidAmount
-                    });
+                    reservation.Status = row.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
+                    reservation.CancelledAtUtc ??= DateTime.UtcNow;
+                    reservation.CancellationChargeInr = row.CustomerCancellationChargeInr;
+                    reservation.RefundAmountInr = row.CustomerRefundAmountInr;
+                    reservation.CancellationReason = row.CustomerRemark ?? row.AdminRemark;
 
-                    row.WalletRefundAmount = routeRes.WalletRefunded;
-                    row.GatewayRefundAmount = routeRes.GatewayRefunded;
-                    row.CustomerRefundStatus = routeRes.RefundStatus == "COMPLETED" ? "Refunded" : "Processing";
+                    if (row.CustomerRefundAmountInr > 0 &&
+                        !string.Equals(row.CustomerRefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) &&
+                        int.TryParse(reservation.UserId, out int uId))
+                    {
+                        var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                        var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
+                        {
+                            UserId = uId,
+                            BookingType = "Flight",
+                            BookingReference = reservation.BookingReference,
+                            RefundAmount = row.CustomerRefundAmountInr,
+                            PaymentMethod = payment?.PaymentMethod ?? reservation.PaymentMethod ?? "Cashfree",
+                            CashfreeOrderId = payment?.CashfreeOrderId,
+                            RefundPreference = row.RefundPreference,
+                            Reason = row.CustomerRemark ?? row.AdminRemark,
+                            TotalPaidAmount = payment?.TotalAmount ?? payment?.FinalPayableAmount ?? reservation.TotalPriceInr,
+                            WalletPaidAmount = payment?.WalletUsedAmount ?? reservation.WalletPaidAmount,
+                            GatewayPaidAmount = payment?.GatewayPaidAmount ?? reservation.GatewayPaidAmount
+                        });
+
+                        row.WalletRefundAmount = routeRes.WalletRefunded;
+                        row.GatewayRefundAmount = routeRes.GatewayRefunded;
+                        row.CustomerRefundStatus = routeRes.RefundStatus == "COMPLETED" ? "Refunded" : "Processing";
+                    }
+
+                    var bookingCancellation = await dbContext.BookingCancellations
+                        .FirstOrDefaultAsync(c => c.BookingType == "Flight" && (c.BookingReference == reservation.BookingReference || c.SrdvChangeRequestId == row.SrdvChangeRequestId));
+                    if (bookingCancellation != null)
+                    {
+                        bookingCancellation.Status = "Completed";
+                        bookingCancellation.CustomerRefundAmount = row.CustomerRefundAmountInr;
+                        bookingCancellation.SupplierCancellationCharge = row.AdminCancellationChargeInr;
+                        bookingCancellation.RefundStatus = row.CustomerRefundStatus;
+                    }
                 }
             }
 
