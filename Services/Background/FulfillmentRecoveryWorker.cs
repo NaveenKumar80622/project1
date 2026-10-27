@@ -737,7 +737,8 @@ namespace PickNBook.Api.Services.Background
                         DiscountAmount = cancelRecord.DiscountAmount,
                         ConvenienceFee = cancelRecord.ConvenienceFee,
                         SupplierCancellationCharge = supplierCancellationCharge,
-                        SupplierRefundAmount = supplierRefundAmount
+                        SupplierRefundAmount = supplierRefundAmount,
+                        ServiceCharge = 35.00m
                     };
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);

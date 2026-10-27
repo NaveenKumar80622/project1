@@ -2096,6 +2096,19 @@ namespace PickNBook.Api.Controllers
 
                     var (cleanPnr, opPnr) = ResolvePnrAndOperatorPnr(x.Pnr, x.SrdvBookingId, x.SrdvBookingResponseJson);
 
+                    decimal calculatedProfit;
+                    if (string.Equals(x.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var customerRetained = x.TotalPriceInr - (x.RefundAmountInr ?? 0m);
+                        var supplierRetained = Math.Max(0m, x.NetFareInr - (x.RefundAmountInr ?? 0m));
+                        calculatedProfit = Math.Round(Math.Max(0m, customerRetained - supplierRetained), 2);
+                    }
+                    else
+                    {
+                        var grossCustomer = x.TotalPriceInr > 0 ? x.TotalPriceInr : (x.CustomerFareInr > 0 ? x.CustomerFareInr : (x.BaseFareInr + x.MarkupAmountInr + x.ConvenienceFeeInr));
+                        calculatedProfit = Math.Round(Math.Max(0m, grossCustomer - x.NetFareInr), 2);
+                    }
+
                     return new
                     {
                         x.Id,
@@ -2125,6 +2138,12 @@ namespace PickNBook.Api.Controllers
                         x.ConvenienceFeeInr,
                         x.BaseFareInr,
                         x.MarkupAmountInr,
+                        x.CancellationChargeInr,
+                        x.RefundAmountInr,
+                        x.CancellationReason,
+
+                        ProfitInr = calculatedProfit,
+                        CalculatedProfit = calculatedProfit,
 
                         x.CouponCode,
                         x.AutoPromotionCode,

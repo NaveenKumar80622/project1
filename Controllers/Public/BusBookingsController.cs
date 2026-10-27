@@ -3518,7 +3518,8 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = curBooking.CouponDiscountAmountInr + curBooking.AutoDiscountAmountInr + curBooking.FeaturedOfferDiscountAmount,
                         ConvenienceFee = curBooking.ConvenienceFeeInr,
                         SupplierCancellationCharge = srdvCancellationCharge,
-                        SupplierRefundAmount = srdvRefundAmount
+                        SupplierRefundAmount = srdvRefundAmount,
+                        ServiceCharge = 35.00m
                     };
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);
@@ -3543,7 +3544,7 @@ namespace PickNBook.Api.Controllers
                             ? "Cancelled by user"
                             : reason.Trim();
 
-                        curBooking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                        curBooking.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
                         curBooking.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                         if (isSupplierRefundSettled)
                         {
@@ -3984,7 +3985,8 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = (curBooking.CouponDiscountAmountInr + curBooking.AutoDiscountAmountInr + curBooking.FeaturedOfferDiscountAmount) * proportion,
                         ConvenienceFee = curBooking.ConvenienceFeeInr * proportion,
                         SupplierCancellationCharge = srdvCancellationCharge,
-                        SupplierRefundAmount = srdvRefundAmount
+                        SupplierRefundAmount = srdvRefundAmount,
+                        ServiceCharge = 35.00m
                     };
 
                     var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);
@@ -3993,7 +3995,7 @@ namespace PickNBook.Api.Controllers
 
                     if (cancellationConfirmed)
                     {
-                        curBooking.CancellationChargeInr = (curBooking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                        curBooking.CancellationChargeInr = (curBooking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
                         curBooking.RefundAmountInr = (curBooking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
                         if (isSupplierRefundSettled)
                         {
@@ -5804,7 +5806,8 @@ Refund: ₹{currentRefundAmount}
                 DiscountAmount = (booking.CouponDiscountAmountInr + booking.AutoDiscountAmountInr + booking.FeaturedOfferDiscountAmount) * proportion,
                 ConvenienceFee = booking.ConvenienceFeeInr * proportion,
                 SupplierCancellationCharge = srdvCancellationCharge,
-                SupplierRefundAmount = srdvRefundAmount
+                SupplierRefundAmount = srdvRefundAmount,
+                ServiceCharge = 35.00m
             };
             var calculatedRefund = refundCalculator.CalculateCustomerRefund(refundInput);
 
@@ -5812,7 +5815,7 @@ Refund: ₹{currentRefundAmount}
 
             if (cancellationConfirmed)
             {
-                booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                booking.CancellationChargeInr = (booking.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
                 booking.RefundAmountInr = (booking.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
                 if (isSupplierRefundSettled)
                 {

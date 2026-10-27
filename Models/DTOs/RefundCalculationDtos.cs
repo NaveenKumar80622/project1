@@ -9,12 +9,14 @@ namespace PickNBook.Api.Models.DTOs
         public decimal ConvenienceFee { get; set; }
         public decimal SupplierCancellationCharge { get; set; }
         public decimal SupplierRefundAmount { get; set; }
+        public decimal ServiceCharge { get; set; } = 0m;
     }
 
     public class RefundCalculationResult
     {
         public decimal SupplierRefundAmount { get; set; }
         public decimal SupplierCancellationCharge { get; set; }
+        public decimal ServiceChargeRetained { get; set; } = 0m;
         public decimal MarkupRefunded { get; set; }
         public decimal MarkupRetained { get; set; }
         public decimal CouponForfeited { get; set; }

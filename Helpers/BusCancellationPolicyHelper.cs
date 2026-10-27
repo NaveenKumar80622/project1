@@ -277,6 +277,7 @@ namespace PickNBook.Api.Helpers
                 if (tierSuppCharge < 0) tierSuppCharge = 0m;
                 decimal tierSuppRefund = Math.Max(0m, proportionalNetFare - tierSuppCharge);
 
+                const decimal srdvBusServiceCharge = 35.00m;
                 decimal tierCustomerRefund;
                 if (refundCalculator != null)
                 {
@@ -288,13 +289,14 @@ namespace PickNBook.Api.Helpers
                         DiscountAmount = proportionalDiscount,
                         ConvenienceFee = proportionalConvenienceFee,
                         SupplierCancellationCharge = tierSuppCharge,
-                        SupplierRefundAmount = tierSuppRefund
+                        SupplierRefundAmount = tierSuppRefund,
+                        ServiceCharge = srdvBusServiceCharge
                     });
                     tierCustomerRefund = calc.FinalCustomerRefundAmount;
                 }
                 else
                 {
-                    tierCustomerRefund = Math.Max(0m, Math.Min(proportionalPaid, tierSuppRefund - proportionalDiscount));
+                    tierCustomerRefund = Math.Max(0m, Math.Min(proportionalPaid - srdvBusServiceCharge, tierSuppRefund - srdvBusServiceCharge - proportionalDiscount));
                 }
 
                 decimal tierDeduction = Math.Max(0m, proportionalPaid - tierCustomerRefund);
@@ -323,7 +325,8 @@ namespace PickNBook.Api.Helpers
                     PolicyString = tier.Policy.PolicyString,
                     IsActive = isActive,
                     EstimatedDeduction = decimal.Round(tierDeduction, 2),
-                    EstimatedRefund = decimal.Round(tierCustomerRefund, 2)
+                    EstimatedRefund = decimal.Round(tierCustomerRefund, 2),
+                    ServiceCharge = srdvBusServiceCharge
                 });
             }
 
@@ -370,7 +373,8 @@ namespace PickNBook.Api.Helpers
                     DiscountAmount = proportionalDiscount,
                     ConvenienceFee = proportionalConvenienceFee,
                     SupplierCancellationCharge = finalSupplierCharge,
-                    SupplierRefundAmount = finalSupplierRefund
+                    SupplierRefundAmount = finalSupplierRefund,
+                    ServiceCharge = 35.00m
                 });
 
                 customerRefundAmount = refundResult.FinalCustomerRefundAmount;
@@ -380,7 +384,7 @@ namespace PickNBook.Api.Helpers
             }
             else if (canCancel)
             {
-                customerRefundAmount = Math.Max(0m, Math.Min(proportionalPaid, finalSupplierRefund - proportionalDiscount));
+                customerRefundAmount = Math.Max(0m, Math.Min(proportionalPaid - 35.00m, finalSupplierRefund - 35.00m - proportionalDiscount));
                 supplierFeeBreakdown = finalSupplierCharge;
             }
             else
@@ -428,6 +432,7 @@ namespace PickNBook.Api.Helpers
                 {
                     CustomerPaid = decimal.Round(proportionalPaid, 2),
                     SupplierCancellationCharge = decimal.Round(supplierFeeBreakdown, 2),
+                    ServiceCharge = 35.00m,
                     NonRefundableConvenienceFee = decimal.Round(convenienceFeeRetained, 2),
                     CouponForfeited = decimal.Round(couponForfeited, 2),
                     NetCustomerRefund = decimal.Round(customerRefundAmount, 2)

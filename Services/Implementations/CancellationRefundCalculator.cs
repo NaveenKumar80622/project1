@@ -28,21 +28,26 @@ namespace PickNBook.Api.Services.Implementations
             decimal couponForfeited = _refundOptions.RefundCoupon ? 0m : input.DiscountAmount;
             decimal couponRefunded = input.DiscountAmount - couponForfeited;
 
-            decimal customerRefund = supplierRefund + markupRefunded + feeRefunded - couponForfeited;
+            decimal serviceCharge = input.ServiceCharge;
+
+            decimal customerRefund = supplierRefund - serviceCharge + markupRefunded + feeRefunded - couponForfeited;
 
             if (customerRefund < 0)
             {
                 customerRefund = 0;
             }
-            if (customerRefund > input.OriginalCustomerPaid)
+            decimal maxRefund = input.OriginalCustomerPaid - serviceCharge;
+            if (maxRefund < 0) maxRefund = 0;
+            if (customerRefund > maxRefund)
             {
-                customerRefund = input.OriginalCustomerPaid;
+                customerRefund = maxRefund;
             }
 
             return new RefundCalculationResult
             {
                 SupplierRefundAmount = supplierRefund,
                 SupplierCancellationCharge = input.SupplierCancellationCharge,
+                ServiceChargeRetained = serviceCharge,
                 MarkupRefunded = markupRefunded,
                 MarkupRetained = markupRetained,
                 FeeRefunded = feeRefunded,

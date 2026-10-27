@@ -14,12 +14,14 @@ namespace PickNBook.Api.Models.DTOs
         public bool IsActive { get; set; }
         public decimal EstimatedDeduction { get; set; }
         public decimal EstimatedRefund { get; set; }
+        public decimal ServiceCharge { get; set; } = 35.00m;
     }
 
     public class BusCancellationBreakdownDto
     {
         public decimal CustomerPaid { get; set; }
         public decimal SupplierCancellationCharge { get; set; }
+        public decimal ServiceCharge { get; set; } = 35.00m;
         public decimal NonRefundableConvenienceFee { get; set; }
         public decimal CouponForfeited { get; set; }
         public decimal NetCustomerRefund { get; set; }
