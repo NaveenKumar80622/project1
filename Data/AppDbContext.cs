@@ -153,6 +153,8 @@ namespace PickNBook.Api.Data
         {
             base.OnModelCreating(modelBuilder);
 
+            modelBuilder.Entity<FlightReservationSegment>().ToTable("FlightReservationSegment");
+
             // =============================
             // CASHFREE PAYMENTS CONFIG
             // =============================

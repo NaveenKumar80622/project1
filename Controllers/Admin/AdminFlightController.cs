@@ -29,6 +29,7 @@ namespace PickNBook.Api.Controllers
         public async Task<IActionResult> GetBookingList(
             [FromQuery] string? status,
             [FromQuery] string? pnr,
+            [FromQuery] string? passengerPhone,
             [FromQuery] DateOnly? journeyDate,
             [FromQuery] int limit = 200)
         {
@@ -44,10 +45,35 @@ namespace PickNBook.Api.Controllers
                 .Include(x => x.Segments)
                 .AsQueryable();
 
+            // Exclude cancelled bookings at DB query level (only active bookings should be fetched)
+            queryable = queryable.Where(x => x.CancelledAtUtc == null &&
+                                             x.Status != "Cancelled" &&
+                                             x.Status != "CancellationPending" &&
+                                             x.Status != "PartiallyCancelled" &&
+                                             (x.Status == null || !x.Status.Contains("Cancel")));
+
             if (!string.IsNullOrWhiteSpace(pnr))
             {
                 var normalized = pnr.Trim();
                 queryable = queryable.Where(x => EF.Functions.Like(x.Pnr, normalized) || EF.Functions.Like(x.BookingReference, normalized));
+            }
+
+            if (!string.IsNullOrWhiteSpace(passengerPhone))
+            {
+                queryable = queryable.Where(x => x.PassengerPhone.Contains(passengerPhone.Trim()));
+            }
+
+            if (!string.IsNullOrWhiteSpace(status) && !status.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                var s = status.Trim();
+                if (s.Equals("Booked", StringComparison.OrdinalIgnoreCase) || s.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || s.Equals("Success", StringComparison.OrdinalIgnoreCase))
+                {
+                    queryable = queryable.Where(x => x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "Success" || x.Status == "SUCCESS");
+                }
+                else if (!s.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
+                {
+                    queryable = queryable.Where(x => x.Status == s);
+                }
             }
 
             if (journeyDate.HasValue)
@@ -213,9 +239,13 @@ namespace PickNBook.Api.Controllers
                     ArrivalTimeIst = ToIst(x.ArrivalTime)
                 };
             })
-            .Where(x => !string.IsNullOrWhiteSpace(status) && !status.Equals("all", StringComparison.OrdinalIgnoreCase)
-                ? x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase)
-                : true)
+            .Where(x => !string.Equals(x.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) &&
+                        !x.Status.Contains("Cancel", StringComparison.OrdinalIgnoreCase) &&
+                        (!string.IsNullOrWhiteSpace(status) && !status.Trim().Equals("all", StringComparison.OrdinalIgnoreCase)
+                            ? (x.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                               (status.Trim().Equals("Booked", StringComparison.OrdinalIgnoreCase) && (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS")) ||
+                               (status.Trim().Equals("Confirmed", StringComparison.OrdinalIgnoreCase) && (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS")))
+                            : true))
             .ToList();
 
             return Ok(response);

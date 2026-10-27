@@ -52,9 +52,30 @@ public class AdminHotelController : AdminApiController
         {
             var query = _context.HotelReservations.AsQueryable();
 
+            // Exclude cancelled bookings at DB query level (only active bookings should be fetched)
+            query = query.Where(b => b.CancelledAt == null &&
+                                     b.Status != "Cancelled" &&
+                                     b.Status != "CancellationPending" &&
+                                     b.Status != "PartiallyCancelled" &&
+                                     b.Status != "Partially Cancelled" &&
+                                     (b.Status == null || !b.Status.Contains("Cancel")));
+
             if (!string.IsNullOrWhiteSpace(passengerPhone))
             {
                 query = query.Where(b => b.GuestPhone.Contains(passengerPhone.Trim()));
+            }
+
+            if (!string.IsNullOrWhiteSpace(status) && !status.Trim().Equals("all", StringComparison.OrdinalIgnoreCase))
+            {
+                var s = status.Trim();
+                if (s.Equals("Booked", StringComparison.OrdinalIgnoreCase) || s.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || s.Equals("Success", StringComparison.OrdinalIgnoreCase))
+                {
+                    query = query.Where(b => b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS" || b.Status == "Success");
+                }
+                else if (!s.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
+                {
+                    query = query.Where(b => b.Status == s);
+                }
             }
 
 
@@ -190,12 +211,13 @@ public class AdminHotelController : AdminApiController
                     BookedAt = b.CreatedAt != DateTime.MinValue ? b.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ss") : ""
                 };
             })
-            .Where(b => !string.IsNullOrWhiteSpace(status)
-                ? (status.Trim().Equals("all", StringComparison.OrdinalIgnoreCase) ||
-                   b.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase) ||
-                   (status.Trim().Equals("Booked", StringComparison.OrdinalIgnoreCase) && (b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS")) ||
-                   (status.Trim().Equals("Confirmed", StringComparison.OrdinalIgnoreCase) && (b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS")))
-                : (b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS" || b.Status == "Cancelled" || b.Status == "CancellationPending" || b.Status == "PartiallyCancelled" || b.Status == "Partially Cancelled"))
+            .Where(b => !string.Equals(b.Status, "Cancelled", StringComparison.OrdinalIgnoreCase) &&
+                        !b.Status.Contains("Cancel", StringComparison.OrdinalIgnoreCase) &&
+                        (!string.IsNullOrWhiteSpace(status) && !status.Trim().Equals("all", StringComparison.OrdinalIgnoreCase)
+                            ? (b.Status.Equals(status.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                               (status.Trim().Equals("Booked", StringComparison.OrdinalIgnoreCase) && (b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS")) ||
+                               (status.Trim().Equals("Confirmed", StringComparison.OrdinalIgnoreCase) && (b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS")))
+                            : (b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS")))
             .ToList();
 
             return Ok(list);
