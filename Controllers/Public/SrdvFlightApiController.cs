@@ -3938,10 +3938,14 @@ namespace PickNBook.Api.Controllers.Public
                                  (p.PaymentReference != null && bookingRefs.Contains(p.PaymentReference))))
                     .ToListAsync();
 
-                var walletTxMap = await _dbContext.WalletTransactions.AsNoTracking()
+                var walletTxList = await _dbContext.WalletTransactions.AsNoTracking()
                     .Where(w => bookingRefs.Contains(w.RefCode ?? ""))
+                    .ToListAsync();
+
+                var walletTxMap = walletTxList
+                    .Where(w => !string.IsNullOrEmpty(w.RefCode))
                     .GroupBy(w => w.RefCode!)
-                    .ToDictionaryAsync(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
+                    .ToDictionary(g => g.Key, g => g.OrderByDescending(w => w.Id).First());
 
                 var paymentMapById = payments
                     .Where(p => p.BookingId.HasValue)
@@ -4285,6 +4289,124 @@ namespace PickNBook.Api.Controllers.Public
             {
                 _logger.LogError(ex, "Failed to retrieve flight bookings for user {UserId}", User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value);
                 return StatusCode(500, new { message = "Failed to retrieve flight bookings history." });
+            }
+        }
+
+        [Authorize]
+        [HttpGet("bookings/{bookingId}/voucher")]
+        [HttpGet("/api/flight/bookings/{bookingId}/voucher")]
+        [HttpGet("/api/flight/srdv/bookings/{bookingId}/voucher")]
+        public async Task<IActionResult> DownloadVoucher(string bookingId)
+        {
+            var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userId))
+            {
+                return Unauthorized(new { message = "User is not authenticated." });
+            }
+
+            int? parsedId = int.TryParse(bookingId, out int bid) ? bid : null;
+            var booking = await _dbContext.FlightReservations
+                .AsNoTracking()
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || User.IsInRole("Admin")));
+
+            if (booking == null)
+            {
+                return NotFound(new { message = "Flight booking not found." });
+            }
+
+            if (booking.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) || booking.Status.Equals("Payment Failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Voucher is not available for an unconfirmed or failed booking." });
+            }
+
+            try
+            {
+                global::User? agentInfo = null;
+                if (int.TryParse(booking.UserId, out var aId) && aId > 0)
+                {
+                    agentInfo = await _dbContext.Users.FindAsync(aId);
+                }
+
+                var passengers = await _dbContext.FlightReservationPassengers
+                    .AsNoTracking()
+                    .Where(p => p.FlightReservationId == booking.Id)
+                    .Select(p => new FlightPassengerTicketDto
+                    {
+                        FullName = p.FullName,
+                        PassengerType = p.PassengerType,
+                        Gender = p.Gender,
+                        SeatNumber = p.SeatNumber,
+                        TicketNumber = p.TicketNumber
+                    }).ToListAsync();
+
+                var segments = await _dbContext.FlightReservationSegments
+                    .AsNoTracking()
+                    .Where(s => s.FlightReservationId == booking.Id)
+                    .Select(s => new FlightTicketSegmentDto
+                    {
+                        Airline = s.Airline,
+                        FlightNumber = s.FlightNumber,
+                        FromCity = s.FromCity,
+                        ToCity = s.ToCity,
+                        DepartureTime = s.DepartureTime,
+                        ArrivalTime = s.ArrivalTime,
+                        Pnr = s.Pnr,
+                        Status = s.Status
+                    }).ToListAsync();
+
+                var emailReq = new SendFlightTicketEmailRequest
+                {
+                    ToEmail = string.IsNullOrEmpty(booking.PassengerEmail) ? (agentInfo?.Email ?? "") : booking.PassengerEmail,
+                    PassengerName = booking.PassengerName,
+                    BookingReference = booking.BookingReference,
+                    Airline = booking.Airline,
+                    Origin = booking.FromCity,
+                    Destination = booking.ToCity,
+                    DepartureTime = booking.DepartureTime,
+                    ArrivalTime = booking.ArrivalTime,
+                    Pnr = booking.Pnr,
+                    Price = booking.TotalPriceInr,
+                    Currency = "INR",
+                    NonRefundable = booking.NonRefundable,
+                    CancellationCharges = booking.CancellationCharges,
+                    PartialSegmentCancellation = booking.PartialSegmentCancellation,
+                    AgentCompanyName = agentInfo?.CompanyName,
+                    AgentLogoUrl = agentInfo?.AgentLogoUrl,
+                    Passengers = passengers,
+                    Segments = segments
+                };
+
+                var ticketPdfService = HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.ITicketPdfService>();
+                var pdfs = ticketPdfService.GenerateFlightTicketPdf(emailReq);
+
+                if (pdfs == null || pdfs.Count == 0)
+                {
+                    return StatusCode(500, new { message = "Failed to generate flight ticket PDF." });
+                }
+
+                if (pdfs.Count == 1)
+                {
+                    return File(pdfs[0].Content, "application/pdf", $"flight-voucher-{booking.BookingReference}.pdf");
+                }
+
+                using var outDoc = new PdfSharpCore.Pdf.PdfDocument();
+                foreach (var (_, content) in pdfs)
+                {
+                    using var inStream = new MemoryStream(content);
+                    using var inDoc = PdfSharpCore.Pdf.IO.PdfReader.Open(inStream, PdfSharpCore.Pdf.IO.PdfDocumentOpenMode.Import);
+                    for (int i = 0; i < inDoc.PageCount; i++)
+                    {
+                        outDoc.AddPage(inDoc.Pages[i]);
+                    }
+                }
+                using var outStream = new MemoryStream();
+                outDoc.Save(outStream, false);
+                return File(outStream.ToArray(), "application/pdf", $"flight-voucher-{booking.BookingReference}.pdf");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to generate flight ticket PDF for booking {Id}", booking.Id);
+                return StatusCode(500, new { message = "Failed to generate voucher PDF: " + ex.Message });
             }
         }
 

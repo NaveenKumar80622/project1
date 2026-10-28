@@ -2023,6 +2023,13 @@ namespace PickNBook.Api.Controllers
                 .Include(x => x.BusBooking)
                 .AsQueryable();
 
+            // Exclude cancelled bookings at DB query level (only active/confirmed bookings should be fetched)
+            queryable = queryable.Where(x => x.CancelledAtUtc == null &&
+                                             x.Status != "Cancelled" &&
+                                             x.Status != "CancellationPending" &&
+                                             x.Status != "PartiallyCancelled" &&
+                                             (x.Status == null || !x.Status.Contains("Cancel")));
+
             if (!string.IsNullOrWhiteSpace(passengerPhone))
             {
                 var phone = passengerPhone.Trim();
@@ -2042,7 +2049,7 @@ namespace PickNBook.Api.Controllers
                     {
                         queryable = queryable.Where(x => x.Status == "Booked" || x.Status == "SUCCESS" || x.Status == "Confirmed" || x.Status == "Success");
                     }
-                    else
+                    else if (!normalizedStatus.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
                     {
                         queryable = queryable.Where(x => EF.Functions.Like(x.Status, normalizedStatus));
                     }
@@ -2101,12 +2108,21 @@ namespace PickNBook.Api.Controllers
                     {
                         var customerRetained = x.TotalPriceInr - (x.RefundAmountInr ?? 0m);
                         var supplierRetained = Math.Max(0m, x.NetFareInr - (x.RefundAmountInr ?? 0m));
-                        calculatedProfit = Math.Round(Math.Max(0m, customerRetained - supplierRetained), 2);
+                        calculatedProfit = Math.Round(customerRetained - supplierRetained, 2);
                     }
                     else
                     {
-                        var grossCustomer = x.TotalPriceInr > 0 ? x.TotalPriceInr : (x.CustomerFareInr > 0 ? x.CustomerFareInr : (x.BaseFareInr + x.MarkupAmountInr + x.ConvenienceFeeInr));
-                        calculatedProfit = Math.Round(Math.Max(0m, grossCustomer - x.NetFareInr), 2);
+                        var totalDiscount = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : (x.AutoDiscountAmountInr + x.CouponDiscountAmountInr + x.FeaturedOfferDiscountAmount);
+                        var directProfit = (x.MarkupAmountInr + x.ConvenienceFeeInr) - totalDiscount;
+                        if (x.MarkupAmountInr > 0 || x.ConvenienceFeeInr > 0 || totalDiscount > 0)
+                        {
+                            calculatedProfit = Math.Round(directProfit, 2);
+                        }
+                        else
+                        {
+                            var grossCustomer = x.TotalPriceInr > 0 ? x.TotalPriceInr : (x.CustomerFareInr > 0 ? x.CustomerFareInr : (x.BaseFareInr + x.MarkupAmountInr + x.ConvenienceFeeInr));
+                            calculatedProfit = Math.Round(grossCustomer - x.NetFareInr, 2);
+                        }
                     }
 
                     return new

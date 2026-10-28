@@ -3276,6 +3276,94 @@ namespace PickNBook.Api.Controllers
             return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle, payment, fallbackPaymentId, refundCalculator, srdvBusService));
         }
 
+        [HttpGet("bookings/{bookingId}/voucher")]
+        [HttpGet("/api/bus/bookings/{bookingId}/voucher")]
+        public async Task<IActionResult> DownloadVoucher(string bookingId)
+        {
+            if (!currentUserService.IsAuthenticated())
+            {
+                return Unauthorized("Please login to continue.");
+            }
+            var userId = currentUserService.GetUserOrGuestId();
+
+            int? parsedId = int.TryParse(bookingId, out int bid) ? bid : null;
+            var booking = await dbContext.BusReservations
+                .AsNoTracking()
+                .Include(x => x.BusBooking)
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || User.IsInRole("Admin")));
+
+            if (booking is null || booking.BusBooking is null)
+            {
+                return NotFound(new { message = "Bus booking not found." });
+            }
+
+            if (booking.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) || booking.Status.Equals("Payment Failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Voucher is not available for an unconfirmed or failed booking." });
+            }
+
+            try
+            {
+                var passengers = await dbContext.BusReservationPassengers
+                    .AsNoTracking()
+                    .Where(x => x.BusReservationId == booking.Id)
+                    .OrderBy(x => x.Id)
+                    .ToListAsync();
+
+                var emailReq = new SendBusTicketEmailRequest
+                {
+                    ToEmail = booking.PassengerEmail ?? "",
+                    PassengerName = booking.PassengerName,
+                    BookingReference = booking.BookingReference,
+                    Pnr = booking.Pnr,
+                    OperatorName = booking.BusBooking.OperatorName,
+                    BusType = booking.BusBooking.BusType,
+                    Origin = srdvBusService.MapCityCodeToName(booking.BusBooking.FromCity),
+                    Destination = srdvBusService.MapCityCodeToName(booking.BusBooking.ToCity),
+                    DepartureTime = booking.BusBooking.DepartureTime,
+                    BoardingPointTime = booking.BoardingPointTime ?? booking.BusBooking.DepartureTime,
+                    ArrivalPointTime = booking.DroppingPointTime ?? booking.BusBooking.ArrivalTime,
+                    IsOvernightArrival = booking.BusBooking.ArrivalTime.Date > booking.BusBooking.DepartureTime.Date,
+                    BoardingPoint = !string.IsNullOrWhiteSpace(booking.BoardingPointName) ? booking.BoardingPointName : booking.BusBooking.BoardingPoint,
+                    ArrivalPoint = !string.IsNullOrWhiteSpace(booking.DroppingPointName) ? booking.DroppingPointName : (!string.IsNullOrWhiteSpace(booking.BusBooking.DroppingPoint) ? booking.BusBooking.DroppingPoint : booking.BusBooking.ToCity),
+                    BookedAtUtc = booking.BookedAtUtc,
+                    CancelledAtUtc = booking.CancelledAtUtc ?? DateTime.UtcNow,
+
+                    Price = booking.TotalPriceInr,
+                    BaseFare = booking.BaseFareInr,
+                    Currency = "INR",
+                    TotalFareBeforeDiscount = booking.TotalPriceInr + booking.DiscountAmountInr,
+                    CancellationPoliciesJson = booking.BusBooking?.CancellationPoliciesJson ?? booking.CancellationPolicyJson,
+
+                    NetFare = booking.NetFareInr,
+                    GstPercent = booking.GstPercent,
+                    GstAmount = booking.GstAmountInr,
+
+                    AppliedPromotionCode = booking.AppliedPromotionCode,
+                    AppliedPromotionType = booking.AppliedPromotionType,
+                    DiscountSource = booking.DiscountSource,
+                    DiscountAmount = booking.DiscountAmountInr > 0 ? booking.DiscountAmountInr : null,
+
+                    Passengers = passengers.Select(p => new BusPassengerSeatDto
+                    {
+                        FullName = p.FullName,
+                        SeatNumber = p.SeatNumber,
+                        Gender = p.Gender
+                    }).ToList()
+                };
+
+                var ticketPdfService = HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.ITicketPdfService>();
+                var pdfBytes = ticketPdfService.GenerateBusTicketPdf(emailReq, isCancelled: booking.Status == "Cancelled", refundAmount: booking.RefundAmountInr ?? 0m);
+                var filename = $"bus-voucher-{(string.IsNullOrWhiteSpace(booking.BookingReference) ? booking.Id.ToString() : booking.BookingReference)}.pdf";
+                return File(pdfBytes, "application/pdf", filename);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to generate bus ticket PDF for booking {Id}", booking.Id);
+                return StatusCode(500, new { message = "Failed to generate voucher PDF: " + ex.Message });
+            }
+        }
+
         [HttpGet("bookings/{bookingId:int}/cancellation-quote")]
         public async Task<IActionResult> GetBusCancellationQuote(
             int bookingId,
