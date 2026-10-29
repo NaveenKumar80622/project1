@@ -831,6 +831,7 @@ namespace PickNBook.Api.Models.DTOs
         public string? BookingId { get; set; } // maps to SrdvBookingId
         public string? PNR { get; set; }
         public string? ReturnPnr { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
         public string? ReturnPNR => ReturnPnr;
         public string? SrdvType { get; set; }
         public string? SrdvIndex { get; set; }

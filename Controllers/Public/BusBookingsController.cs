@@ -3276,7 +3276,6 @@ namespace PickNBook.Api.Controllers
             return Ok(MapBusReservation(booking, booking.BusBooking, passengers, lifecycle, payment, fallbackPaymentId, refundCalculator, srdvBusService));
         }
 
-        [HttpGet("bookings/{bookingId}/voucher")]
         [HttpGet("/api/bus/bookings/{bookingId}/voucher")]
         public async Task<IActionResult> DownloadVoucher(string bookingId)
         {
@@ -3286,16 +3285,28 @@ namespace PickNBook.Api.Controllers
             }
             var userId = currentUserService.GetUserOrGuestId();
 
+            bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
             int? parsedId = int.TryParse(bookingId, out int bid) ? bid : null;
             var booking = await dbContext.BusReservations
                 .AsNoTracking()
                 .Include(x => x.BusBooking)
-                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || User.IsInRole("Admin")));
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || isAdmin));
 
-            if (booking is null || booking.BusBooking is null)
+            if (booking is null)
             {
                 return NotFound(new { message = "Bus booking not found." });
             }
+
+            var bus = booking.BusBooking ?? new BusBooking
+            {
+                FromCity = "Unknown",
+                ToCity = "Unknown",
+                OperatorName = "Bus Operator",
+                BusType = "Bus",
+                DepartureTime = booking.BookedAtUtc,
+                ArrivalTime = booking.BookedAtUtc.AddHours(4),
+                BusNumber = "N/A"
+            };
 
             if (booking.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) || booking.Status.Equals("Payment Failed", StringComparison.OrdinalIgnoreCase))
             {
@@ -3316,16 +3327,16 @@ namespace PickNBook.Api.Controllers
                     PassengerName = booking.PassengerName,
                     BookingReference = booking.BookingReference,
                     Pnr = booking.Pnr,
-                    OperatorName = booking.BusBooking.OperatorName,
-                    BusType = booking.BusBooking.BusType,
-                    Origin = srdvBusService.MapCityCodeToName(booking.BusBooking.FromCity),
-                    Destination = srdvBusService.MapCityCodeToName(booking.BusBooking.ToCity),
-                    DepartureTime = booking.BusBooking.DepartureTime,
-                    BoardingPointTime = booking.BoardingPointTime ?? booking.BusBooking.DepartureTime,
-                    ArrivalPointTime = booking.DroppingPointTime ?? booking.BusBooking.ArrivalTime,
-                    IsOvernightArrival = booking.BusBooking.ArrivalTime.Date > booking.BusBooking.DepartureTime.Date,
-                    BoardingPoint = !string.IsNullOrWhiteSpace(booking.BoardingPointName) ? booking.BoardingPointName : booking.BusBooking.BoardingPoint,
-                    ArrivalPoint = !string.IsNullOrWhiteSpace(booking.DroppingPointName) ? booking.DroppingPointName : (!string.IsNullOrWhiteSpace(booking.BusBooking.DroppingPoint) ? booking.BusBooking.DroppingPoint : booking.BusBooking.ToCity),
+                    OperatorName = bus.OperatorName,
+                    BusType = bus.BusType,
+                    Origin = srdvBusService.MapCityCodeToName(bus.FromCity),
+                    Destination = srdvBusService.MapCityCodeToName(bus.ToCity),
+                    DepartureTime = bus.DepartureTime,
+                    BoardingPointTime = booking.BoardingPointTime ?? bus.DepartureTime,
+                    ArrivalPointTime = booking.DroppingPointTime ?? bus.ArrivalTime,
+                    IsOvernightArrival = bus.ArrivalTime.Date > bus.DepartureTime.Date,
+                    BoardingPoint = !string.IsNullOrWhiteSpace(booking.BoardingPointName) ? booking.BoardingPointName : bus.BoardingPoint,
+                    ArrivalPoint = !string.IsNullOrWhiteSpace(booking.DroppingPointName) ? booking.DroppingPointName : (!string.IsNullOrWhiteSpace(bus.DroppingPoint) ? bus.DroppingPoint : bus.ToCity),
                     BookedAtUtc = booking.BookedAtUtc,
                     CancelledAtUtc = booking.CancelledAtUtc ?? DateTime.UtcNow,
 

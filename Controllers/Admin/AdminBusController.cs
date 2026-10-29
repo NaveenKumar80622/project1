@@ -21,7 +21,8 @@ namespace PickNBook.Api.Controllers
         PickNBook.Api.Services.ISrdvBusService srdvBusService, 
         IMemoryCache cache,
         PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
-        ITicketEmailService ticketEmailService) : AdminApiController
+        ITicketEmailService ticketEmailService,
+        ITicketPdfService ticketPdfService) : AdminApiController
     {
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static readonly string[] AllowedDiscountTypes = ["Percentage", "Fixed"];
@@ -2103,6 +2104,16 @@ namespace PickNBook.Api.Controllers
 
                     var (cleanPnr, opPnr) = ResolvePnrAndOperatorPnr(x.Pnr, x.SrdvBookingId, x.SrdvBookingResponseJson);
 
+                    decimal srdvMargin = passengerRows.Sum(p =>
+                        (p.PublishedFareInr.HasValue && p.OfferedFareInr.HasValue && p.PublishedFareInr.Value > p.OfferedFareInr.Value)
+                            ? (p.PublishedFareInr.Value - p.OfferedFareInr.Value)
+                            : 0m);
+
+                    if (srdvMargin == 0m && x.TotalPriceInr > x.NetFareInr && (x.MarkupAmountInr == 0 && x.ConvenienceFeeInr == 0))
+                    {
+                        srdvMargin = Math.Max(0m, x.TotalPriceInr - x.NetFareInr);
+                    }
+
                     decimal calculatedProfit;
                     if (string.Equals(x.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
                     {
@@ -2113,8 +2124,8 @@ namespace PickNBook.Api.Controllers
                     else
                     {
                         var totalDiscount = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : (x.AutoDiscountAmountInr + x.CouponDiscountAmountInr + x.FeaturedOfferDiscountAmount);
-                        var directProfit = (x.MarkupAmountInr + x.ConvenienceFeeInr) - totalDiscount;
-                        if (x.MarkupAmountInr > 0 || x.ConvenienceFeeInr > 0 || totalDiscount > 0)
+                        var directProfit = srdvMargin + (x.MarkupAmountInr + x.ConvenienceFeeInr) - totalDiscount;
+                        if (srdvMargin > 0 || x.MarkupAmountInr > 0 || x.ConvenienceFeeInr > 0 || totalDiscount > 0)
                         {
                             calculatedProfit = Math.Round(directProfit, 2);
                         }
@@ -2160,6 +2171,7 @@ namespace PickNBook.Api.Controllers
 
                         ProfitInr = calculatedProfit,
                         CalculatedProfit = calculatedProfit,
+                        SrdvMarginInr = srdvMargin,
 
                         x.CouponCode,
                         x.AutoPromotionCode,
@@ -2313,6 +2325,91 @@ namespace PickNBook.Api.Controllers
             }
 
             return (cleanPnr, opPnr);
+        }
+
+        [HttpGet("bookings/{id}/voucher")]
+        public async Task<IActionResult> DownloadVoucher(string id)
+        {
+            int? parsedId = int.TryParse(id, out int bid) ? bid : null;
+            var booking = await dbContext.BusReservations
+                .AsNoTracking()
+                .Include(x => x.BusBooking)
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == id || x.Pnr == id));
+
+            if (booking is null)
+            {
+                return NotFound(new { message = "Bus booking not found." });
+            }
+
+            var bus = booking.BusBooking ?? new BusBooking
+            {
+                FromCity = "Unknown",
+                ToCity = "Unknown",
+                OperatorName = "Bus Operator",
+                BusType = "Bus",
+                DepartureTime = booking.BookedAtUtc,
+                ArrivalTime = booking.BookedAtUtc.AddHours(4),
+                BusNumber = "N/A"
+            };
+
+            try
+            {
+                var passengers = await dbContext.BusReservationPassengers
+                    .AsNoTracking()
+                    .Where(x => x.BusReservationId == booking.Id)
+                    .OrderBy(x => x.Id)
+                    .ToListAsync();
+
+                var emailReq = new SendBusTicketEmailRequest
+                {
+                    ToEmail = booking.PassengerEmail ?? "",
+                    PassengerName = booking.PassengerName,
+                    BookingReference = booking.BookingReference,
+                    Pnr = booking.Pnr,
+                    OperatorName = bus.OperatorName,
+                    BusType = bus.BusType,
+                    Origin = srdvBusService.MapCityCodeToName(bus.FromCity),
+                    Destination = srdvBusService.MapCityCodeToName(bus.ToCity),
+                    DepartureTime = bus.DepartureTime,
+                    BoardingPointTime = booking.BoardingPointTime ?? bus.DepartureTime,
+                    ArrivalPointTime = booking.DroppingPointTime ?? bus.ArrivalTime,
+                    IsOvernightArrival = bus.ArrivalTime.Date > bus.DepartureTime.Date,
+                    BoardingPoint = !string.IsNullOrWhiteSpace(booking.BoardingPointName) ? booking.BoardingPointName : bus.BoardingPoint,
+                    ArrivalPoint = !string.IsNullOrWhiteSpace(booking.DroppingPointName) ? booking.DroppingPointName : (!string.IsNullOrWhiteSpace(bus.DroppingPoint) ? bus.DroppingPoint : bus.ToCity),
+                    BookedAtUtc = booking.BookedAtUtc,
+                    CancelledAtUtc = booking.CancelledAtUtc ?? DateTime.UtcNow,
+
+                    Price = booking.TotalPriceInr,
+                    BaseFare = booking.BaseFareInr,
+                    Currency = "INR",
+                    TotalFareBeforeDiscount = booking.TotalPriceInr + booking.DiscountAmountInr,
+                    CancellationPoliciesJson = bus?.CancellationPoliciesJson ?? booking.CancellationPolicyJson,
+
+                    NetFare = booking.NetFareInr,
+                    GstPercent = booking.GstPercent,
+                    GstAmount = booking.GstAmountInr,
+
+                    AppliedPromotionCode = booking.AppliedPromotionCode,
+                    AppliedPromotionType = booking.AppliedPromotionType,
+                    DiscountSource = booking.DiscountSource,
+                    DiscountAmount = booking.DiscountAmountInr > 0 ? booking.DiscountAmountInr : null,
+
+                    Passengers = passengers.Select(p => new BusPassengerSeatDto
+                    {
+                        FullName = p.FullName,
+                        SeatNumber = p.SeatNumber,
+                        Gender = p.Gender
+                    }).ToList()
+                };
+
+                var pdfBytes = ticketPdfService.GenerateBusTicketPdf(emailReq, isCancelled: booking.Status == "Cancelled", refundAmount: booking.RefundAmountInr ?? 0m);
+                var filename = $"bus-voucher-{(string.IsNullOrWhiteSpace(booking.BookingReference) ? booking.Id.ToString() : booking.BookingReference)}.pdf";
+                return File(pdfBytes, "application/pdf", filename);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = "Failed to generate voucher PDF: " + ex.Message });
+            }
         }
     }
 }

@@ -4293,7 +4293,6 @@ namespace PickNBook.Api.Controllers.Public
         }
 
         [Authorize]
-        [HttpGet("bookings/{bookingId}/voucher")]
         [HttpGet("/api/flight/bookings/{bookingId}/voucher")]
         [HttpGet("/api/flight/srdv/bookings/{bookingId}/voucher")]
         public async Task<IActionResult> DownloadVoucher(string bookingId)
@@ -4304,10 +4303,11 @@ namespace PickNBook.Api.Controllers.Public
                 return Unauthorized(new { message = "User is not authenticated." });
             }
 
+            bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
             int? parsedId = int.TryParse(bookingId, out int bid) ? bid : null;
             var booking = await _dbContext.FlightReservations
                 .AsNoTracking()
-                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || User.IsInRole("Admin")));
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || isAdmin));
 
             if (booking == null)
             {
