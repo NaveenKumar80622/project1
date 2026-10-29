@@ -1589,6 +1589,16 @@ namespace PickNBook.Api.Services.Implementations
                     var request = JsonSerializer.Deserialize<TicketGDSRequestDto>(pending.BookingPayloadJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     if (request == null) return (false, "Invalid GDS flight booking payload.");
                     request.EndUserIp = "127.0.0.1";
+                    if (request.Passengers != null)
+                    {
+                        foreach (var p in request.Passengers)
+                        {
+                            if (string.IsNullOrWhiteSpace(p.AddressLine1)) p.AddressLine1 = "Main Street";
+                            if (string.IsNullOrWhiteSpace(p.City)) p.City = "Hyderabad";
+                            if (string.IsNullOrWhiteSpace(p.CountryCode)) p.CountryCode = "IN";
+                            if (string.IsNullOrWhiteSpace(p.CountryName)) p.CountryName = "India";
+                        }
+                    }
 
                     var responseRaw = await srdvFlightService.TicketGDSRawAsync(request);
                     var flightProxy = JsonSerializer.Deserialize<FlightTicketGDSProxyRequestDto>(pending.BookingPayloadJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
@@ -1599,6 +1609,16 @@ namespace PickNBook.Api.Services.Implementations
                     var request = JsonSerializer.Deserialize<TicketLCCRequestDto>(pending.BookingPayloadJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     if (request == null) return (false, "Invalid LCC flight booking payload.");
                     request.EndUserIp = "127.0.0.1";
+                    if (request.Passengers != null)
+                    {
+                        foreach (var p in request.Passengers)
+                        {
+                            if (string.IsNullOrWhiteSpace(p.AddressLine1)) p.AddressLine1 = "Main Street";
+                            if (string.IsNullOrWhiteSpace(p.City)) p.City = "Hyderabad";
+                            if (string.IsNullOrWhiteSpace(p.CountryCode)) p.CountryCode = "IN";
+                            if (string.IsNullOrWhiteSpace(p.CountryName)) p.CountryName = "India";
+                        }
+                    }
 
                     var responseRaw = await srdvFlightService.TicketLCCRawAsync(request);
                     var flightProxy = JsonSerializer.Deserialize<FlightTicketLCCProxyRequestDto>(pending.BookingPayloadJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });

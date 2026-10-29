@@ -317,6 +317,9 @@ namespace PickNBook.Api.Models.DTOs
 
         [JsonPropertyName("SrdvIndex")]
         public string? SrdvIndex { get; set; }
+
+        [JsonPropertyName("RefundPreference")]
+        public string? RefundPreference { get; set; } = "Original";
     }
 
     public class FlightGetCancelStatusProxyRequestDto

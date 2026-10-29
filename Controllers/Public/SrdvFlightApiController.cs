@@ -3201,6 +3201,7 @@ namespace PickNBook.Api.Controllers.Public
                             SrdvChangeRequestId = changeRequestId,
                             SrdvBookingId = bookingIdStr,
                             CustomerRemark = request.Remarks,
+                            RefundPreference = string.IsNullOrWhiteSpace(proxyRequest.RefundPreference) ? "Original" : proxyRequest.RefundPreference.Trim(),
                             IsPartialCancellation = isPartial,
                             CancelledSectorsJson = reqSectors,
                             CancelledPassengersJson = reqTickets
@@ -3211,7 +3212,7 @@ namespace PickNBook.Api.Controllers.Public
                         _dbContext.FlightCancellationRequests.Add(cancelReq);
                         
                         // Create BookingCancellation as the single financial ledger
-                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && (p.BookingReferenceId == reservation.Id || p.BookingId == reservation.Id) && p.BookingType == "Flight");
                         var bookingCancellation = new BookingCancellation
                         {
                             BookingReference = reservation.BookingReference,
@@ -3226,6 +3227,7 @@ namespace PickNBook.Api.Controllers.Public
                             SrdvChangeRequestId = changeRequestId,
                             Status = "Pending",
                             SrdvStatus = "Pending",
+                            RefundPreference = string.IsNullOrWhiteSpace(proxyRequest.RefundPreference) ? "Original" : proxyRequest.RefundPreference.Trim(),
                             CreatedAtUtc = DateTime.UtcNow
                         };
                         _dbContext.BookingCancellations.Add(bookingCancellation);
