@@ -285,7 +285,8 @@ namespace PickNBook.Api.Helpers
                     {
                         OriginalCustomerPaid = proportionalPaid,
                         SupplierAmount = proportionalNetFare,
-                        MarkupAmount = proportionalMarkup,
+                        SupplierDebitAmount = proportionalNetFare,
+                        MarkupAmount = proportionalMarkup > 0 ? proportionalMarkup : Math.Max(0m, proportionalPaid - proportionalNetFare),
                         DiscountAmount = proportionalDiscount,
                         ConvenienceFee = proportionalConvenienceFee,
                         SupplierCancellationCharge = tierSuppCharge,

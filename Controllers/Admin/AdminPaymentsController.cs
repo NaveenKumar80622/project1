@@ -668,9 +668,15 @@ namespace PickNBook.Api.Controllers.Admin
                 return BadRequest(new { success = false, message = "Cannot refund an unpaid or failed payment." });
             }
 
+            var linkedCancel = await _dbContext.BookingCancellations
+                .OrderByDescending(c => c.Id)
+                .FirstOrDefaultAsync(c => c.PaymentId == payment.Id);
+
             decimal refundAmount = req.RefundAmount.HasValue && req.RefundAmount.Value > 0
                 ? req.RefundAmount.Value
-                : payment.FinalPayableAmount;
+                : (linkedCancel != null && linkedCancel.CustomerRefundAmount > 0 
+                    ? linkedCancel.CustomerRefundAmount 
+                    : payment.FinalPayableAmount);
 
             string refundReason = !string.IsNullOrWhiteSpace(req.RefundReason)
                 ? req.RefundReason.Trim()

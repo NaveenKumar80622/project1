@@ -3609,11 +3609,13 @@ namespace PickNBook.Api.Controllers
                         }
                     }
 
+                    decimal trueDebit = curBooking.NetFareInr > 0 ? curBooking.NetFareInr : curBooking.TotalPriceInr;
                     var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
                     {
                         OriginalCustomerPaid = curBooking.TotalPriceInr,
                         SupplierAmount = curBooking.NetFareInr,
-                        MarkupAmount = curBooking.MarkupAmountInr,
+                        SupplierDebitAmount = trueDebit,
+                        MarkupAmount = curBooking.MarkupAmountInr > 0 ? curBooking.MarkupAmountInr : Math.Max(0m, curBooking.TotalPriceInr - trueDebit),
                         DiscountAmount = curBooking.CouponDiscountAmountInr + curBooking.AutoDiscountAmountInr + curBooking.FeaturedOfferDiscountAmount,
                         ConvenienceFee = curBooking.ConvenienceFeeInr,
                         SupplierCancellationCharge = srdvCancellationCharge,

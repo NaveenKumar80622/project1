@@ -729,11 +729,14 @@ namespace PickNBook.Api.Services.Background
                         }
                     }
 
+                    decimal trueSupplierDebit = details.Result?.DsaFare > 0 ? details.Result.DsaFare : (res.NetFareInr > 0 ? res.NetFareInr : cancelRecord.SupplierAmount);
+
                     var refundInput = new RefundCalculationInput
                     {
                         OriginalCustomerPaid = cancelRecord.OriginalCustomerPaid,
                         SupplierAmount = cancelRecord.SupplierAmount,
-                        MarkupAmount = cancelRecord.MarkupAmount,
+                        SupplierDebitAmount = trueSupplierDebit,
+                        MarkupAmount = cancelRecord.MarkupAmount > 0 ? cancelRecord.MarkupAmount : Math.Max(0m, cancelRecord.OriginalCustomerPaid - trueSupplierDebit),
                         DiscountAmount = cancelRecord.DiscountAmount,
                         ConvenienceFee = cancelRecord.ConvenienceFee,
                         SupplierCancellationCharge = supplierCancellationCharge,
@@ -753,9 +756,9 @@ namespace PickNBook.Api.Services.Background
                     cancelRecord.SrdvStatus = "REFUNDED";
                     cancelRecord.CompletedAtUtc = DateTime.UtcNow;
 
-                    // Update BusReservation
-                    res.CancellationChargeInr = (res.CancellationChargeInr ?? 0m) + calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
-                    res.RefundAmountInr = (res.RefundAmountInr ?? 0m) + calculatedRefund.FinalCustomerRefundAmount;
+                    // Update BusReservation (idempotent, replace rather than accumulate repeatedly)
+                    res.CancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
+                    res.RefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                     res.FinancialStatus = calculatedRefund.FinalCustomerRefundAmount > 0 ? "REFUNDED" : "NO_REFUND";
 
                     await dbContext.SaveChangesAsync(stoppingToken);
@@ -787,7 +790,14 @@ namespace PickNBook.Api.Services.Background
                         cancelRecord.GatewayRefundAmount = routeRes.GatewayRefunded;
                         cancelRecord.CashfreeRefundId = routeRes.CashfreeRefundId;
                         cancelRecord.RefundStatus = routeRes.RefundStatus;
-                        cancelRecord.Status = routeRes.RefundStatus == "COMPLETED" ? "Completed" : (routeRes.RefundStatus == "Failed" ? "Failed" : "Processing");
+                        cancelRecord.Status = routeRes.RefundStatus == "COMPLETED" || routeRes.RefundStatus == "Refunded" ? "Completed" : (routeRes.RefundStatus == "Failed" ? "Failed" : "Processing");
+
+                        if (payment != null)
+                        {
+                            payment.RefundStatus = routeRes.RefundStatus;
+                            payment.RefundId = routeRes.CashfreeRefundId;
+                            payment.UpdatedAt = DateTime.UtcNow;
+                        }
                     }
                     else
                     {

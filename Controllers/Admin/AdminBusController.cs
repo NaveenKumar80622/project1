@@ -287,9 +287,13 @@ namespace PickNBook.Api.Controllers
                 }
                 providerCancelled = true;
 
-                // Calculate refund proportionally
-                decimal totalFareOfCancelled = (reservation.CustomerFareInr / Math.Max(1, passengers.Count)) * activePassengers.Count;
-                thisRefund = Math.Max(0m, totalFareOfCancelled - request.CancellationCharges);
+                // Calculate refund proportionally including margin and rounding
+                decimal proportionalCustomerPaid = (reservation.CustomerFareInr / Math.Max(1, passengers.Count)) * activePassengers.Count;
+                decimal proportionalSupplierDebit = (reservation.NetFareInr > 0 ? reservation.NetFareInr : reservation.TotalPriceInr) / Math.Max(1, passengers.Count) * activePassengers.Count;
+                decimal marginDiff = Math.Max(0m, proportionalCustomerPaid - proportionalSupplierDebit);
+                decimal rawRefund = Math.Max(0m, proportionalSupplierDebit - request.CancellationCharges) + marginDiff;
+                thisRefund = Math.Round(rawRefund, 0, MidpointRounding.AwayFromZero);
+                if (thisRefund > proportionalCustomerPaid) thisRefund = proportionalCustomerPaid;
                 
                 reservation.CancellationChargeInr = (reservation.CancellationChargeInr ?? 0m) + request.CancellationCharges;
                 reservation.RefundAmountInr = (reservation.RefundAmountInr ?? 0m) + thisRefund;

@@ -10,6 +10,7 @@ namespace PickNBook.Api.Models.DTOs
         public decimal SupplierCancellationCharge { get; set; }
         public decimal SupplierRefundAmount { get; set; }
         public decimal ServiceCharge { get; set; } = 0m;
+        public decimal SupplierDebitAmount { get; set; } = 0m;
     }
 
     public class RefundCalculationResult
@@ -24,5 +25,6 @@ namespace PickNBook.Api.Models.DTOs
         public decimal FeeRefunded { get; set; }
         public decimal FeeRetained { get; set; }
         public decimal FinalCustomerRefundAmount { get; set; }
+        public decimal RoundingDifference { get; set; } = 0m;
     }
 }

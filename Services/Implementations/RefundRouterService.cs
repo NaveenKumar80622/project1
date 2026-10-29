@@ -109,7 +109,7 @@ namespace PickNBook.Api.Services.Implementations
                 if (_dbContext.Database.IsRelational())
                 {
                     int rowsClaimed = await _dbContext.Database.ExecuteSqlInterpolatedAsync(
-                        $"UPDATE BookingCancellations SET Status = 'Processing' WHERE Id = {cancellation.Id} AND Status IN ('Pending', 'Failed', 'Initiated', 'PartiallyRefunded')"
+                        $"UPDATE BookingCancellations SET Status = 'Processing' WHERE Id = {cancellation.Id} AND Status IN ('Pending', 'Failed', 'Initiated', 'PartiallyRefunded', 'AwaitingSupplierRefund', 'AWAITING_SUPPLIER', 'PendingReview', 'Processing')"
                     );
 
                     if (rowsClaimed == 0)
