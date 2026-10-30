@@ -1971,8 +1971,12 @@ namespace PickNBook.Api.Services.Implementations
                     if (itinerary.TryGetProperty("Segments", out var segs) && segs.ValueKind == JsonValueKind.Array && segs.GetArrayLength() > 0)
                     {
                         segmentsJson = segs.ToString();
-                        var firstSeg = segs[0];
-                        if (firstSeg.TryGetProperty("Airline", out var alNode))
+                        
+                        // Extract first segment from 2D array (array of arrays per leg) or 1D array
+                        var firstLeg = segs[0];
+                        var firstSeg = firstLeg.ValueKind == JsonValueKind.Array && firstLeg.GetArrayLength() > 0 ? firstLeg[0] : firstLeg;
+
+                        if (firstSeg.ValueKind == JsonValueKind.Object && firstSeg.TryGetProperty("Airline", out var alNode))
                         {
                             flightAirlineCode = alNode.TryGetProperty("AirlineCode", out var alCodeNode) ? (alCodeNode.GetString() ?? "") : "";
                             var rawName = alNode.TryGetProperty("AirlineName", out var alNameNode) ? (alNameNode.GetString() ?? "") : "";
@@ -1980,17 +1984,19 @@ namespace PickNBook.Api.Services.Implementations
                             flightAirline = lookupSvc != null ? lookupSvc.GetAirlineName(flightAirlineCode, rawName) : (!string.IsNullOrEmpty(rawName) ? rawName : flightAirlineCode);
                             flightNum = alNode.TryGetProperty("FlightNumber", out var fnNode) ? (fnNode.ToString() ?? "") : "";
                         }
-                        if (firstSeg.TryGetProperty("Origin", out var orig) && orig.TryGetProperty("CityCode", out var origCity))
+                        if (firstSeg.ValueKind == JsonValueKind.Object && firstSeg.TryGetProperty("Origin", out var orig) && orig.TryGetProperty("CityCode", out var origCity))
                             fromCity = origCity.ToString() ?? "";
-                        if (firstSeg.TryGetProperty("Destination", out var dest) && dest.TryGetProperty("CityCode", out var destCity))
+                        if (firstSeg.ValueKind == JsonValueKind.Object && firstSeg.TryGetProperty("Destination", out var dest) && dest.TryGetProperty("CityCode", out var destCity))
                             toCity = destCity.ToString() ?? "";
-                        if (firstSeg.TryGetProperty("DepTime", out var dTime))
+                        if (firstSeg.ValueKind == JsonValueKind.Object && firstSeg.TryGetProperty("DepTime", out var dTime))
                             depTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(dTime.ToString());
 
-                        var lastSeg = segs[segs.GetArrayLength() - 1];
-                        if (lastSeg.TryGetProperty("Destination", out var dest2) && dest2.TryGetProperty("CityCode", out var destCity2))
+                        var lastLeg = segs[segs.GetArrayLength() - 1];
+                        var lastSeg = lastLeg.ValueKind == JsonValueKind.Array && lastLeg.GetArrayLength() > 0 ? lastLeg[lastLeg.GetArrayLength() - 1] : lastLeg;
+
+                        if (lastSeg.ValueKind == JsonValueKind.Object && lastSeg.TryGetProperty("Destination", out var dest2) && dest2.TryGetProperty("CityCode", out var destCity2))
                             toCity = destCity2.ToString() ?? toCity;
-                        if (lastSeg.TryGetProperty("ArrTime", out var aTime))
+                        if (lastSeg.ValueKind == JsonValueKind.Object && lastSeg.TryGetProperty("ArrTime", out var aTime))
                             arrTime = PickNBook.Api.Helpers.IndiaTimeHelper.ToUtcFromIst(aTime.ToString());
                     }
                 }
@@ -2055,7 +2061,24 @@ namespace PickNBook.Api.Services.Implementations
                         var parsedSegments = System.Text.Json.JsonSerializer.Deserialize<List<System.Text.Json.JsonElement>>(segmentsJson);
                         if (parsedSegments != null)
                         {
-                            foreach (var seg in parsedSegments)
+                            var flattenedSegments = new List<System.Text.Json.JsonElement>();
+                            foreach (var item in parsedSegments)
+                            {
+                                if (item.ValueKind == System.Text.Json.JsonValueKind.Array)
+                                {
+                                    foreach (var inner in item.EnumerateArray())
+                                    {
+                                        if (inner.ValueKind == System.Text.Json.JsonValueKind.Object)
+                                            flattenedSegments.Add(inner);
+                                    }
+                                }
+                                else if (item.ValueKind == System.Text.Json.JsonValueKind.Object)
+                                {
+                                    flattenedSegments.Add(item);
+                                }
+                            }
+
+                            foreach (var seg in flattenedSegments)
                             {
                                 int ti = seg.TryGetProperty("TripIndicator", out var tiProp) && tiProp.ValueKind == System.Text.Json.JsonValueKind.Number ? tiProp.GetInt32() : 0;
                                 var segPnr = (ti == 2 && !string.IsNullOrEmpty(reservation.ReturnPnr)) ? reservation.ReturnPnr : pnr;
@@ -2105,7 +2128,11 @@ namespace PickNBook.Api.Services.Implementations
                     if (!existingPax.Any())
                     {
                         var responsePassengers = new List<JsonElement>();
-                        if (resp.TryGetProperty("Passengers", out var pArray) && pArray.ValueKind == JsonValueKind.Array)
+                        if (resp.TryGetProperty("FlightItinerary", out var flIt) && flIt.TryGetProperty("Passenger", out var flItPax) && flItPax.ValueKind == JsonValueKind.Array)
+                        {
+                            responsePassengers = flItPax.EnumerateArray().ToList();
+                        }
+                        else if (resp.TryGetProperty("Passengers", out var pArray) && pArray.ValueKind == JsonValueKind.Array)
                         {
                             responsePassengers = pArray.EnumerateArray().ToList();
                         }

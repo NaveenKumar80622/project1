@@ -2328,7 +2328,8 @@ namespace PickNBook.Api.Controllers
                 DiscountAmount = booking.CouponDiscount,
                 ConvenienceFee = booking.ConvenienceFee,
                 SupplierCancellationCharge = supplierCancellationCharge,
-                SupplierRefundAmount = supplierRefundAmount
+                SupplierRefundAmount = supplierRefundAmount,
+                ServiceCharge = 35.00m
             };
 
             var calculatedRefund = _refundCalculator.CalculateCustomerRefund(refundInput);
@@ -2518,13 +2519,14 @@ namespace PickNBook.Api.Controllers
                         DiscountAmount = booking.CouponDiscount,
                         ConvenienceFee = booking.ConvenienceFee,
                         SupplierCancellationCharge = supplierCancellationCharge,
-                        SupplierRefundAmount = supplierRefundAmount
+                        SupplierRefundAmount = supplierRefundAmount,
+                        ServiceCharge = 35.00m
                     };
 
                     var calculatedRefund = _refundCalculator.CalculateCustomerRefund(
                         refundInput);
 
-                    booking.CancellationCharges = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                    booking.CancellationCharges = calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
                     booking.RefundAmount = calculatedRefund.FinalCustomerRefundAmount;
                     booking.Status = "Cancelled";
                     booking.CancelledAt = DateTime.UtcNow;

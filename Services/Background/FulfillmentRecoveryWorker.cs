@@ -372,15 +372,45 @@ namespace PickNBook.Api.Services.Background
                     var res = await dbContext.FlightReservations.Include(x => x.Segments).FirstOrDefaultAsync(x => x.Id == cancelReq.FlightReservationId, stoppingToken);
                     if (res != null) 
                     {
+                        var originCode = res.FromCity?.Trim() ?? "";
+                        var destCode = res.ToCity?.Trim() ?? "";
+
+                        bool isInternational = false;
+                        var airportCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        if (!string.IsNullOrEmpty(originCode)) airportCodes.Add(originCode);
+                        if (!string.IsNullOrEmpty(destCode)) airportCodes.Add(destCode);
+                        if (res.Segments != null)
+                        {
+                            foreach (var seg in res.Segments)
+                            {
+                                if (!string.IsNullOrEmpty(seg.FromCity)) airportCodes.Add(seg.FromCity.Trim());
+                                if (!string.IsNullOrEmpty(seg.ToCity)) airportCodes.Add(seg.ToCity.Trim());
+                            }
+                        }
+
+                        if (airportCodes.Count > 0)
+                        {
+                            var nonIndianAirports = await dbContext.FlightAirports
+                                .Where(a => airportCodes.Contains(a.AirportCode) && a.CountryCode != "IN" && a.CountryCode != "IND")
+                                .AnyAsync(stoppingToken);
+                            isInternational = nonIndianAirports;
+                        }
+
+                        decimal flightServiceCharge = isInternational ? 118.00m : 59.00m;
+                        decimal flightCommercialMargin = Math.Max(0m, (res.CustomerFareInr > 0 ? res.CustomerFareInr : res.TotalPriceInr) - res.NetFareInr);
+
                         var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
                         {
                             OriginalCustomerPaid = cancelRecord.OriginalCustomerPaid,
                             SupplierAmount = cancelRecord.SupplierAmount,
-                            MarkupAmount = cancelRecord.MarkupAmount,
+                            SupplierDebitAmount = cancelRecord.SupplierAmount,
+                            SrdvMarginAmount = flightCommercialMargin,
+                            MarkupAmount = cancelRecord.MarkupAmount > 0 ? cancelRecord.MarkupAmount : res.MarkupAmount,
                             DiscountAmount = cancelRecord.DiscountAmount,
                             ConvenienceFee = cancelRecord.ConvenienceFee,
                             SupplierCancellationCharge = cancellationCharge,
-                            SupplierRefundAmount = refundAmount
+                            SupplierRefundAmount = refundAmount,
+                            ServiceCharge = flightServiceCharge
                         };
 
                         var calculatedRefund = refundCalculator.CalculateCustomerRefund(
@@ -398,7 +428,7 @@ namespace PickNBook.Api.Services.Background
                         // Update FlightCancellationRequest
                         cancelReq.CustomerRefundAmountInr = calculatedRefund.FinalCustomerRefundAmount;
                         cancelReq.AdminRefundAmountInr = refundAmount;
-                        cancelReq.CustomerCancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.MarkupRetained;
+                        cancelReq.CustomerCancellationChargeInr = calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
                         cancelReq.AdminCancellationChargeInr = cancellationCharge;
                         
                         res.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";

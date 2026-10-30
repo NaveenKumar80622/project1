@@ -2982,36 +2982,7 @@ namespace PickNBook.Api.Controllers
             }
             var userId = currentUserService.GetUserOrGuestId();
 
-            string? userPhone = null;
-            string? userEmail = null;
-            var phoneCandidates = new List<string>();
-
-            if (int.TryParse(userId, out int parsedUserId))
-            {
-                var userEntity = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == parsedUserId);
-                if (userEntity != null)
-                {
-                    userPhone = userEntity.PhoneNumber?.Trim();
-                    userEmail = userEntity.Email?.Trim();
-
-                    if (!string.IsNullOrWhiteSpace(userPhone))
-                    {
-                        phoneCandidates.Add(userPhone);
-                        var digits = new string(userPhone.Where(char.IsDigit).ToArray());
-                        if (!string.IsNullOrWhiteSpace(digits))
-                        {
-                            phoneCandidates.Add(digits);
-                            var last10 = digits.Length >= 10 ? digits.Substring(digits.Length - 10) : digits;
-                            phoneCandidates.Add(last10);
-                            phoneCandidates.Add("+91" + last10);
-                            phoneCandidates.Add("91" + last10);
-                            phoneCandidates.Add("0" + last10);
-                        }
-                    }
-                }
-            }
-
-            phoneCandidates = phoneCandidates.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
+            var (userEmail, phoneCandidates) = await GetCurrentUserContactCandidatesAsync(userId);
 
             var queryable = dbContext.BusReservations
                 .AsNoTracking()
@@ -3207,11 +3178,16 @@ namespace PickNBook.Api.Controllers
                 return Unauthorized("Please login to continue booking.");
             }
             var userId = currentUserService.GetUserOrGuestId();
+            var (userEmail, phoneCandidates) = await GetCurrentUserContactCandidatesAsync(userId);
+            bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
 
             var booking = await dbContext.BusReservations
                 .AsNoTracking()
                 .Include(x => x.BusBooking)
-                .FirstOrDefaultAsync(x => x.Id == bookingId && x.UserId == userId);
+                .FirstOrDefaultAsync(x => x.Id == bookingId &&
+                    (isAdmin || x.UserId == userId ||
+                     (!string.IsNullOrEmpty(userEmail) && x.PassengerEmail != null && x.PassengerEmail.ToLower() == userEmail.ToLower()) ||
+                     (phoneCandidates.Count > 0 && phoneCandidates.Contains(x.PassengerPhone))));
 
             if (booking is null || booking.BusBooking is null)
             {
@@ -3285,13 +3261,17 @@ namespace PickNBook.Api.Controllers
                 return Unauthorized("Please login to continue.");
             }
             var userId = currentUserService.GetUserOrGuestId();
-
+            var (userEmail, phoneCandidates) = await GetCurrentUserContactCandidatesAsync(userId);
             bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
             int? parsedId = int.TryParse(bookingId, out int bid) ? bid : null;
+
             var booking = await dbContext.BusReservations
                 .AsNoTracking()
                 .Include(x => x.BusBooking)
-                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) && (x.UserId == userId || isAdmin));
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) &&
+                    (isAdmin || x.UserId == userId ||
+                     (!string.IsNullOrEmpty(userEmail) && x.PassengerEmail != null && x.PassengerEmail.ToLower() == userEmail.ToLower()) ||
+                     (phoneCandidates.Count > 0 && phoneCandidates.Contains(x.PassengerPhone))));
 
             if (booking is null)
             {
@@ -3386,11 +3366,16 @@ namespace PickNBook.Api.Controllers
                 return Unauthorized("Please login to continue.");
             }
             var userId = currentUserService.GetUserOrGuestId();
+            var (userEmail, phoneCandidates) = await GetCurrentUserContactCandidatesAsync(userId);
+            bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
 
             var booking = await dbContext.BusReservations
                 .AsNoTracking()
                 .Include(x => x.BusBooking)
-                .FirstOrDefaultAsync(x => x.Id == bookingId && x.UserId == userId);
+                .FirstOrDefaultAsync(x => x.Id == bookingId &&
+                    (isAdmin || x.UserId == userId ||
+                     (!string.IsNullOrEmpty(userEmail) && x.PassengerEmail != null && x.PassengerEmail.ToLower() == userEmail.ToLower()) ||
+                     (phoneCandidates.Count > 0 && phoneCandidates.Contains(x.PassengerPhone))));
 
             if (booking is null || booking.BusBooking is null)
             {
@@ -3445,12 +3430,17 @@ namespace PickNBook.Api.Controllers
                 return Unauthorized("Please login to continue booking.");
             }
             var userId = currentUserService.GetUserOrGuestId();
+            var (userEmail, phoneCandidates) = await GetCurrentUserContactCandidatesAsync(userId);
+            bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
 
             try
             {
                 var booking = await dbContext.BusReservations
                     .Include(x => x.BusBooking)
-                    .FirstOrDefaultAsync(x => x.Id == bookingId && x.UserId == userId);
+                    .FirstOrDefaultAsync(x => x.Id == bookingId &&
+                        (isAdmin || x.UserId == userId ||
+                         (!string.IsNullOrEmpty(userEmail) && x.PassengerEmail != null && x.PassengerEmail.ToLower() == userEmail.ToLower()) ||
+                         (phoneCandidates.Count > 0 && phoneCandidates.Contains(x.PassengerPhone))));
 
                 if (booking is null || booking.BusBooking is null)
                     return NotFound("Booking not found.");
@@ -4362,6 +4352,43 @@ namespace PickNBook.Api.Controllers
             }
         }
 
+        private async Task<(string? userEmail, List<string> phoneCandidates)> GetCurrentUserContactCandidatesAsync(string userId)
+        {
+            string? userEmail = User.FindFirst(ClaimTypes.Email)?.Value?.Trim() ?? User.FindFirst("email")?.Value?.Trim();
+            string? userPhone = User.FindFirst(ClaimTypes.MobilePhone)?.Value?.Trim() ?? User.FindFirst("phone_number")?.Value?.Trim() ?? User.FindFirst("phoneNumber")?.Value?.Trim();
+            var phoneCandidates = new List<string>();
+
+            if (int.TryParse(userId, out int parsedUserId))
+            {
+                var userEntity = await dbContext.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == parsedUserId);
+                if (userEntity != null)
+                {
+                    if (string.IsNullOrWhiteSpace(userPhone))
+                        userPhone = userEntity.PhoneNumber?.Trim();
+                    if (string.IsNullOrWhiteSpace(userEmail))
+                        userEmail = userEntity.Email?.Trim();
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(userPhone))
+            {
+                phoneCandidates.Add(userPhone);
+                var digits = new string(userPhone.Where(char.IsDigit).ToArray());
+                if (!string.IsNullOrWhiteSpace(digits))
+                {
+                    phoneCandidates.Add(digits);
+                    var last10 = digits.Length >= 10 ? digits.Substring(digits.Length - 10) : digits;
+                    phoneCandidates.Add(last10);
+                    phoneCandidates.Add("+91" + last10);
+                    phoneCandidates.Add("91" + last10);
+                    phoneCandidates.Add("0" + last10);
+                }
+            }
+
+            phoneCandidates = phoneCandidates.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
+            return (userEmail, phoneCandidates);
+        }
+
         private async Task<string> GenerateUniqueBusPnrAsync()
         {
             const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -4476,6 +4503,7 @@ namespace PickNBook.Api.Controllers
 
             return new
             {
+                Id = reservation.Id,
                 baseDto.BookingId,
                 baseDto.BookingReference,
                 baseDto.Pnr,
