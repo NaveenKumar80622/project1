@@ -3135,23 +3135,16 @@ namespace PickNBook.Api.Controllers.Public
 
                 // Check Error code in root or nested
                 var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
+                int code = 0;
+                string msg = "";
                 if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCodeProp))
                 {
-                    int code = 0;
                     if (errCodeProp.ValueKind == JsonValueKind.Number) code = errCodeProp.GetInt32();
                     else if (errCodeProp.ValueKind == JsonValueKind.String && int.TryParse(errCodeProp.GetString(), out var cVal)) code = cVal;
 
                     if (code != 0)
                     {
-                        string msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "";
-                        return Ok(new SrdvV8ErrorResponseDto
-                        {
-                            Error = new SrdvV8ErrorDto
-                            {
-                                ErrorCode = code,
-                                ErrorMessage = msg
-                            }
-                        });
+                        msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "";
                     }
                 }
 
@@ -3162,107 +3155,157 @@ namespace PickNBook.Api.Controllers.Public
                     if (statusProp.ValueKind == JsonValueKind.String && statusProp.ToString() == "1") isSuccess = true;
                 }
 
-                if (isSuccess && reservation != null)
+                bool anyAccepted = false;
+                string changeRequestId = "";
+                if (isSuccess && resp.TryGetProperty("TicketCRInfo", out var crInfo) && crInfo.ValueKind == JsonValueKind.Array && crInfo.GetArrayLength() > 0)
                 {
-                    bool anyAccepted = false;
-                    string changeRequestId = "";
-                    if (resp.TryGetProperty("TicketCRInfo", out var crInfo) && crInfo.ValueKind == JsonValueKind.Array && crInfo.GetArrayLength() > 0)
+                    foreach (var row in crInfo.EnumerateArray())
                     {
-                        foreach (var row in crInfo.EnumerateArray())
+                        var rowStatus = row.TryGetProperty("Status", out var stProp) && stProp.ValueKind == JsonValueKind.Number ? stProp.GetInt32() : 0;
+                        if (rowStatus == 1) // Pending / Accepted
                         {
-                            var rowStatus = row.TryGetProperty("Status", out var stProp) && stProp.ValueKind == JsonValueKind.Number ? stProp.GetInt32() : 0;
-                            if (rowStatus == 1) // Pending / Accepted
-                            {
-                                anyAccepted = true;
-                                if (string.IsNullOrEmpty(changeRequestId) && row.TryGetProperty("ChangeRequestId", out var crIdNode))
-                                    changeRequestId = crIdNode.ToString();
-                            }
+                            anyAccepted = true;
+                            if (string.IsNullOrEmpty(changeRequestId) && row.TryGetProperty("ChangeRequestId", out var crIdNode))
+                                changeRequestId = crIdNode.ToString();
                         }
                     }
+                }
 
-                    if (anyAccepted)
+                bool isOfflineFallback = false;
+                if (reservation != null && (!isSuccess || !anyAccepted || code != 0))
+                {
+                    // If supplier API cannot process this airline online (e.g. Code 14006 Fly91, unsupported feature, or supplier refusal),
+                    // accept and queue the cancellation request in our database for offline desk processing so customer is never blocked.
+                    _logger.LogWarning("Supplier SendChangeRequest returned non-success (Code: {Code}, Msg: {Msg}). Initiating offline queue for reservation {BookingReference}", code, msg, reservation.BookingReference);
+                    isOfflineFallback = true;
+                    anyAccepted = true;
+                    changeRequestId = $"OFFLINE-{reservation.Id}-{DateTime.UtcNow:yyyyMMddHHmmss}";
+                }
+                else if (code != 0 && reservation == null)
+                {
+                    return Ok(new SrdvV8ErrorResponseDto
                     {
-                        var isPartial = false;
-                        var reqSectors = request.Sectors != null && request.Sectors.Any() ? System.Text.Json.JsonSerializer.Serialize(request.Sectors) : null;
-                        var reqTickets = request.TicketData != null && request.TicketData.Any() ? System.Text.Json.JsonSerializer.Serialize(request.TicketData) : null;
-
-                        if (request.Sectors != null && request.Sectors.Any() && request.Sectors.Count < reservation.Segments.Count)
-                            isPartial = true;
-                        if (request.TicketData != null && request.TicketData.Any() && request.TicketData.Count < reservation.SeatsBooked)
-                            isPartial = true;
-
-                        var cancelReq = new FlightCancellationRequest
+                        Error = new SrdvV8ErrorDto
                         {
-                            FlightReservationId = reservation.Id,
-                            RequestDateUtc = DateTime.UtcNow,
-                            CancellationStatus = "Pending",
-                            CustomerRefundStatus = "Pending",
-                            AdminRefundStatus = "Pending",
-                            SrdvChangeRequestId = changeRequestId,
-                            SrdvBookingId = bookingIdStr,
-                            CustomerRemark = request.Remarks,
-                            RefundPreference = string.IsNullOrWhiteSpace(proxyRequest.RefundPreference) ? "Original" : proxyRequest.RefundPreference.Trim(),
-                            IsPartialCancellation = isPartial,
-                            CancelledSectorsJson = reqSectors,
-                            CancelledPassengersJson = reqTickets
-                        };
-                        
-                        reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
-                        
-                        _dbContext.FlightCancellationRequests.Add(cancelReq);
-                        
-                        // Create BookingCancellation as the single financial ledger
-                        var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && (p.BookingReferenceId == reservation.Id || p.BookingId == reservation.Id) && p.BookingType == "Flight");
-                        var bookingCancellation = new BookingCancellation
-                        {
-                            BookingReference = reservation.BookingReference,
-                            BookingType = "Flight",
-                            PaymentId = payment?.Id ?? 0,
-                            UserId = reservation.UserId,
-                            OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
-                            SupplierAmount = reservation.NetFareInr,
-                            MarkupAmount = reservation.MarkupAmount,
-                            DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
-                            ConvenienceFee = payment?.ConvenienceFee ?? 0m,
-                            SrdvChangeRequestId = changeRequestId,
-                            Status = "Pending",
-                            SrdvStatus = "Pending",
-                            RefundPreference = string.IsNullOrWhiteSpace(proxyRequest.RefundPreference) ? "Original" : proxyRequest.RefundPreference.Trim(),
-                            CreatedAtUtc = DateTime.UtcNow
-                        };
-                        _dbContext.BookingCancellations.Add(bookingCancellation);
-                        
-                        await _dbContext.SaveChangesAsync();
-
-                        // Additive In-App Notifications
-                        try
-                        {
-                            var inAppNotificationService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.IInAppNotificationService>();
-                            if (inAppNotificationService != null)
-                            {
-                                await inAppNotificationService.CreateNotificationAsync(
-                                    type: "Cancellation",
-                                    category: "Customer",
-                                    title: "Flight Cancellation Requested",
-                                    message: $"Your cancellation request for flight booking ({reservation.BookingReference}) has been submitted and is processing.",
-                                    severity: "Info",
-                                    referenceType: "FlightReservation",
-                                    referenceId: reservation.BookingReference,
-                                    actionUrl: $"/bookings/{reservation.BookingReference}",
-                                    idempotencyKey: $"CANCEL_REQ_FLIGHT_{reservation.BookingReference}_{changeRequestId}",
-                                    targetUserId: reservation.UserId
-                                );
-                            }
+                            ErrorCode = code,
+                            ErrorMessage = msg
                         }
-                        catch (Exception inAppEx)
+                    });
+                }
+
+                if (anyAccepted && reservation != null)
+                {
+                    var isPartial = false;
+                    var reqSectors = request.Sectors != null && request.Sectors.Any() ? System.Text.Json.JsonSerializer.Serialize(request.Sectors) : null;
+                    var reqTickets = request.TicketData != null && request.TicketData.Any() ? System.Text.Json.JsonSerializer.Serialize(request.TicketData) : null;
+
+                    if (request.Sectors != null && request.Sectors.Any() && request.Sectors.Count < reservation.Segments.Count)
+                        isPartial = true;
+                    if (request.TicketData != null && request.TicketData.Any() && request.TicketData.Count < reservation.SeatsBooked)
+                        isPartial = true;
+
+                    var offlineRemark = isOfflineFallback
+                        ? (!string.IsNullOrWhiteSpace(msg) ? $"Supplier API note: {msg}. Queued for manual processing by airline desk." : "Queued for manual processing by airline desk.")
+                        : null;
+
+                    var cancelReq = new FlightCancellationRequest
+                    {
+                        FlightReservationId = reservation.Id,
+                        RequestDateUtc = DateTime.UtcNow,
+                        CancellationStatus = "Pending",
+                        CustomerRefundStatus = "Pending",
+                        AdminRefundStatus = "Pending",
+                        SrdvChangeRequestId = changeRequestId,
+                        SrdvBookingId = bookingIdStr,
+                        CustomerRemark = request.Remarks,
+                        SupplierRemark = offlineRemark,
+                        RefundPreference = string.IsNullOrWhiteSpace(proxyRequest.RefundPreference) ? "Original" : proxyRequest.RefundPreference.Trim(),
+                        IsPartialCancellation = isPartial,
+                        CancelledSectorsJson = reqSectors,
+                        CancelledPassengersJson = reqTickets
+                    };
+                    
+                    reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
+                    
+                    _dbContext.FlightCancellationRequests.Add(cancelReq);
+                    
+                    // Create BookingCancellation as the single financial ledger
+                    var payment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && (p.BookingReferenceId == reservation.Id || p.BookingId == reservation.Id) && p.BookingType == "Flight");
+                    var bookingCancellation = new BookingCancellation
+                    {
+                        BookingReference = reservation.BookingReference,
+                        BookingType = "Flight",
+                        PaymentId = payment?.Id ?? 0,
+                        UserId = reservation.UserId,
+                        OriginalCustomerPaid = payment?.FinalPayableAmount ?? reservation.CustomerFareInr,
+                        SupplierAmount = reservation.NetFareInr,
+                        MarkupAmount = reservation.MarkupAmount,
+                        DiscountAmount = reservation.DiscountAmountInr + reservation.PromotionDiscount + reservation.CouponDiscount,
+                        ConvenienceFee = payment?.ConvenienceFee ?? 0m,
+                        SrdvChangeRequestId = changeRequestId,
+                        Status = "Pending",
+                        SrdvStatus = "Pending",
+                        RefundPreference = string.IsNullOrWhiteSpace(proxyRequest.RefundPreference) ? "Original" : proxyRequest.RefundPreference.Trim(),
+                        CreatedAtUtc = DateTime.UtcNow
+                    };
+                    _dbContext.BookingCancellations.Add(bookingCancellation);
+                    
+                    await _dbContext.SaveChangesAsync();
+
+                    // Additive In-App Notifications
+                    try
+                    {
+                        var inAppNotificationService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.IInAppNotificationService>();
+                        if (inAppNotificationService != null)
                         {
-                            _logger.LogWarning(inAppEx, "Failed to create in-app notification for flight cancellation request {BookingReference}. Non-fatal.", reservation.BookingReference);
+                            await inAppNotificationService.CreateNotificationAsync(
+                                type: "Cancellation",
+                                category: "Customer",
+                                title: "Flight Cancellation Requested",
+                                message: $"Your cancellation request for flight booking ({reservation.BookingReference}) has been submitted and is processing.",
+                                severity: "Info",
+                                referenceType: "FlightReservation",
+                                referenceId: reservation.BookingReference,
+                                actionUrl: $"/bookings/{reservation.BookingReference}",
+                                idempotencyKey: $"CANCEL_REQ_FLIGHT_{reservation.BookingReference}_{changeRequestId}",
+                                targetUserId: reservation.UserId
+                            );
                         }
                     }
-                    else
+                    catch (Exception inAppEx)
                     {
-                        _logger.LogWarning("SendChangeRequest returned 0 ErrorCode but all tickets were refused (Status 4) for BookingId {BookingId}", proxyRequest.BookingId);
+                        _logger.LogWarning(inAppEx, "Failed to create in-app notification for flight cancellation request {BookingReference}. Non-fatal.", reservation.BookingReference);
                     }
+
+                    if (isOfflineFallback)
+                    {
+                        var fallbackTickets = (request.TicketData ?? new List<ChangeRequestTicketDataDto>()).Select(t => new
+                        {
+                            ChangeRequestId = changeRequestId,
+                            TicketId = string.IsNullOrWhiteSpace(t.TicketId) ? $"{t.FirstName} {t.LastName}".Trim() : t.TicketId.Trim(),
+                            Status = 1,
+                            Remarks = offlineRemark ?? "Cancellation request queued for manual desk processing.",
+                            ChangeRequestStatus = 1
+                        }).ToList();
+
+                        long parsedTrace = long.TryParse(reservation.TraceId, out var tr) ? tr : 0;
+                        int srdvIdx = int.TryParse(reservation.ResultIndex, out var idx) ? idx : 1;
+
+                        return Ok(new
+                        {
+                            ResponseStatus = 1,
+                            SrdvType = "MixAPI",
+                            SrdvIndex = srdvIdx,
+                            TraceId = parsedTrace,
+                            ChangeRequestId = changeRequestId,
+                            TicketCRInfo = fallbackTickets,
+                            Message = "Your cancellation request has been received and queued for processing by our support desk."
+                        });
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("SendChangeRequest returned 0 ErrorCode but all tickets were refused (Status 4) for BookingId {BookingId}", proxyRequest.BookingId);
                 }
 
                 // Guarantee root properties unwrapped
@@ -3322,6 +3365,22 @@ namespace PickNBook.Api.Controllers.Public
                             ErrorCode = 100,
                             ErrorMessage = "Change request not found. Please check the ChangeRequestId or contact the support team."
                         }
+                    });
+                }
+
+                if (cancelReq != null && (crIdStr.StartsWith("OFFLINE-", StringComparison.OrdinalIgnoreCase) || crIdStr.StartsWith("MANUAL-", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return Ok(new
+                    {
+                        ResponseStatus = 1,
+                        SrdvType = "MixAPI",
+                        CancellationStatus = cancelReq.CancellationStatus,
+                        RefundStatus = cancelReq.CustomerRefundStatus,
+                        RefundAmount = cancelReq.CustomerRefundAmountInr,
+                        CancellationCharge = cancelReq.CustomerCancellationChargeInr,
+                        ChangeRequestId = crIdStr,
+                        Status = cancelReq.CancellationStatus,
+                        Remarks = cancelReq.SupplierRemark ?? "Queued for manual processing by support team."
                     });
                 }
 
@@ -3495,16 +3554,16 @@ namespace PickNBook.Api.Controllers.Public
 
                     if (code != 0)
                     {
-                        if (reservation != null && (!string.IsNullOrEmpty(reservation.CancellationPolicyJson) || !string.IsNullOrEmpty(reservation.FareRulesJson) || reservation.NonRefundable || !string.IsNullOrEmpty(reservation.CancellationCharges)))
+                        if (reservation != null)
                         {
                             return Ok(new
                             {
                                 success = true,
                                 isDynamicBookingPolicy = true,
                                 nonRefundable = reservation.NonRefundable,
-                                cancellationCharges = reservation.CancellationCharges,
-                                cancellationPolicy = reservation.CancellationPolicyJson,
-                                cancellationPolicyJson = reservation.CancellationPolicyJson,
+                                cancellationCharges = !string.IsNullOrEmpty(reservation.CancellationCharges) ? reservation.CancellationCharges : "Standard domestic airline cancellation policy applies. Statutory taxes are refundable.",
+                                cancellationPolicy = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                                cancellationPolicyJson = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
                                 fareRules = reservation.FareRulesJson,
                                 fareRulesJson = reservation.FareRulesJson
                             });
