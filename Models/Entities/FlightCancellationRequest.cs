@@ -29,7 +29,22 @@ namespace PickNBook.Api.Models
         public string? CancelledSectorsJson { get; set; }
         public string? CancelledPassengersJson { get; set; }
 
-        public string RefundPreference { get; set; } = "OriginalMethod";
+        private string _refundPreference = "OriginalMethod";
+
+        [System.ComponentModel.DataAnnotations.MaxLength(20)]
+        public string RefundPreference
+        {
+            get => _refundPreference;
+            set
+            {
+                var val = value?.Trim() ?? "OriginalMethod";
+                if (string.Equals(val, "ORIGINAL_PAYMENT_METHOD", StringComparison.OrdinalIgnoreCase))
+                    val = "ORIGINAL_METHOD";
+                else if (val.Length > 20)
+                    val = val.Substring(0, 20);
+                _refundPreference = val;
+            }
+        }
         public decimal WalletRefundAmount { get; set; } = 0.00m;
         public decimal GatewayRefundAmount { get; set; } = 0.00m;
     }

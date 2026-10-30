@@ -367,7 +367,7 @@ namespace PickNBook.Api.Services.Implementations
             // 9. Persist Updated Component State and Ledger to BookingCancellation
             if (cancellation != null)
             {
-                cancellation.RefundPreference = isUserPreferWallet ? "WALLET" : (isWalletPayment ? "WALLET" : "ORIGINAL_PAYMENT_METHOD");
+                cancellation.RefundPreference = isUserPreferWallet ? "WALLET" : (isWalletPayment ? "WALLET" : "ORIGINAL_METHOD");
                 cancellation.WalletRefundAmount = actualWalletRefunded;
                 cancellation.GatewayRefundAmount = actualGatewayRefunded;
                 cancellation.CashfreeRefundId = refundId ?? cancellation.CashfreeRefundId;

@@ -94,8 +94,22 @@ namespace PickNBook.Api.Models.Entities
         [MaxLength(50)]
         public string? RefundStatus { get; set; } // "PENDING", "NOT_REQUIRED", "COMPLETED", "FAILED"
 
-        [MaxLength(50)]
-        public string RefundPreference { get; set; } = "OriginalMethod";
+        private string _refundPreference = "OriginalMethod";
+
+        [MaxLength(20)]
+        public string RefundPreference
+        {
+            get => _refundPreference;
+            set
+            {
+                var val = value?.Trim() ?? "OriginalMethod";
+                if (string.Equals(val, "ORIGINAL_PAYMENT_METHOD", StringComparison.OrdinalIgnoreCase))
+                    val = "ORIGINAL_METHOD";
+                else if (val.Length > 20)
+                    val = val.Substring(0, 20);
+                _refundPreference = val;
+            }
+        }
 
         [Column(TypeName = "decimal(18,2)")]
         public decimal WalletRefundAmount { get; set; } = 0.00m;
