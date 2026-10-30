@@ -5,6 +5,7 @@ using System.Text.Json;
 using PickNBook.Api.Models;
 using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Services.Interfaces;
+using PickNBook.Api.Services;
 
 namespace PickNBook.Api.Helpers
 {
@@ -160,7 +161,8 @@ namespace PickNBook.Api.Helpers
             IReadOnlyList<BusReservationPassenger> allPassengers,
             ICancellationRefundCalculator? refundCalculator,
             IEnumerable<int>? targetPassengerIds = null,
-            DateTime? asOfTimeUtc = null)
+            DateTime? asOfTimeUtc = null,
+            IEnumerable<BusMarkupSetting>? activeMarkups = null)
         {
             var nowIst = IndiaTimeHelper.ToIst(asOfTimeUtc ?? DateTime.UtcNow);
             var departureIst = bus.DepartureTime;
@@ -181,22 +183,40 @@ namespace PickNBook.Api.Helpers
                 : Math.Max(1, allPassengers?.Count ?? 1);
             int selectedSeatsCount = targetPaxList.Count;
 
+            decimal totalBaseFare = allPassengers.Sum(p => p.BaseFareInr);
+            decimal targetBaseFare = targetPaxList.Sum(p => p.BaseFareInr);
+            decimal seatWeight = (totalBaseFare > 0 && targetBaseFare > 0)
+                ? (targetBaseFare / totalBaseFare)
+                : (totalBookedSeats > 0 ? (decimal)selectedSeatsCount / totalBookedSeats : 0m);
+
             decimal proportionalPaid = totalBookedSeats > 0
-                ? (reservation.TotalPriceInr / totalBookedSeats) * selectedSeatsCount
+                ? reservation.TotalPriceInr * seatWeight
                 : 0m;
             decimal proportionalNetFare = totalBookedSeats > 0
-                ? (reservation.NetFareInr / totalBookedSeats) * selectedSeatsCount
+                ? reservation.NetFareInr * seatWeight
                 : 0m;
-            decimal proportionalMarkup = totalBookedSeats > 0
-                ? (reservation.MarkupAmountInr / totalBookedSeats) * selectedSeatsCount
-                : 0m;
+            decimal proportionalMarkup = 0m;
+            if (activeMarkups != null && activeMarkups.Any() && targetPaxList.Count > 0)
+            {
+                decimal resolvedMarkup = targetPaxList.Sum(p =>
+                    BusPromotionEngineService.ResolveApplicableMarkup(
+                        p.BaseFareInr > 0 ? p.BaseFareInr : (p.PublishedFareInr ?? 0m),
+                        p.SeatType,
+                        activeMarkups));
+
+                proportionalMarkup = Math.Min(resolvedMarkup, reservation.MarkupAmountInr);
+            }
             decimal totalDiscount = reservation.CouponDiscountAmountInr + reservation.AutoDiscountAmountInr + reservation.FeaturedOfferDiscountAmount;
             decimal proportionalDiscount = totalBookedSeats > 0
-                ? (totalDiscount / totalBookedSeats) * selectedSeatsCount
+                ? totalDiscount * seatWeight
                 : 0m;
             decimal proportionalConvenienceFee = totalBookedSeats > 0
-                ? (reservation.ConvenienceFeeInr / totalBookedSeats) * selectedSeatsCount
+                ? reservation.ConvenienceFeeInr * seatWeight
                 : 0m;
+            decimal targetSrdvMargin = targetPaxList.Sum(p =>
+                (p.PublishedFareInr.HasValue && p.OfferedFareInr.HasValue && p.PublishedFareInr.Value > p.OfferedFareInr.Value)
+                    ? (p.PublishedFareInr.Value - p.OfferedFareInr.Value)
+                    : 0m);
 
             bool isConfirmedStatus = BusBookingStatus.IsConfirmed(reservation.Status)
                 || reservation.Status == "Booked"
@@ -286,7 +306,8 @@ namespace PickNBook.Api.Helpers
                         OriginalCustomerPaid = proportionalPaid,
                         SupplierAmount = proportionalNetFare,
                         SupplierDebitAmount = proportionalNetFare,
-                        MarkupAmount = proportionalMarkup > 0 ? proportionalMarkup : Math.Max(0m, proportionalPaid - proportionalNetFare),
+                        SrdvMarginAmount = targetSrdvMargin,
+                        MarkupAmount = proportionalMarkup,
                         DiscountAmount = proportionalDiscount,
                         ConvenienceFee = proportionalConvenienceFee,
                         SupplierCancellationCharge = tierSuppCharge,
@@ -370,6 +391,8 @@ namespace PickNBook.Api.Helpers
                 {
                     OriginalCustomerPaid = proportionalPaid,
                     SupplierAmount = proportionalNetFare,
+                    SupplierDebitAmount = proportionalNetFare,
+                    SrdvMarginAmount = targetSrdvMargin,
                     MarkupAmount = proportionalMarkup,
                     DiscountAmount = proportionalDiscount,
                     ConvenienceFee = proportionalConvenienceFee,

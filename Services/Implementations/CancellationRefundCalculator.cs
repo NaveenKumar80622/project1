@@ -18,9 +18,8 @@ namespace PickNBook.Api.Services.Implementations
             RefundCalculationInput input)
         {
             decimal supplierRefund = input.SupplierRefundAmount;
-            decimal supplierDebit = input.SupplierDebitAmount > 0 ? input.SupplierDebitAmount : input.SupplierAmount;
-            decimal marginDifference = Math.Max(0m, input.OriginalCustomerPaid - supplierDebit);
-            decimal markupRefunded = Math.Max(marginDifference, _refundOptions.RefundMarkup ? input.MarkupAmount : 0m);
+            decimal srdvMarginRefunded = Math.Max(0m, input.SrdvMarginAmount);
+            decimal markupRefunded = _refundOptions.RefundMarkup ? Math.Max(0m, input.MarkupAmount) : 0m;
             decimal markupRetained = Math.Max(0m, input.MarkupAmount - markupRefunded);
 
             decimal feeRefunded = _refundOptions.RefundConvenienceFee ? input.ConvenienceFee : 0m;
@@ -31,7 +30,7 @@ namespace PickNBook.Api.Services.Implementations
 
             decimal serviceCharge = input.ServiceCharge;
 
-            decimal rawCustomerRefund = supplierRefund + markupRefunded - serviceCharge + feeRefunded - couponForfeited;
+            decimal rawCustomerRefund = supplierRefund + srdvMarginRefunded + markupRefunded - serviceCharge + feeRefunded - couponForfeited;
 
             if (rawCustomerRefund < 0m)
             {
@@ -54,6 +53,7 @@ namespace PickNBook.Api.Services.Implementations
                 SupplierRefundAmount = supplierRefund,
                 SupplierCancellationCharge = input.SupplierCancellationCharge,
                 ServiceChargeRetained = serviceCharge,
+                SrdvMarginRefunded = srdvMarginRefunded,
                 MarkupRefunded = markupRefunded,
                 MarkupRetained = markupRetained,
                 FeeRefunded = feeRefunded,

@@ -2113,9 +2113,17 @@ namespace PickNBook.Api.Controllers
                             ? (p.PublishedFareInr.Value - p.OfferedFareInr.Value)
                             : 0m);
 
-                    if (srdvMargin == 0m && x.TotalPriceInr > x.NetFareInr && (x.MarkupAmountInr == 0 && x.ConvenienceFeeInr == 0))
+                    var totalDiscount = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : (x.AutoDiscountAmountInr + x.CouponDiscountAmountInr + x.FeaturedOfferDiscountAmount);
+
+                    if (srdvMargin == 0m && x.CustomerFareInr > 0m && x.NetFareInr > 0m)
                     {
-                        srdvMargin = Math.Max(0m, x.TotalPriceInr - x.NetFareInr);
+                        var inferred = x.CustomerFareInr - x.MarkupAmountInr - x.NetFareInr;
+                        if (inferred > 0m) srdvMargin = inferred;
+                    }
+                    else if (srdvMargin == 0m && x.TotalPriceInr > x.NetFareInr)
+                    {
+                        var inferred = (x.TotalPriceInr - x.ConvenienceFeeInr + totalDiscount) - x.MarkupAmountInr - x.NetFareInr;
+                        if (inferred > 0m) srdvMargin = inferred;
                     }
 
                     decimal calculatedProfit;
@@ -2127,17 +2135,8 @@ namespace PickNBook.Api.Controllers
                     }
                     else
                     {
-                        var totalDiscount = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : (x.AutoDiscountAmountInr + x.CouponDiscountAmountInr + x.FeaturedOfferDiscountAmount);
-                        var directProfit = srdvMargin + (x.MarkupAmountInr + x.ConvenienceFeeInr) - totalDiscount;
-                        if (srdvMargin > 0 || x.MarkupAmountInr > 0 || x.ConvenienceFeeInr > 0 || totalDiscount > 0)
-                        {
-                            calculatedProfit = Math.Round(directProfit, 2);
-                        }
-                        else
-                        {
-                            var grossCustomer = x.TotalPriceInr > 0 ? x.TotalPriceInr : (x.CustomerFareInr > 0 ? x.CustomerFareInr : (x.BaseFareInr + x.MarkupAmountInr + x.ConvenienceFeeInr));
-                            calculatedProfit = Math.Round(grossCustomer - x.NetFareInr, 2);
-                        }
+                        var directProfit = srdvMargin + x.MarkupAmountInr + x.ConvenienceFeeInr - totalDiscount;
+                        calculatedProfit = Math.Round(directProfit, 2);
                     }
 
                     return new

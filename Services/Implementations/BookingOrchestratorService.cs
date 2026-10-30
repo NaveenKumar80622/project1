@@ -596,13 +596,24 @@ namespace PickNBook.Api.Services.Implementations
                         seatType = p.SeatType;
                     }
 
+                    var blocked = item.BlockedSeat;
+                    var baseFare = blocked != null ? blocked.BaseFare : p.BaseFare;
+                    var gstAmount = blocked != null ? blocked.GstAmount : 0m;
+                    var publishedFare = blocked != null && blocked.PublishedFare > 0
+                        ? blocked.PublishedFare
+                        : (baseFare + gstAmount);
+                    var offeredFare = baseFare;
+
                     dbPassengers.Add(new BusReservationPassenger
                     {
                         BusReservationId = reservation.Id,
                         FullName = p.FullName,
                         Gender = p.Gender,
                         SeatNumber = item.SeatCode,
-                        BaseFareInr = item.BlockedSeat != null ? item.BlockedSeat.BaseFare : p.BaseFare,
+                        BaseFareInr = baseFare,
+                        PublishedFareInr = publishedFare,
+                        OfferedFareInr = offeredFare,
+                        GstAmountInr = gstAmount,
                         SeatType = seatType,
                         Age = p.Age
                     });

@@ -82,6 +82,68 @@ public class DashboardController : AdminApiController
         var activeBookings = activeFlights + activeBuses + activeHotels;
         var activeBookingsGrowth = 0m;
 
+        // ── 3.1 Profit Calculations (Commercial Margin + Markup + Fees - Discounts) ──
+        static decimal CalculateBusProfit(PickNBook.Api.Models.BusReservation b)
+        {
+            if (string.Equals(b.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                var custRetained = b.TotalPriceInr - (b.RefundAmountInr ?? 0m);
+                var suppRetained = Math.Max(0m, b.NetFareInr - (b.RefundAmountInr ?? 0m));
+                return Math.Max(0m, custRetained - suppRetained);
+            }
+            if (b.CustomerFareInr > 0 && b.NetFareInr > 0)
+            {
+                return Math.Max(0m, (b.CustomerFareInr - b.NetFareInr) + b.ConvenienceFeeInr);
+            }
+            if (b.TotalPriceInr > 0 && b.NetFareInr > 0)
+            {
+                return Math.Max(0m, b.TotalPriceInr - b.NetFareInr);
+            }
+            return Math.Max(0m, b.MarkupAmountInr + b.ConvenienceFeeInr);
+        }
+
+        static decimal CalculateFlightProfit(PickNBook.Api.Models.FlightReservation f)
+        {
+            if (string.Equals(f.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) return 0m;
+            if (f.CustomerFareInr > 0 && f.NetFareInr > 0)
+            {
+                return Math.Max(0m, f.CustomerFareInr - f.NetFareInr);
+            }
+            decimal p = (f.MarkupAmount > 0 ? f.MarkupAmount : f.B2CMarkupAmountInr) - f.DiscountAmountInr;
+            if (p <= 0m && f.TotalPriceInr > f.NetFareInr && f.NetFareInr > 0) p = f.TotalPriceInr - f.NetFareInr;
+            return Math.Max(0m, p);
+        }
+
+        static decimal CalculateHotelProfit(PickNBook.Api.Models.HotelReservation h)
+        {
+            if (string.Equals(h.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)) return 0m;
+            decimal p = h.MarkupAmount + h.ConvenienceFee - h.CouponDiscount;
+            if (p <= 0m && h.Price > h.NetPrice && h.NetPrice > 0) p = h.Price - h.NetPrice + h.ConvenienceFee;
+            if (p <= 0m && h.TotalPrice > 0) p = h.TotalPrice * 0.06m;
+            return Math.Max(0m, p);
+        }
+
+        var totalBusProfit = busReservations.Sum(CalculateBusProfit);
+        var totalFlightProfit = flightReservations.Sum(CalculateFlightProfit);
+        var totalHotelProfit = hotelReservations.Sum(CalculateHotelProfit);
+        var totalProfit = totalBusProfit + totalFlightProfit + totalHotelProfit;
+
+        var busProfitToday = busReservations.Where(x => x.BookedAtUtc >= today).Sum(CalculateBusProfit);
+        var flightProfitToday = flightReservations.Where(x => x.BookedAtUtc >= today).Sum(CalculateFlightProfit);
+        var hotelProfitToday = hotelReservations.Where(x => x.CreatedAt >= today).Sum(CalculateHotelProfit);
+        var profitToday = busProfitToday + flightProfitToday + hotelProfitToday;
+
+        var busProfitThisMonth = busReservations.Where(x => x.BookedAtUtc >= startOfMonth).Sum(CalculateBusProfit);
+        var flightProfitThisMonth = flightReservations.Where(x => x.BookedAtUtc >= startOfMonth).Sum(CalculateFlightProfit);
+        var hotelProfitThisMonth = hotelReservations.Where(x => x.CreatedAt >= startOfMonth).Sum(CalculateHotelProfit);
+        var profitThisMonth = busProfitThisMonth + flightProfitThisMonth + hotelProfitThisMonth;
+
+        var busProfitLastMonth = busReservations.Where(x => x.BookedAtUtc >= startOfLastMonth && x.BookedAtUtc < startOfMonth).Sum(CalculateBusProfit);
+        var flightProfitLastMonth = flightReservations.Where(x => x.BookedAtUtc >= startOfLastMonth && x.BookedAtUtc < startOfMonth).Sum(CalculateFlightProfit);
+        var hotelProfitLastMonth = hotelReservations.Where(x => x.CreatedAt >= startOfLastMonth && x.CreatedAt < startOfMonth).Sum(CalculateHotelProfit);
+        var profitLastMonth = busProfitLastMonth + flightProfitLastMonth + hotelProfitLastMonth;
+        var profitGrowthPercent = CalculateGrowthPercent(profitThisMonth, profitLastMonth);
+
         // Cancellations
         var cancelledBookings = await _context.BookingCancellations.CountAsync() + await _context.FlightCancellationRequests.CountAsync();
         var cancelledGrowth = 0m;
@@ -240,6 +302,23 @@ public class DashboardController : AdminApiController
             }
         }
 
+        var profitByDay = new decimal[7];
+        foreach (var b in busReservations.Where(x => x.BookedAtUtc >= weekStart))
+        {
+            var idx = (int)(b.BookedAtUtc.Date - weekStart).TotalDays;
+            if (idx >= 0 && idx <= 6) profitByDay[idx] += CalculateBusProfit(b);
+        }
+        foreach (var f in flightReservations.Where(x => x.BookedAtUtc >= weekStart))
+        {
+            var idx = (int)(f.BookedAtUtc.Date - weekStart).TotalDays;
+            if (idx >= 0 && idx <= 6) profitByDay[idx] += CalculateFlightProfit(f);
+        }
+        foreach (var h in hotelReservations.Where(x => x.CreatedAt >= weekStart))
+        {
+            var idx = (int)(h.CreatedAt.Date - weekStart).TotalDays;
+            if (idx >= 0 && idx <= 6) profitByDay[idx] += CalculateHotelProfit(h);
+        }
+
         var requestIp = GetRequestIpAddress();
         var ipRegion = await _geoIpService.ResolveRegionAsync(requestIp);
         var lastLoginAtUtc = await GetEstimatedLastAdminLoginUtcAsync();
@@ -262,6 +341,8 @@ public class DashboardController : AdminApiController
                 failedBookings     = failedToday,           // broad "!= SUCCESS" count (legacy)
                 pendingWorks       = 0,                     // 4-bucket work queue — unchanged
                 revenueInr         = Math.Round(revenueToday, 2, MidpointRounding.AwayFromZero),
+                profitInr          = Math.Round(profitToday, 2, MidpointRounding.AwayFromZero),
+                marginProfitInr    = Math.Round(busProfitToday, 2, MidpointRounding.AwayFromZero),
                 expectedRevenueInr = Math.Round(revenueToday * 1.1m, 2, MidpointRounding.AwayFromZero),
 
                 // ── New granular breakdown (prefer these over legacy failedBookings) ────────────
@@ -281,6 +362,13 @@ public class DashboardController : AdminApiController
             {
                 totalRevenue = Math.Round(totalRevenue, 2, MidpointRounding.AwayFromZero),
                 revenueGrowthPercent = revenueGrowth,
+                totalProfit = Math.Round(totalProfit, 2, MidpointRounding.AwayFromZero),
+                profitGrowthPercent,
+                profitToday = Math.Round(profitToday, 2, MidpointRounding.AwayFromZero),
+                profitThisMonth = Math.Round(profitThisMonth, 2, MidpointRounding.AwayFromZero),
+                busProfit = Math.Round(totalBusProfit, 2, MidpointRounding.AwayFromZero),
+                flightProfit = Math.Round(totalFlightProfit, 2, MidpointRounding.AwayFromZero),
+                hotelProfit = Math.Round(totalHotelProfit, 2, MidpointRounding.AwayFromZero),
                 totalBookings,
                 bookingsGrowthPercent = bookingsGrowth,
                 totalUsers,
@@ -312,7 +400,8 @@ public class DashboardController : AdminApiController
                 labels,
                 successfulBookings = successByDay,
                 failedBookings = failByDay,
-                revenueInr = revByDay
+                revenueInr = revByDay,
+                profitInr = profitByDay
             },
             // Legacy / Backwards-Compatibility Fields (populated with real data):
             revenueToday = new
