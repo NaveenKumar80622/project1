@@ -887,9 +887,11 @@ namespace PickNBook.Api.Controllers
             row.CustomerRemark = request.CustomerRemark;
             row.AdminRemark = request.AdminRemark;
 
-            // When admin approves and marks cancellation status "Completed", route refund
+            // When admin approves and marks cancellation status "Completed", "Approved", "Success", or "Cancelled", route refund
             if (string.Equals(row.CancellationStatus, "Completed", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(row.CancellationStatus, "Approved", StringComparison.OrdinalIgnoreCase))
+                string.Equals(row.CancellationStatus, "Approved", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.CancellationStatus, "Success", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(row.CancellationStatus, "Cancelled", StringComparison.OrdinalIgnoreCase))
             {
                 var reservation = await dbContext.FlightReservations.FirstOrDefaultAsync(r => r.Id == row.FlightReservationId);
                 if (reservation != null)
@@ -904,7 +906,7 @@ namespace PickNBook.Api.Controllers
                         !string.Equals(row.CustomerRefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase) &&
                         int.TryParse(reservation.UserId, out int uId))
                     {
-                        var payment = await dbContext.Payments.FirstOrDefaultAsync(p => p.UserId == reservation.UserId && p.BookingReferenceId == reservation.Id && p.BookingType == "Flight");
+                        var payment = await dbContext.Payments.FirstOrDefaultAsync(p => (p.UserId == reservation.UserId || p.CustomerPhone == reservation.PassengerPhone) && (p.BookingReferenceId == reservation.Id || p.BookingId == reservation.Id || p.PaymentReference == reservation.BookingReference) && p.BookingType == "Flight");
                         var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
                         {
                             UserId = uId,
@@ -933,6 +935,7 @@ namespace PickNBook.Api.Controllers
                         bookingCancellation.CustomerRefundAmount = row.CustomerRefundAmountInr;
                         bookingCancellation.SupplierCancellationCharge = row.AdminCancellationChargeInr;
                         bookingCancellation.RefundStatus = row.CustomerRefundStatus;
+                        bookingCancellation.CompletedAtUtc = DateTime.UtcNow;
                     }
                 }
             }

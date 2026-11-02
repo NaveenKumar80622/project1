@@ -252,6 +252,83 @@ namespace PickNBook.Api.Services.Background
 
                     if (!long.TryParse(cancelRecord.SrdvChangeRequestId, out var crId) || crId <= 0)
                     {
+                        bool isOfflineOrConfirmed = cancelRecord.SrdvChangeRequestId?.StartsWith("OFFLINE-", StringComparison.OrdinalIgnoreCase) == true ||
+                                                   cancelRecord.SrdvChangeRequestId?.StartsWith("FLY91-", StringComparison.OrdinalIgnoreCase) == true ||
+                                                   string.Equals(cancelReq.CancellationStatus, "Success", StringComparison.OrdinalIgnoreCase) ||
+                                                   string.Equals(cancelReq.CancellationStatus, "Completed", StringComparison.OrdinalIgnoreCase) ||
+                                                   string.Equals(cancelReq.CancellationStatus, "Approved", StringComparison.OrdinalIgnoreCase);
+
+                        if (isOfflineOrConfirmed)
+                        {
+                            decimal finalCustomerRefund = cancelRecord.CustomerRefundAmount > 0 ? cancelRecord.CustomerRefundAmount : cancelReq.CustomerRefundAmountInr;
+
+                            if (finalCustomerRefund > 0 && !string.Equals(cancelReq.CustomerRefundStatus, "Refunded", StringComparison.OrdinalIgnoreCase))
+                            {
+                                _logger.LogInformation("Processing offline/confirmed flight cancellation for Reference {Ref}, ChangeRequestId {ChangeRequestId}",
+                                    cancelRecord.BookingReference, cancelRecord.SrdvChangeRequestId);
+
+                                if (cancelReq.CustomerRefundAmountInr > 0 && cancelRecord.CustomerRefundAmount <= 0)
+                                {
+                                    cancelRecord.CustomerRefundAmount = cancelReq.CustomerRefundAmountInr;
+                                    cancelRecord.SupplierCancellationCharge = cancelReq.CustomerCancellationChargeInr;
+                                }
+
+                                var resOffline = await dbContext.FlightReservations.FirstOrDefaultAsync(x => x.Id == cancelReq.FlightReservationId, stoppingToken);
+                                if (resOffline != null)
+                                {
+                                    resOffline.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
+                                    resOffline.CancelledAtUtc ??= DateTime.UtcNow;
+                                    resOffline.CancellationChargeInr = cancelRecord.SupplierCancellationCharge > 0 ? cancelRecord.SupplierCancellationCharge : cancelReq.CustomerCancellationChargeInr;
+                                    resOffline.RefundAmountInr = finalCustomerRefund;
+                                }
+
+                                var paymentOffline = await dbContext.Payments.FirstOrDefaultAsync(p => p.Id == cancelRecord.PaymentId || ((p.BookingReferenceId == cancelReq.FlightReservationId || p.BookingId == cancelReq.FlightReservationId) && p.BookingType == "Flight"), stoppingToken);
+                                int.TryParse(cancelRecord.UserId, out int uIdOffline);
+
+                                var routeRes = await refundRouter.RouteAsync(new PickNBook.Api.Services.Interfaces.RefundRouteContext
+                                {
+                                    UserId = uIdOffline,
+                                    BookingType = "Flight",
+                                    BookingReference = cancelRecord.BookingReference,
+                                    RefundAmount = finalCustomerRefund,
+                                    PaymentMethod = paymentOffline?.PaymentMethod ?? resOffline?.PaymentMethod ?? "Cashfree",
+                                    CashfreeOrderId = paymentOffline?.CashfreeOrderId,
+                                    RefundPreference = cancelRecord.RefundPreference ?? cancelReq.RefundPreference,
+                                    Reason = cancelReq.CustomerRemark ?? cancelReq.SupplierRemark ?? "Flight Cancellation via Recovery Worker",
+                                    TotalPaidAmount = paymentOffline?.TotalAmount ?? paymentOffline?.FinalPayableAmount ?? (resOffline?.TotalPriceInr ?? 0m),
+                                    WalletPaidAmount = paymentOffline?.WalletUsedAmount ?? (resOffline?.WalletPaidAmount ?? 0m),
+                                    GatewayPaidAmount = paymentOffline?.GatewayPaidAmount ?? (resOffline?.GatewayPaidAmount ?? 0m),
+                                    CancellationId = cancelRecord.Id
+                                });
+
+                                cancelRecord.WalletRefundAmount = routeRes.WalletRefunded;
+                                cancelRecord.GatewayRefundAmount = routeRes.GatewayRefunded;
+                                cancelRecord.CashfreeRefundId = routeRes.CashfreeRefundId;
+                                cancelRecord.RefundStatus = routeRes.RefundStatus;
+                                cancelRecord.Status = routeRes.RefundStatus == "COMPLETED" ? "Completed" : (routeRes.RefundStatus == "Failed" ? "Failed" : "Processing");
+                                cancelRecord.FailureReason = null;
+                                cancelReq.CustomerRefundStatus = routeRes.RefundStatus == "COMPLETED" ? "Refunded" : "Processing";
+                                cancelReq.CancellationStatus = "Completed";
+                                if (routeRes.RefundStatus == "COMPLETED") cancelRecord.CompletedAtUtc = DateTime.UtcNow;
+
+                                await dbContext.SaveChangesAsync(stoppingToken);
+                                continue;
+                            }
+                            else if (finalCustomerRefund <= 0 && string.Equals(cancelReq.CancellationStatus, "Completed", StringComparison.OrdinalIgnoreCase))
+                            {
+                                cancelRecord.Status = "Completed";
+                                cancelRecord.RefundStatus = "NOT_REQUIRED";
+                                cancelRecord.CompletedAtUtc = DateTime.UtcNow;
+                                await dbContext.SaveChangesAsync(stoppingToken);
+                                continue;
+                            }
+
+                            cancelRecord.Status = "PendingReview";
+                            cancelRecord.FailureReason = "Offline change request awaiting admin review and refund confirmation.";
+                            await dbContext.SaveChangesAsync(stoppingToken);
+                            continue;
+                        }
+
                         cancelRecord.Status = "Failed";
                         cancelRecord.FailureReason = "Invalid SrdvChangeRequestId.";
                         await dbContext.SaveChangesAsync(stoppingToken);

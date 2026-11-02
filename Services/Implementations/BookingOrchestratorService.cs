@@ -1933,6 +1933,33 @@ namespace PickNBook.Api.Services.Implementations
                     reservation.PaymentMethod = payment.PaymentMethod ?? "Cashfree";
                     reservation.WalletPaidAmount = payment.WalletUsedAmount;
                     reservation.GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount;
+
+                    if ((string.IsNullOrWhiteSpace(reservation.FareRulesJson) || reservation.FareRulesJson == "[]" || string.IsNullOrWhiteSpace(reservation.CancellationCharges) || reservation.CancellationCharges == "[]")
+                        && long.TryParse(traceId, out var gdsTraceIdNum) && !string.IsNullOrWhiteSpace(resultIndex))
+                    {
+                        try
+                        {
+                            var srdvFlightService = _serviceProvider.GetRequiredService<ISrdvFlightService>();
+                            var frRaw = await srdvFlightService.GetFareRuleRawAsync(new AirFareRuleRequestDto
+                            {
+                                TraceId = gdsTraceIdNum,
+                                ResultIndex = resultIndex
+                            });
+                            if (!string.IsNullOrWhiteSpace(frRaw) && frRaw.TrimStart().StartsWith("{"))
+                            {
+                                if (string.IsNullOrWhiteSpace(reservation.FareRulesJson) || reservation.FareRulesJson == "[]")
+                                    reservation.FareRulesJson = frRaw;
+                                if (string.IsNullOrWhiteSpace(reservation.CancellationCharges) || reservation.CancellationCharges == "[]" || string.IsNullOrWhiteSpace(reservation.CancellationPolicyJson))
+                                    reservation.CancellationCharges = frRaw;
+                                if (string.IsNullOrWhiteSpace(reservation.CancellationPolicyJson))
+                                    reservation.CancellationPolicyJson = frRaw;
+                            }
+                        }
+                        catch (Exception frEx)
+                        {
+                            _logger.LogWarning(frEx, "Failed to dynamically fetch FareRule for GDS TraceId {TraceId}, ResultIndex {ResultIndex}", traceId, resultIndex);
+                        }
+                    }
                 }
             }
             else
@@ -2009,6 +2036,33 @@ namespace PickNBook.Api.Services.Implementations
 
                     if (resp.TryGetProperty("CancellationCharges", out var rcancNode2))
                         cancellationCharges = rcancNode2.ToString();
+                }
+
+                if ((string.IsNullOrWhiteSpace(fareRulesJson) || fareRulesJson == "[]" || string.IsNullOrWhiteSpace(cancellationCharges) || cancellationCharges == "[]")
+                    && long.TryParse(traceId, out var lccTraceIdNum) && !string.IsNullOrWhiteSpace(resultIndex))
+                {
+                    try
+                    {
+                        var srdvFlightService = _serviceProvider.GetRequiredService<ISrdvFlightService>();
+                        var frRaw = await srdvFlightService.GetFareRuleRawAsync(new AirFareRuleRequestDto
+                        {
+                            TraceId = lccTraceIdNum,
+                            ResultIndex = resultIndex
+                        });
+                        if (!string.IsNullOrWhiteSpace(frRaw) && frRaw.TrimStart().StartsWith("{"))
+                        {
+                            if (string.IsNullOrWhiteSpace(fareRulesJson) || fareRulesJson == "[]")
+                                fareRulesJson = frRaw;
+                            if (string.IsNullOrWhiteSpace(cancellationCharges) || cancellationCharges == "[]" || string.IsNullOrWhiteSpace(cancellationPolicyJson))
+                                cancellationCharges = frRaw;
+                            if (string.IsNullOrWhiteSpace(cancellationPolicyJson))
+                                cancellationPolicyJson = frRaw;
+                        }
+                    }
+                    catch (Exception frEx)
+                    {
+                        _logger.LogWarning(frEx, "Failed to dynamically fetch FareRule during fulfillment for TraceId {TraceId}, ResultIndex {ResultIndex}", traceId, resultIndex);
+                    }
                 }
 
                 // LCC: Create Reservation
