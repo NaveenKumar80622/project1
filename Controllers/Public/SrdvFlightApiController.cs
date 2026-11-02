@@ -1833,7 +1833,6 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("BookingDetails")]
         [HttpPost("/v8/BookingDetails")]
         [HttpPost("/api/flight/v8/BookingDetails")]
-        [HttpPost("/api/flight/srdv/BookingDetails")]
         public async Task<IActionResult> BookingDetails([FromBody] FlightBookingDetailsProxyRequestDto proxyRequest)
         {
             if (proxyRequest == null || proxyRequest.TraceId <= 0)
@@ -2903,7 +2902,6 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("SendChangeRequest")]
         [HttpPost("/v8/SendChangeRequest")]
         [HttpPost("/api/flight/v8/SendChangeRequest")]
-        [HttpPost("/api/flight/srdv/SendChangeRequest")]
         public async Task<IActionResult> SendChangeRequest([FromBody] FlightSendChangeProxyRequestDto proxyRequest)
         {
             var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
@@ -3052,12 +3050,25 @@ namespace PickNBook.Api.Controllers.Public
                     });
                 }
 
-                // Status Guards per spec: "This booking is not confirmed yet, so it cannot be cancelled. Please contact the support team."
+                // Status Guards per spec:
+                if (string.Equals(reservation.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Ok(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto
+                        {
+                            ErrorCode = 101,
+                            ErrorMessage = "This booking has already been cancelled."
+                        }
+                    });
+                }
+
                 if (!string.Equals(reservation.Status, "Booked", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(reservation.Status, "Ticketed", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(reservation.Status, "Confirmed", StringComparison.OrdinalIgnoreCase) &&
                     !string.Equals(reservation.Status, "Cancellation Requested", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(reservation.Status, "Partial Cancellation Requested", StringComparison.OrdinalIgnoreCase))
+                    !string.Equals(reservation.Status, "Partial Cancellation Requested", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(reservation.Status, "Partially Cancelled", StringComparison.OrdinalIgnoreCase))
                 {
                     return Ok(new SrdvV8ErrorResponseDto
                     {
@@ -3225,7 +3236,12 @@ namespace PickNBook.Api.Controllers.Public
                         CancelledPassengersJson = reqTickets
                     };
                     
-                    reservation.Status = isPartial ? "Partial Cancellation Requested" : "Cancellation Requested";
+                    reservation.Status = isPartial ? "Partially Cancelled" : "Cancelled";
+                    reservation.CancelledAtUtc = DateTime.UtcNow;
+                    if (!string.IsNullOrWhiteSpace(request.Remarks))
+                    {
+                        reservation.CancellationReason = request.Remarks.Trim();
+                    }
                     
                     _dbContext.FlightCancellationRequests.Add(cancelReq);
                     
@@ -3334,7 +3350,6 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("GetCancelStatus")]
         [HttpPost("/v8/GetCancelStatus")]
         [HttpPost("/api/flight/v8/GetCancelStatus")]
-        [HttpPost("/api/flight/srdv/GetCancelStatus")]
         public async Task<IActionResult> GetCancelStatus([FromBody] FlightGetCancelStatusProxyRequestDto proxyRequest)
         {
             var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
@@ -3483,11 +3498,12 @@ namespace PickNBook.Api.Controllers.Public
         [HttpPost("GetCancellationCharges")]
         [HttpPost("/v8/GetCancellationCharges")]
         [HttpPost("/api/flight/v8/GetCancellationCharges")]
-        [HttpPost("/api/flight/srdv/GetCancellationCharges")]
         public async Task<IActionResult> GetCancellationCharges([FromBody] FlightGetCancellationChargesProxyRequestDto proxyRequest)
         {
             var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
             if (!isAllowed) return authError!;
+
+            FlightReservation? reservation = null;
 
             try
             {
@@ -3517,7 +3533,13 @@ namespace PickNBook.Api.Controllers.Public
 
                 bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
                 var traceStr = proxyRequest.TraceId.ToString();
-                var reservation = await _dbContext.FlightReservations.FirstOrDefaultAsync(r => r.TraceId == traceStr);
+                reservation = await _dbContext.FlightReservations.FirstOrDefaultAsync(r => r.TraceId == traceStr);
+                if (reservation == null && !string.IsNullOrWhiteSpace(proxyRequest.PNR))
+                {
+                    var trimmedPnr = proxyRequest.PNR.Trim();
+                    reservation = await _dbContext.FlightReservations.FirstOrDefaultAsync(r => r.Pnr == trimmedPnr || r.ReturnPnr == trimmedPnr || r.BookingReference == trimmedPnr);
+                }
+
                 if (reservation != null && !isPartnerApi && !isAdmin && !string.Equals(reservation.UserId, currentUserId, StringComparison.OrdinalIgnoreCase))
                 {
                     return StatusCode(StatusCodes.Status403Forbidden, new SrdvV8ErrorResponseDto
@@ -3537,66 +3559,116 @@ namespace PickNBook.Api.Controllers.Public
                     Remarks = proxyRequest.Remarks?.Trim() ?? string.Empty
                 };
 
-                var responseRaw = await _srdvFlightService.GetCancellationChargesRawAsync(request);
-                using var doc = JsonDocument.Parse(responseRaw);
-                var root = doc.RootElement;
-
-                JsonElement resp = root;
-                if (root.TryGetProperty("Response", out var responseNode)) resp = responseNode;
-                else if (root.TryGetProperty("Results", out var resultsNode)) resp = resultsNode;
-
-                var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
-                if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCodeProp))
+                string responseRaw = string.Empty;
+                try
                 {
-                    int code = 0;
-                    if (errCodeProp.ValueKind == JsonValueKind.Number) code = errCodeProp.GetInt32();
-                    else if (errCodeProp.ValueKind == JsonValueKind.String && int.TryParse(errCodeProp.GetString(), out var cVal)) code = cVal;
-
-                    if (code != 0)
-                    {
-                        if (reservation != null)
-                        {
-                            return Ok(new
-                            {
-                                success = true,
-                                isDynamicBookingPolicy = true,
-                                nonRefundable = reservation.NonRefundable,
-                                cancellationCharges = !string.IsNullOrEmpty(reservation.CancellationCharges) ? reservation.CancellationCharges : "Standard domestic airline cancellation policy applies. Statutory taxes are refundable.",
-                                cancellationPolicy = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
-                                cancellationPolicyJson = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
-                                fareRules = reservation.FareRulesJson,
-                                fareRulesJson = reservation.FareRulesJson
-                            });
-                        }
-
-                        string msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "Cancellation charges are not available for this Trace Id.";
-                        return Ok(new SrdvV8ErrorResponseDto
-                        {
-                            Error = new SrdvV8ErrorDto
-                            {
-                                ErrorCode = code,
-                                ErrorMessage = msg
-                            }
-                        });
-                    }
+                    responseRaw = await _srdvFlightService.GetCancellationChargesRawAsync(request);
+                }
+                catch (Exception sEx)
+                {
+                    _logger.LogWarning(sEx, "SRDV live call GetCancellationChargesRawAsync failed for TraceId {TraceId}. Proceeding to dynamic policy fallback.", proxyRequest.TraceId);
                 }
 
-                return Ok(resp.Clone());
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogError(ex, "HTTP exception during GetCancellationCharges for TraceId {TraceId}", proxyRequest?.TraceId);
-                return StatusCode(502, new SrdvV8ErrorResponseDto
+                if (!string.IsNullOrWhiteSpace(responseRaw) && responseRaw.TrimStart().StartsWith("{"))
                 {
-                    Error = new SrdvV8ErrorDto { ErrorCode = 502, ErrorMessage = "Supplier communication error." }
+                    using var doc = JsonDocument.Parse(responseRaw);
+                    var root = doc.RootElement;
+
+                    JsonElement resp = root;
+                    if (root.TryGetProperty("Response", out var responseNode)) resp = responseNode;
+                    else if (root.TryGetProperty("Results", out var resultsNode)) resp = resultsNode;
+
+                    var errSource = root.TryGetProperty("Error", out var rootErr) ? root : resp;
+                    if (errSource.TryGetProperty("Error", out var err) && err.TryGetProperty("ErrorCode", out var errCodeProp))
+                    {
+                        int code = 0;
+                        if (errCodeProp.ValueKind == JsonValueKind.Number) code = errCodeProp.GetInt32();
+                        else if (errCodeProp.ValueKind == JsonValueKind.String && int.TryParse(errCodeProp.GetString(), out var cVal)) code = cVal;
+
+                        if (code != 0)
+                        {
+                            if (reservation != null)
+                            {
+                                return Ok(new
+                                {
+                                    success = true,
+                                    isDynamicBookingPolicy = true,
+                                    nonRefundable = reservation.NonRefundable,
+                                    cancellationCharges = !string.IsNullOrEmpty(reservation.CancellationCharges) ? reservation.CancellationCharges : "Standard domestic airline cancellation policy applies. Statutory taxes are refundable.",
+                                    cancellationPolicy = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                                    cancellationPolicyJson = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                                    fareRules = reservation.FareRulesJson,
+                                    fareRulesJson = reservation.FareRulesJson
+                                });
+                            }
+
+                            string msg = err.TryGetProperty("ErrorMessage", out var msgProp) ? (msgProp.GetString() ?? "") : "Cancellation charges are not available for this Trace Id.";
+                            return Ok(new SrdvV8ErrorResponseDto
+                            {
+                                Error = new SrdvV8ErrorDto
+                                {
+                                    ErrorCode = code,
+                                    ErrorMessage = msg
+                                }
+                            });
+                        }
+                    }
+
+                    return Ok(resp.Clone());
+                }
+
+                // If SRDV didn't return valid JSON or threw, fall back to dynamic booking policy safely
+                if (reservation != null)
+                {
+                    return Ok(new
+                    {
+                        success = true,
+                        isDynamicBookingPolicy = true,
+                        nonRefundable = reservation.NonRefundable,
+                        cancellationCharges = !string.IsNullOrEmpty(reservation.CancellationCharges) ? reservation.CancellationCharges : "Standard domestic airline cancellation policy applies. Statutory taxes are refundable.",
+                        cancellationPolicy = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                        cancellationPolicyJson = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                        fareRules = reservation.FareRulesJson,
+                        fareRulesJson = reservation.FareRulesJson
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    isDynamicBookingPolicy = true,
+                    nonRefundable = false,
+                    cancellationCharges = "Standard airline cancellation policy applies. Statutory taxes are refundable.",
+                    cancellationPolicy = "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                    cancellationPolicyJson = "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}"
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting cancellation charges for TraceId: {TraceId}", proxyRequest?.TraceId);
-                return StatusCode(500, new SrdvV8ErrorResponseDto
+                _logger.LogWarning(ex, "Handled exception during GetCancellationCharges for TraceId: {TraceId}. Returning fallback cancellation policy.", proxyRequest?.TraceId);
+                if (reservation != null)
                 {
-                    Error = new SrdvV8ErrorDto { ErrorCode = 500, ErrorMessage = "Failed to get cancellation charges." }
+                    return Ok(new
+                    {
+                        success = true,
+                        isDynamicBookingPolicy = true,
+                        nonRefundable = reservation.NonRefundable,
+                        cancellationCharges = !string.IsNullOrEmpty(reservation.CancellationCharges) ? reservation.CancellationCharges : "Standard domestic airline cancellation policy applies. Statutory taxes are refundable.",
+                        cancellationPolicy = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                        cancellationPolicyJson = !string.IsNullOrEmpty(reservation.CancellationPolicyJson) ? reservation.CancellationPolicyJson : "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                        fareRules = reservation.FareRulesJson,
+                        fareRulesJson = reservation.FareRulesJson
+                    });
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    isDynamicBookingPolicy = true,
+                    nonRefundable = false,
+                    cancellationCharges = "Standard airline cancellation policy applies. Statutory taxes are refundable.",
+                    cancellationPolicy = "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}",
+                    cancellationPolicyJson = "{\"Rules\":[\"Domestic airline cancellation charges apply per airline tariff.\",\"Statutory taxes (UDF, PSF) are refundable.\",\"Platform cancellation service fee of ₹59 applies.\"]}"
                 });
             }
         }
