@@ -1985,7 +1985,7 @@ public class TicketEmailService : ITicketEmailService
 
         if (policies.Count > 0)
         {
-            var matching = policies.FirstOrDefault(p => Math.Abs(p.DeductionAmount - actualCharge) < 1.0m);
+            var matching = policies.FirstOrDefault(p => Math.Abs(p.DeductionAmount - actualCharge) < 1.0m || Math.Abs(p.DeductionAmount - (actualCharge - 35.00m)) < 1.0m);
             if (matching != default)
             {
                 return (matching.TimeWindow, matching.RefundPct, $"INR {actualCharge:0.00} (Fee)", $"INR {actualRefund:0.00} (Refunded)", $"Cancelled within {matching.TimeWindow}");

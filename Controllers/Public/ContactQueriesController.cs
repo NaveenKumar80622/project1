@@ -15,11 +15,19 @@ namespace PickNBook.Api.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IEmailService _emailService;
+        private readonly IConfiguration? _configuration;
+        private readonly ILogger<ContactQueriesController>? _logger;
 
-        public ContactQueriesController(AppDbContext context, IEmailService emailService)
+        public ContactQueriesController(
+            AppDbContext context, 
+            IEmailService emailService,
+            IConfiguration? configuration = null,
+            ILogger<ContactQueriesController>? logger = null)
         {
             _context = context;
             _emailService = emailService;
+            _configuration = configuration;
+            _logger = logger;
         }
 
         // POST: api/contactqueries
@@ -65,6 +73,31 @@ namespace PickNBook.Api.Controllers
 
             _context.ContactQueries.Add(query);
             await _context.SaveChangesAsync();
+
+            // Send customer query to PickNBook support email (non-blocking for query creation)
+            try
+            {
+                string recipientEmail = _configuration?["SupportEmail"] ?? "contact@picknbook.in";
+                string emailSubject = $"New Contact Query: {query.Subject}";
+                string emailBody = $@"
+                    <h2>New Contact Query</h2>
+                    <p><strong>Name:</strong> {System.Net.WebUtility.HtmlEncode(query.Name)}</p>
+                    <p><strong>Customer Email:</strong> {System.Net.WebUtility.HtmlEncode(query.Email)}</p>
+                    <p><strong>Phone:</strong> {System.Net.WebUtility.HtmlEncode(query.PhoneNo ?? "Not provided")}</p>
+                    <p><strong>Subject:</strong> {System.Net.WebUtility.HtmlEncode(query.Subject)}</p>
+                    <p><strong>Message:</strong></p>
+                    <p>{System.Net.WebUtility.HtmlEncode(query.Message)}</p>";
+
+                await _emailService.SendEmailAsync(
+                    recipientEmail,
+                    emailSubject,
+                    emailBody
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to send notification email for contact query {QueryId}", query.Id);
+            }
 
             return Ok(new
             {

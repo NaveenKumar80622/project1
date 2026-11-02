@@ -77,55 +77,87 @@ namespace PickNBook.Api.Services.Implementations
 
                 // 3. Authoritative database-level atomic conditional update
                 bool isRelational = _context.Database.IsRelational();
-                if (isRelational)
-                {
-                    int affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
-                        $"UPDATE users SET WalletBalance = WalletBalance - {amount} WHERE Id = {userId} AND WalletStatus = 'Active' AND WalletBalance >= {amount};");
+                bool isLocalTx = isRelational && _context.Database.CurrentTransaction == null;
+                Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? dbTransaction = null;
+                WalletTransaction transaction;
 
-                    if (affectedRows == 0)
+                try
+                {
+                    if (isLocalTx)
                     {
+                        dbTransaction = await _context.Database.BeginTransactionAsync();
+                    }
+
+                    if (isRelational)
+                    {
+                        int affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
+                            $"UPDATE users SET WalletBalance = WalletBalance - {amount} WHERE Id = {userId} AND WalletStatus = 'Active' AND WalletBalance >= {amount};");
+
+                        if (affectedRows == 0)
+                        {
+                            await _context.Entry(user).ReloadAsync();
+
+                            if (!string.Equals(user.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
+                                throw new InvalidOperationException("User wallet is not active.");
+
+                            if (user.WalletBalance < amount)
+                                throw new InvalidOperationException(
+                                    $"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
+
+                            throw new InvalidOperationException("Concurrent wallet modification detected. Debit failed.");
+                        }
+
                         await _context.Entry(user).ReloadAsync();
-
-                        if (!string.Equals(user.WalletStatus, "Active", StringComparison.OrdinalIgnoreCase))
-                            throw new InvalidOperationException("User wallet is not active.");
-
-                        if (user.WalletBalance < amount)
-                            throw new InvalidOperationException(
-                                $"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
-
-                        throw new InvalidOperationException("Concurrent wallet modification detected. Debit failed.");
                     }
-
-                    await _context.Entry(user).ReloadAsync();
-                }
-                else
-                {
-                    lock (_inMemoryLock)
+                    else
                     {
-                        if (user.WalletBalance < amount)
-                            throw new InvalidOperationException(
-                                $"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
+                        lock (_inMemoryLock)
+                        {
+                            if (user.WalletBalance < amount)
+                                throw new InvalidOperationException(
+                                    $"Insufficient wallet balance. Available: {user.WalletBalance:N2}, Required: {amount:N2}");
 
-                        user.WalletBalance -= amount;
+                            user.WalletBalance -= amount;
+                        }
+                    }
+
+                    // 4. Record completed debit transaction
+                    transaction = new WalletTransaction
+                    {
+                        UserId = userId,
+                        TransactionType = "Debit",
+                        Amount = amount,
+                        RunningBalance = user.WalletBalance,
+                        ReferenceType = referenceType,
+                        RefCode = refCode,
+                        Description = description,
+                        Status = "Completed",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    _context.WalletTransactions.Add(transaction);
+                    await _context.SaveChangesAsync();
+
+                    if (dbTransaction != null)
+                    {
+                        await dbTransaction.CommitAsync();
                     }
                 }
-
-                // 4. Record completed debit transaction
-                var transaction = new WalletTransaction
+                catch
                 {
-                    UserId = userId,
-                    TransactionType = "Debit",
-                    Amount = amount,
-                    RunningBalance = user.WalletBalance,
-                    ReferenceType = referenceType,
-                    RefCode = refCode,
-                    Description = description,
-                    Status = "Completed",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                _context.WalletTransactions.Add(transaction);
-                await _context.SaveChangesAsync();
+                    if (dbTransaction != null)
+                    {
+                        try { await dbTransaction.RollbackAsync(); } catch { }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    if (dbTransaction != null)
+                    {
+                        await dbTransaction.DisposeAsync();
+                    }
+                }
 
                 _logger.LogInformation("Successfully debited {Amount:N2} from User {UserId}. New Balance: {Balance:N2}. RefCode: {RefCode}",
                     amount, userId, user.WalletBalance, refCode);
@@ -201,36 +233,73 @@ namespace PickNBook.Api.Services.Implementations
 
                 // Atomic database-level balance update
                 bool isRelational = _context.Database.IsRelational();
-                if (isRelational)
-                {
-                    await _context.Database.ExecuteSqlInterpolatedAsync(
-                        $"UPDATE users SET WalletBalance = WalletBalance + {amount} WHERE Id = {userId};");
+                bool isLocalTx = isRelational && _context.Database.CurrentTransaction == null;
+                Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? dbTransaction = null;
+                WalletTransaction transaction;
 
-                    await _context.Entry(user).ReloadAsync();
-                }
-                else
+                try
                 {
-                    lock (_inMemoryLock)
+                    if (isLocalTx)
                     {
-                        user.WalletBalance += amount;
+                        dbTransaction = await _context.Database.BeginTransactionAsync();
+                    }
+
+                    if (isRelational)
+                    {
+                        int affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
+                            $"UPDATE users SET WalletBalance = WalletBalance + {amount} WHERE Id = {userId};");
+
+                        if (affectedRows == 0)
+                        {
+                            throw new InvalidOperationException($"Unable to credit wallet. User with ID {userId} was not found.");
+                        }
+
+                        await _context.Entry(user).ReloadAsync();
+                    }
+                    else
+                    {
+                        lock (_inMemoryLock)
+                        {
+                            user.WalletBalance += amount;
+                        }
+                    }
+
+                    transaction = new WalletTransaction
+                    {
+                        UserId = userId,
+                        TransactionType = "Credit",
+                        Amount = amount,
+                        RunningBalance = user.WalletBalance,
+                        ReferenceType = referenceType,
+                        RefCode = refCode,
+                        Description = description,
+                        Status = "Completed",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    _context.WalletTransactions.Add(transaction);
+                    await _context.SaveChangesAsync();
+
+                    if (dbTransaction != null)
+                    {
+                        await dbTransaction.CommitAsync();
                     }
                 }
-
-                var transaction = new WalletTransaction
+                catch
                 {
-                    UserId = userId,
-                    TransactionType = "Credit",
-                    Amount = amount,
-                    RunningBalance = user.WalletBalance,
-                    ReferenceType = referenceType,
-                    RefCode = refCode,
-                    Description = description,
-                    Status = "Completed",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                _context.WalletTransactions.Add(transaction);
-                await _context.SaveChangesAsync();
+                    if (dbTransaction != null)
+                    {
+                        try { await dbTransaction.RollbackAsync(); } catch { }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    if (dbTransaction != null)
+                    {
+                        await dbTransaction.DisposeAsync();
+                    }
+                }
 
                 _logger.LogInformation("Successfully credited {Amount:N2} to User {UserId}. New Balance: {Balance:N2}. RefCode: {RefCode}",
                     amount, userId, user.WalletBalance, refCode);
@@ -306,36 +375,73 @@ namespace PickNBook.Api.Services.Implementations
 
                 // Atomic database-level balance update
                 bool isRelational = _context.Database.IsRelational();
-                if (isRelational)
-                {
-                    await _context.Database.ExecuteSqlInterpolatedAsync(
-                        $"UPDATE users SET WalletBalance = WalletBalance + {amount} WHERE Id = {userId};");
+                bool isLocalTx = isRelational && _context.Database.CurrentTransaction == null;
+                Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? dbTransaction = null;
+                WalletTransaction transaction;
 
-                    await _context.Entry(user).ReloadAsync();
-                }
-                else
+                try
                 {
-                    lock (_inMemoryLock)
+                    if (isLocalTx)
                     {
-                        user.WalletBalance += amount;
+                        dbTransaction = await _context.Database.BeginTransactionAsync();
+                    }
+
+                    if (isRelational)
+                    {
+                        int affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
+                            $"UPDATE users SET WalletBalance = WalletBalance + {amount} WHERE Id = {userId};");
+
+                        if (affectedRows == 0)
+                        {
+                            throw new InvalidOperationException($"Unable to refund wallet. User with ID {userId} was not found.");
+                        }
+
+                        await _context.Entry(user).ReloadAsync();
+                    }
+                    else
+                    {
+                        lock (_inMemoryLock)
+                        {
+                            user.WalletBalance += amount;
+                        }
+                    }
+
+                    transaction = new WalletTransaction
+                    {
+                        UserId = userId,
+                        TransactionType = "Refund",
+                        Amount = amount,
+                        RunningBalance = user.WalletBalance,
+                        ReferenceType = referenceType,
+                        RefCode = refCode,
+                        Description = description,
+                        Status = "Completed",
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    _context.WalletTransactions.Add(transaction);
+                    await _context.SaveChangesAsync();
+
+                    if (dbTransaction != null)
+                    {
+                        await dbTransaction.CommitAsync();
                     }
                 }
-
-                var transaction = new WalletTransaction
+                catch
                 {
-                    UserId = userId,
-                    TransactionType = "Refund",
-                    Amount = amount,
-                    RunningBalance = user.WalletBalance,
-                    ReferenceType = referenceType,
-                    RefCode = refCode,
-                    Description = description,
-                    Status = "Completed",
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                _context.WalletTransactions.Add(transaction);
-                await _context.SaveChangesAsync();
+                    if (dbTransaction != null)
+                    {
+                        try { await dbTransaction.RollbackAsync(); } catch { }
+                    }
+                    throw;
+                }
+                finally
+                {
+                    if (dbTransaction != null)
+                    {
+                        await dbTransaction.DisposeAsync();
+                    }
+                }
 
                 _logger.LogInformation("Successfully refunded {Amount:N2} to User {UserId}. New Balance: {Balance:N2}. RefCode: {RefCode}",
                     amount, userId, user.WalletBalance, refCode);

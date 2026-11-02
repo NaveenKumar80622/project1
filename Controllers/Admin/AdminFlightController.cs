@@ -1413,6 +1413,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("popular-destinations")]
+        [HttpGet("popular-routes")]
         public async Task<IActionResult> GetPopularDestinations()
         {
             var rows = await dbContext.PopularDestinations
@@ -1424,6 +1425,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPost("popular-destinations")]
+        [HttpPost("popular-routes")]
         public async Task<IActionResult> CreatePopularDestination([FromBody] PopularDestinationRequestDto request)
         {
             var error = ValidatePopularDestinationRequest(request);
@@ -1451,6 +1453,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("popular-destinations/{id:int}")]
+        [HttpGet("popular-routes/{id:int}")]
         public async Task<IActionResult> GetPopularDestinationById(int id)
         {
             var row = await dbContext.PopularDestinations.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
@@ -1463,6 +1466,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpPut("popular-destinations/{id:int}")]
+        [HttpPut("popular-routes/{id:int}")]
         public async Task<IActionResult> UpdatePopularDestination(int id, [FromBody] PopularDestinationRequestDto request)
         {
             var error = ValidatePopularDestinationRequest(request);
@@ -1490,6 +1494,7 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpDelete("popular-destinations/{id:int}")]
+        [HttpDelete("popular-routes/{id:int}")]
         public async Task<IActionResult> DeletePopularDestination(int id)
         {
             var row = await dbContext.PopularDestinations.FirstOrDefaultAsync(x => x.Id == id);

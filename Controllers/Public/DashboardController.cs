@@ -149,7 +149,11 @@ public class DashboardController : AdminApiController
         var cancelledGrowth = 0m;
 
         // Refunds
-        var refundRequests = await _context.Payments.CountAsync(p => p.RefundStatus == "PENDING");
+        var refundRequests = await _context.Payments.CountAsync(p =>
+            p.RefundStatus == "PENDING" ||
+            p.RefundStatus == "REFUND_REQUESTED" ||
+            p.RefundStatus == "RefundProcessing" ||
+            p.RefundStatus == "AwaitingSupplierRefund");
         var refundsGrowth = 0m;
 
         // Today's Status & Day-over-Day
@@ -243,7 +247,7 @@ public class DashboardController : AdminApiController
                 $"pay-{p.Id}",
                 "payment",
                 $"Payment {p.Status} for {p.FinalPayableAmount} INR",
-                p.CreatedAt));
+                DateTime.SpecifyKind(p.CreatedAt, DateTimeKind.Utc).AddHours(5).AddMinutes(30)));
         }
 
         var recentUsers = await _context.Users
@@ -370,10 +374,16 @@ public class DashboardController : AdminApiController
                 flightProfit = Math.Round(totalFlightProfit, 2, MidpointRounding.AwayFromZero),
                 hotelProfit = Math.Round(totalHotelProfit, 2, MidpointRounding.AwayFromZero),
                 totalBookings,
+                flightBookings = flightReservations.Count,
+                busBookings = busReservations.Count,
+                hotelBookings = hotelReservations.Count,
                 bookingsGrowthPercent = bookingsGrowth,
                 totalUsers,
                 usersGrowthPercent = usersGrowth,
                 activeBookings,
+                activeFlightBookings = activeFlights,
+                activeBusBookings = activeBuses,
+                activeHotelBookings = activeHotels,
                 activeBookingsGrowthPercent = activeBookingsGrowth,
                 cancelledBookings,
                 cancelledBookingsGrowthPercent = cancelledGrowth,

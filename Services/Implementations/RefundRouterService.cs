@@ -318,9 +318,56 @@ namespace PickNBook.Api.Services.Implementations
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Failed Cashfree refund of {Amount} for Order {OrderId}", targetGatewayAmount, context.CashfreeOrderId);
-                        gatewayStatus = "Failed";
-                        gatewayError = ex.Message;
+                        _logger.LogWarning(ex, "Cashfree refund initiation call failed for Order {OrderId}. Attempting active reconciliation with gateway...", context.CashfreeOrderId);
+
+                        bool reconciled = false;
+                        try
+                        {
+                            var existingRefundsDoc = await _cashfreeService.GetRefundsForOrderAsync(context.CashfreeOrderId);
+                            if (existingRefundsDoc != null && existingRefundsDoc.RootElement.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var rf in existingRefundsDoc.RootElement.EnumerateArray())
+                                {
+                                    string rfStatus = rf.TryGetProperty("refund_status", out var stProp) ? stProp.GetString() ?? "" : "";
+                                    decimal rfAmt = rf.TryGetProperty("refund_amount", out var amProp) ? amProp.GetDecimal() : 0m;
+                                    string rfId = rf.TryGetProperty("refund_id", out var idProp) ? idProp.GetString() ?? "" : "";
+
+                                    if (string.Equals(rfStatus, "SUCCESS", StringComparison.OrdinalIgnoreCase) ||
+                                        string.Equals(rfStatus, "PROCESSED", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        gatewayStatus = "Refunded";
+                                        actualGatewayRefunded = rfAmt > 0 ? rfAmt : targetGatewayAmount;
+                                        refundId = !string.IsNullOrWhiteSpace(rfId) ? rfId : refundId;
+                                        reconciled = true;
+                                        _logger.LogInformation("Reconciled Cashfree refund for Order {OrderId}: Found successful refund {RefundId} of amount {Amount}",
+                                            context.CashfreeOrderId, refundId, actualGatewayRefunded);
+                                        break;
+                                    }
+                                    else if (string.Equals(rfStatus, "PENDING", StringComparison.OrdinalIgnoreCase) ||
+                                             string.Equals(rfStatus, "ONHOLD", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        gatewayStatus = "Processing";
+                                        actualGatewayRefunded = rfAmt > 0 ? rfAmt : targetGatewayAmount;
+                                        refundId = !string.IsNullOrWhiteSpace(rfId) ? rfId : refundId;
+                                        reconciled = true;
+                                        _logger.LogInformation("Reconciled Cashfree refund for Order {OrderId}: Found in-flight refund {RefundId} of amount {Amount}",
+                                            context.CashfreeOrderId, refundId, actualGatewayRefunded);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception checkEx)
+                        {
+                            _logger.LogWarning(checkEx, "Failed to reconcile existing refunds from Cashfree for Order {OrderId}", context.CashfreeOrderId);
+                        }
+
+                        if (!reconciled)
+                        {
+                            _logger.LogError(ex, "Failed Cashfree refund of {Amount} for Order {OrderId}", targetGatewayAmount, context.CashfreeOrderId);
+                            gatewayStatus = "Failed";
+                            gatewayError = ex.Message;
+                        }
                     }
                 }
             }
@@ -388,7 +435,15 @@ namespace PickNBook.Api.Services.Implementations
                     GatewayError = gatewayError,
                     UpdatedAtUtc = DateTime.UtcNow
                 };
-                cancellation.FailureReason = JsonSerializer.Serialize(compAudit);
+
+                if (hasFailedComponent)
+                {
+                    cancellation.FailureReason = JsonSerializer.Serialize(compAudit);
+                }
+                else
+                {
+                    cancellation.FailureReason = null;
+                }
 
                 await _dbContext.SaveChangesAsync();
 

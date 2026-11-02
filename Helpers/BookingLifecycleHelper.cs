@@ -67,7 +67,24 @@ namespace PickNBook.Api.Helpers
             DateTime? travelDepartureTime = null,
             string? cancellationReason = null)
         {
-            string? effectiveCancelReason = cancel?.FailureReason ?? cancellationReason ?? payment?.RefundReason;
+            string? cleanReason = null;
+            if (!string.IsNullOrWhiteSpace(cancellationReason) && !cancellationReason.TrimStart().StartsWith("{") && !cancellationReason.TrimStart().StartsWith("["))
+            {
+                cleanReason = cancellationReason.Trim();
+            }
+            else if (!string.IsNullOrWhiteSpace(payment?.RefundReason) && !payment.RefundReason.TrimStart().StartsWith("{") && !payment.RefundReason.TrimStart().StartsWith("["))
+            {
+                cleanReason = payment.RefundReason.Trim();
+            }
+            else if (!string.IsNullOrWhiteSpace(cancel?.FailureReason) && !cancel.FailureReason.TrimStart().StartsWith("{") && !cancel.FailureReason.TrimStart().StartsWith("[") && !cancel.FailureReason.Contains("Exception"))
+            {
+                cleanReason = cancel.FailureReason.Trim();
+            }
+            else
+            {
+                cleanReason = "Cancelled by user";
+            }
+            string? effectiveCancelReason = cleanReason;
             var stages = new List<UserLifecycleStageNodeDto>();
             var timeline = new List<UserBookingTimelineEventDto>();
 

@@ -25,6 +25,7 @@ public class AdminHotelController : AdminApiController
     private readonly PickNBook.Api.Services.Notifications.Interfaces.INotificationService _notificationService;
     private readonly ITicketPdfService _ticketPdfService;
     private readonly ITicketEmailService _ticketEmailService;
+    private readonly PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator _refundCalculator;
 
     public AdminHotelController(
         AppDbContext context, 
@@ -32,7 +33,8 @@ public class AdminHotelController : AdminApiController
         ILogger<AdminHotelController> logger,
         PickNBook.Api.Services.Notifications.Interfaces.INotificationService notificationService,
         ITicketPdfService ticketPdfService,
-        ITicketEmailService ticketEmailService)
+        ITicketEmailService ticketEmailService,
+        PickNBook.Api.Services.Interfaces.ICancellationRefundCalculator refundCalculator)
     {
         _context = context;
         _hotelService = hotelService;
@@ -40,6 +42,7 @@ public class AdminHotelController : AdminApiController
         _notificationService = notificationService;
         _ticketPdfService = ticketPdfService;
         _ticketEmailService = ticketEmailService;
+        _refundCalculator = refundCalculator;
     }
 
     // 1. List All Bookings: GET /api/admin/hotel/bookings
@@ -402,8 +405,24 @@ public class AdminHotelController : AdminApiController
         }
 
         var (evalCharges, evalRefund) = SrdvHotelService.EvaluateCancellationFee(booking);
-        decimal finalCharges = request.CancellationCharges > 0 ? request.CancellationCharges : evalCharges;
-        decimal finalRefund = Math.Max(0m, booking.TotalPrice - finalCharges);
+        decimal supplierCharges = request.CancellationCharges > 0 ? request.CancellationCharges : evalCharges;
+        decimal supplierRefund = Math.Max(0m, (booking.NetPrice > 0 ? booking.NetPrice : booking.TotalPrice) - supplierCharges);
+
+        var refundInput = new PickNBook.Api.Models.DTOs.RefundCalculationInput
+        {
+            OriginalCustomerPaid = booking.TotalPrice,
+            SupplierAmount = booking.NetPrice > 0 ? booking.NetPrice : booking.TotalPrice,
+            MarkupAmount = booking.MarkupAmount,
+            DiscountAmount = booking.CouponDiscount,
+            ConvenienceFee = booking.ConvenienceFee,
+            SupplierCancellationCharge = supplierCharges,
+            SupplierRefundAmount = supplierRefund,
+            ServiceCharge = 35.00m
+        };
+
+        var calculatedRefund = _refundCalculator.CalculateCustomerRefund(refundInput);
+        decimal finalCharges = calculatedRefund.SupplierCancellationCharge + calculatedRefund.ServiceChargeRetained + calculatedRefund.MarkupRetained;
+        decimal finalRefund = calculatedRefund.FinalCustomerRefundAmount;
 
         booking.Status = "Cancelled";
         booking.CancelledAt = DateTime.UtcNow;
@@ -431,8 +450,11 @@ public class AdminHotelController : AdminApiController
                     UserId = booking.UserId,
                     OriginalCustomerPaid = payment.FinalPayableAmount,
                     SupplierAmount = booking.NetPrice > 0 ? booking.NetPrice : booking.TotalPrice,
-                    SupplierCancellationCharge = finalCharges,
-                    SupplierRefundAmount = Math.Max(0m, (booking.NetPrice > 0 ? booking.NetPrice : booking.TotalPrice) - finalCharges),
+                    SupplierCancellationCharge = supplierCharges,
+                    SupplierRefundAmount = supplierRefund,
+                    MarkupRefunded = calculatedRefund.MarkupRefunded,
+                    FeeRefunded = calculatedRefund.FeeRefunded,
+                    CouponForfeited = calculatedRefund.CouponForfeited,
                     CustomerRefundAmount = finalRefund,
                     SrdvStatus = providerCancelled ? "Success" : "Failed",
                     Status = finalRefund > 0 ? "Pending" : "Completed",
@@ -443,8 +465,11 @@ public class AdminHotelController : AdminApiController
             }
             else
             {
-                existingCancel.SupplierCancellationCharge = finalCharges;
+                existingCancel.SupplierCancellationCharge = supplierCharges;
                 existingCancel.CustomerRefundAmount = finalRefund;
+                existingCancel.MarkupRefunded = calculatedRefund.MarkupRefunded;
+                existingCancel.FeeRefunded = calculatedRefund.FeeRefunded;
+                existingCancel.CouponForfeited = calculatedRefund.CouponForfeited;
                 existingCancel.SrdvStatus = providerCancelled ? "Success" : "Failed";
                 existingCancel.RefundStatus = finalRefund > 0 ? "PENDING" : "NOT_REQUIRED";
             }

@@ -292,6 +292,9 @@ namespace PickNBook.Api.Services.Implementations
                 var hasExistingDbTx = isRelational && _context.Database.CurrentTransaction != null;
                 var dbTx = (isRelational && !hasExistingDbTx) ? await _context.Database.BeginTransactionAsync() : null;
 
+                SemaphoreSlim? userLock = null;
+                var lockAcquired = false;
+
                 try
                 {
                     var transaction = await _context.WalletTransactions
@@ -303,6 +306,7 @@ namespace PickNBook.Api.Services.Implementations
                     // Duplicate / idempotent release check:
                     if (string.Equals(transaction.Status, "Released", StringComparison.OrdinalIgnoreCase))
                     {
+                        if (dbTx != null) await dbTx.CommitAsync();
                         _logger.LogInformation(
                             "ReleaseReservationAsync: Transaction {TxId} is already Released. No-op.",
                             walletTransactionId);
@@ -321,58 +325,105 @@ namespace PickNBook.Api.Services.Implementations
                             $"Cannot release transaction {walletTransactionId} because its status is '{transaction.Status}', expected 'Reserved'.");
                     }
 
-                    var userLock = _userLocks.GetOrAdd(transaction.UserId, _ => new SemaphoreSlim(1, 1));
+                    userLock = _userLocks.GetOrAdd(transaction.UserId, _ => new SemaphoreSlim(1, 1));
                     await userLock.WaitAsync();
-                    try
+                    lockAcquired = true;
+
+                    // Reload after acquiring lock to check if status was updated concurrently
+                    await _context.Entry(transaction).ReloadAsync();
+
+                    if (string.Equals(transaction.Status, "Released", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Restore reserved amount to user wallet
-                        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == transaction.UserId);
-                        if (user == null)
-                            throw new InvalidOperationException(
-                                $"User with ID {transaction.UserId} not found for reservation {walletTransactionId}.");
+                        if (dbTx != null) await dbTx.CommitAsync();
+                        _logger.LogInformation(
+                            "Reservation {TxId} was already released by another request.",
+                            walletTransactionId);
+                        return transaction;
+                    }
 
-                        if (isRelational)
-                        {
-                            await _context.Database.ExecuteSqlInterpolatedAsync(
-                                $"UPDATE users SET WalletBalance = WalletBalance + {transaction.Amount} WHERE Id = {transaction.UserId};");
+                    if (string.Equals(transaction.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"Cannot release reservation {walletTransactionId} because it has already been Completed.");
+                    }
 
-                            await _context.Entry(user).ReloadAsync();
-                        }
-                        else
+                    if (!string.Equals(transaction.Status, "Reserved", StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidOperationException(
+                            $"Cannot release transaction {walletTransactionId} because its status is '{transaction.Status}', expected 'Reserved'.");
+                    }
+
+                    if (isRelational)
+                    {
+                        // Atomically claim the reservation for release.
+                        // Only one request can change Reserved -> Released.
+                        var affectedRows = await _context.Database.ExecuteSqlInterpolatedAsync(
+                            $"UPDATE wallet_transactions SET Status = 'Released' WHERE Id = {walletTransactionId} AND Status = 'Reserved';");
+
+                        if (affectedRows != 1)
                         {
-                            lock (_inMemoryLock)
+                            await _context.Entry(transaction).ReloadAsync();
+                            if (string.Equals(transaction.Status, "Released", StringComparison.OrdinalIgnoreCase))
                             {
-                                user.WalletBalance += transaction.Amount;
+                                if (dbTx != null) await dbTx.CommitAsync();
+                                _logger.LogInformation(
+                                    "Reservation {TxId} was already released. No balance change.",
+                                    walletTransactionId);
+                                return transaction;
                             }
+
+                            throw new InvalidOperationException(
+                                $"Reservation {walletTransactionId} could not be released because its status changed or it was already processed.");
+                        }
+
+                        // Keep in-memory EF tracking entity synchronized
+                        transaction.Status = "Released";
+                    }
+
+                    // Restore reserved amount to user wallet
+                    var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == transaction.UserId);
+                    if (user == null)
+                        throw new InvalidOperationException(
+                            $"User with ID {transaction.UserId} not found for reservation {walletTransactionId}.");
+
+                    if (isRelational)
+                    {
+                        await _context.Database.ExecuteSqlInterpolatedAsync(
+                            $"UPDATE users SET WalletBalance = WalletBalance + {transaction.Amount} WHERE Id = {transaction.UserId};");
+
+                        await _context.Entry(user).ReloadAsync();
+                    }
+                    else
+                    {
+                        lock (_inMemoryLock)
+                        {
+                            user.WalletBalance += transaction.Amount;
                         }
 
                         transaction.Status = "Released";
-                        transaction.RunningBalance = user.WalletBalance;
-
-                        if (!string.IsNullOrWhiteSpace(reason))
-                        {
-                            transaction.Description = string.IsNullOrWhiteSpace(transaction.Description)
-                                ? $"Released: {reason}"
-                                : $"{transaction.Description} | Released: {reason}";
-                        }
-
-                        await _context.SaveChangesAsync();
-
-                        if (dbTx != null)
-                        {
-                            await dbTx.CommitAsync();
-                        }
-
-                        _logger.LogInformation(
-                            "Successfully released wallet reservation {TxId} for User {UserId}. Restored: {Amount:N2}, New Available: {Balance:N2}. Reason: {Reason}",
-                            transaction.Id, transaction.UserId, transaction.Amount, user.WalletBalance, reason ?? "N/A");
-
-                        return transaction;
                     }
-                    finally
+
+                    transaction.RunningBalance = user.WalletBalance;
+
+                    if (!string.IsNullOrWhiteSpace(reason))
                     {
-                        userLock.Release();
+                        transaction.Description = string.IsNullOrWhiteSpace(transaction.Description)
+                            ? $"Released: {reason}"
+                            : $"{transaction.Description} | Released: {reason}";
                     }
+
+                    await _context.SaveChangesAsync();
+
+                    if (dbTx != null)
+                    {
+                        await dbTx.CommitAsync();
+                    }
+
+                    _logger.LogInformation(
+                        "Successfully released wallet reservation {TxId} for User {UserId}. Restored: {Amount:N2}, New Available: {Balance:N2}. Reason: {Reason}",
+                        transaction.Id, transaction.UserId, transaction.Amount, user.WalletBalance, reason ?? "N/A");
+
+                    return transaction;
                 }
                 catch (Exception ex)
                 {
@@ -393,6 +444,11 @@ namespace PickNBook.Api.Services.Implementations
                 }
                 finally
                 {
+                    if (lockAcquired && userLock != null)
+                    {
+                        userLock.Release();
+                    }
+
                     if (dbTx != null) await dbTx.DisposeAsync();
                 }
             });

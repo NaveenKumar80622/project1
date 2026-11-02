@@ -4627,6 +4627,68 @@ namespace PickNBook.Api.Controllers.Public
             }
             return null;
         }
+
+        [HttpGet("/api/flight/popular-routes")]
+        [HttpGet("/api/flight/popular-destinations")]
+        [HttpGet("popular-routes")]
+        [HttpGet("popular-destinations")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetPopularRoutes()
+        {
+            var rows = await _dbContext.PopularDestinations
+                .AsNoTracking()
+                .Where(x => x.Status == "Active")
+                .OrderByDescending(x => x.EntryDateUtc)
+                .ToListAsync();
+
+            var response = rows.Select(x =>
+            {
+                string fromCity = "";
+                string toCity = "";
+                string fromAirportCode = "";
+                string toAirportCode = "";
+
+                if (!string.IsNullOrWhiteSpace(x.Title))
+                {
+                    var parts = x.Title.Split(new[] { " to ", " - ", " -> ", "-" }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 2)
+                    {
+                        fromCity = parts[0].Trim();
+                        toCity = parts[1].Trim();
+                    }
+                    else
+                    {
+                        fromCity = x.Title.Trim();
+                        toCity = x.SubTitle?.Trim() ?? "";
+                    }
+                }
+
+                if (!string.IsNullOrWhiteSpace(x.SubTitle) && string.IsNullOrWhiteSpace(toCity))
+                {
+                    toCity = x.SubTitle.Trim();
+                }
+
+                return new
+                {
+                    id = x.Id,
+                    title = x.Title,
+                    subTitle = x.SubTitle,
+                    fromCity = !string.IsNullOrWhiteSpace(fromCity) ? fromCity : x.Title,
+                    toCity = !string.IsNullOrWhiteSpace(toCity) ? toCity : x.SubTitle,
+                    fromAirportCode = fromAirportCode,
+                    toAirportCode = toAirportCode,
+                    image = x.ImageUrl,
+                    imageUrl = x.ImageUrl,
+                    category = x.Category,
+                    placement = x.Placement,
+                    url = x.Url,
+                    status = x.Status,
+                    entryDateUtc = x.EntryDateUtc
+                };
+            }).ToList();
+
+            return Ok(response);
+        }
     }
 }
 
