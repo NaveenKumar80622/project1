@@ -206,8 +206,26 @@ public class AdminFlightCancellationRequestDto
     public string? CustomerPhone { get; set; }
     public string? CustomerEmail { get; set; }
     public string Status { get; set; } = "Pending";
+    public string CustomerRefundStatus { get; set; } = "Pending";
+    public string AdminRefundStatus { get; set; } = "Pending";
+    public decimal TotalPriceInr { get; set; }
+    public decimal TotalFare { get; set; }
+    public decimal Fare { get; set; }
+    public decimal NetFareInr { get; set; }
+    public decimal Profit { get; set; }
+    public decimal CalculatedProfit { get; set; }
     public decimal CustomerRefundAmountInr { get; set; }
     public decimal AdminRefundAmountInr { get; set; }
+    public decimal CustomerCancellationChargeInr { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public decimal? AdminCancellationChargeInr { get; set; }
+    public decimal CustomerServiceChargeInr { get; set; }
+    public decimal AdminServiceChargeInr { get; set; }
+    public DateTime? DepartureTimeUtc { get; set; }
+    public string? JourneyDate { get; set; }
+    public string? JourneyDateIst { get; set; }
+    public string? ProviderName { get; set; }
+    public string? TravelClass { get; set; }
     public string? Remark { get; set; }
     public string? CancellationPolicyJson { get; set; }
     public string? FareRulesJson { get; set; }
@@ -220,11 +238,15 @@ public class AdminFlightCancellationDetailsDto
     public string CancellationStatus { get; set; } = "Pending";
     public string CustomerRefundStatus { get; set; } = "Pending";
     public string AdminRefundStatus { get; set; } = "Pending";
+    public decimal TotalFare { get; set; }
+    public decimal NetFare { get; set; }
+    public decimal CalculatedProfit { get; set; }
     public decimal CustomerRefundAmountInr { get; set; }
     public decimal CustomerCancellationChargeInr { get; set; }
     public decimal CustomerServiceChargeInr { get; set; }
     public decimal AdminRefundAmountInr { get; set; }
-    public decimal AdminCancellationChargeInr { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public decimal? AdminCancellationChargeInr { get; set; }
     public decimal AdminServiceChargeInr { get; set; }
     public string? SupplierRemark { get; set; }
     public string? CustomerRemark { get; set; }

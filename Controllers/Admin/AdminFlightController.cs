@@ -10,6 +10,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using PickNBook.Api.Helpers;
 using PickNBook.Api.Models.Entities;
+using PickNBook.Api.Models.Payments;
 using PickNBook.Api.Extensions;
 using System.IO;
 
@@ -748,6 +749,26 @@ namespace PickNBook.Api.Controllers
                 .GroupBy(c => c.BookingReference)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
+            var bookingIds = rows
+                .Select(x => x.FlightReservation?.Id)
+                .Where(id => id.HasValue)
+                .Select(id => id!.Value)
+                .Distinct()
+                .ToList();
+
+            var payments = bookingIds.Count > 0
+                ? await dbContext.Payments
+                    .AsNoTracking()
+                    .Where(p => p.BookingType == "Flight" && p.BookingId.HasValue && bookingIds.Contains(p.BookingId.Value))
+                    .OrderByDescending(p => p.CreatedAt)
+                    .ToListAsync()
+                : new List<Payment>();
+
+            var paymentLookup = payments
+                .Where(p => p.BookingId.HasValue)
+                .GroupBy(p => p.BookingId!.Value)
+                .ToDictionary(g => g.Key, g => g.First());
+
             var response = rows
                 .Where(x => x.FlightReservation != null)
                 .Select(x =>
@@ -755,10 +776,58 @@ namespace PickNBook.Api.Controllers
                     var booking = x.FlightReservation!;
 
                     cancellationLookup.TryGetValue(booking.BookingReference, out var cancellation);
+                    paymentLookup.TryGetValue(booking.Id, out var payment);
+
+                    // Prefer active refund status from cancellation or payment
+                    var rawRefundStatus = !string.IsNullOrWhiteSpace(cancellation?.RefundStatus) && !cancellation.RefundStatus.Equals("NOT_REQUIRED", StringComparison.OrdinalIgnoreCase)
+                        ? cancellation.RefundStatus
+                        : (!string.IsNullOrWhiteSpace(payment?.RefundStatus) && !payment.RefundStatus.Equals("NotRequired", StringComparison.OrdinalIgnoreCase)
+                            ? payment.RefundStatus
+                            : (cancellation?.RefundStatus ?? x.CustomerRefundStatus));
+
                     var resolvedRefundStatus = CancellationStatusMapper.ResolveRefundStatus(
-                        cancellation?.RefundStatus ?? x.CustomerRefundStatus,
+                        rawRefundStatus,
                         cancellation?.Status ?? x.CancellationStatus,
                         x.CustomerRefundAmountInr);
+
+                    var adminRefundStatus = !string.IsNullOrWhiteSpace(x.AdminRefundStatus)
+                        ? x.AdminRefundStatus
+                        : "Pending";
+
+                    decimal totalFare = booking.CustomerFareInr > 0 ? booking.CustomerFareInr : booking.TotalPriceInr;
+                    decimal offeredFare = booking.NetFareInr > 0 ? booking.NetFareInr : (booking.SupplierTotalFare > 0 ? booking.SupplierTotalFare : totalFare);
+
+                    // Airlines cancellation charges: prefer actual supplier cancellation charge from cancellation record
+                    decimal airlineCancellationCharges = cancellation != null && cancellation.SupplierCancellationCharge > 0
+                        ? cancellation.SupplierCancellationCharge
+                        : x.AdminCancellationChargeInr;
+
+                    // Service charge
+                    decimal adminServiceCharge = cancellation != null ? 0m : x.AdminServiceChargeInr;
+                    decimal totalCancellationAndService = airlineCancellationCharges + adminServiceCharge;
+
+                    // admin refund amount = offered fare - airlines cancellation charges
+                    decimal adminRefund = (airlineCancellationCharges > 0 || cancellation != null)
+                        ? Math.Max(0m, offeredFare - airlineCancellationCharges)
+                        : (x.AdminRefundAmountInr > 0 ? x.AdminRefundAmountInr : 0m);
+
+                    decimal customerRefund = x.CustomerRefundAmountInr;
+
+                    // calculatedProfit = (offered fare - (Cancellation charges all including service charge )) - Customer Refund
+                    decimal profit;
+                    if (airlineCancellationCharges > 0 || customerRefund > 0 || adminRefund > 0)
+                    {
+                        profit = (offeredFare - totalCancellationAndService) - customerRefund;
+                    }
+                    else
+                    {
+                        profit = totalFare - offeredFare;
+                    }
+
+                    // Cancellation status is "Pending" for active cancellation requests awaiting fulfillment / on-hold refund
+                    var displayCancellationStatus = string.Equals(x.CancellationStatus, "Rejected", StringComparison.OrdinalIgnoreCase)
+                        ? "Rejected"
+                        : "Pending";
 
                     return new AdminFlightCancellationRequestDto
                     {
@@ -771,24 +840,42 @@ namespace PickNBook.Api.Controllers
                         Customer = booking.PassengerName,
                         CustomerPhone = booking.PassengerPhone,
                         CustomerEmail = booking.PassengerEmail,
-                        Status = x.CancellationStatus,
-                        CustomerRefundAmountInr = x.CustomerRefundAmountInr,
-                        AdminRefundAmountInr = x.AdminRefundAmountInr,
+                        Status = displayCancellationStatus,
+                        CustomerRefundStatus = resolvedRefundStatus,
+                        AdminRefundStatus = adminRefundStatus,
+                        TotalPriceInr = totalFare,
+                        TotalFare = totalFare,
+                        Fare = totalFare,
+                        NetFareInr = offeredFare,
+                        Profit = profit,
+                        CalculatedProfit = profit,
+                        CustomerRefundAmountInr = customerRefund,
+                        AdminRefundAmountInr = adminRefund,
+                        CustomerCancellationChargeInr = x.CustomerCancellationChargeInr,
+                        CustomerServiceChargeInr = x.CustomerServiceChargeInr,
+                        AdminServiceChargeInr = adminServiceCharge,
                         Remark = x.AdminRemark,
                         CancellationPolicyJson = booking.CancellationPolicyJson,
                         FareRulesJson = booking.FareRulesJson,
                         NonRefundable = booking.NonRefundable,
+                        DepartureTimeUtc = booking.DepartureTime,
+                        JourneyDate = booking.DepartureTime.ToString("yyyy-MM-dd"),
+                        JourneyDateIst = IndiaTimeHelper.FormatIst(booking.DepartureTime, "yyyy-MM-dd"),
+                        ProviderName = booking.Airline,
+                        TravelClass = booking.TravelClass,
                         Details = new AdminFlightCancellationDetailsDto
                         {
-                            CancellationStatus = x.CancellationStatus,
+                            CancellationStatus = displayCancellationStatus,
                             CustomerRefundStatus = resolvedRefundStatus,
-                            AdminRefundStatus = resolvedRefundStatus,
-                            CustomerRefundAmountInr = x.CustomerRefundAmountInr,
+                            AdminRefundStatus = adminRefundStatus,
+                            TotalFare = totalFare,
+                            NetFare = offeredFare,
+                            CalculatedProfit = profit,
+                            CustomerRefundAmountInr = customerRefund,
                             CustomerCancellationChargeInr = x.CustomerCancellationChargeInr,
                             CustomerServiceChargeInr = x.CustomerServiceChargeInr,
-                            AdminRefundAmountInr = x.AdminRefundAmountInr,
-                            AdminCancellationChargeInr = x.AdminCancellationChargeInr,
-                            AdminServiceChargeInr = x.AdminServiceChargeInr,
+                            AdminRefundAmountInr = adminRefund,
+                            AdminServiceChargeInr = adminServiceCharge,
                             SupplierRemark = x.SupplierRemark,
                             CustomerRemark = x.CustomerRemark,
                             AdminRemark = x.AdminRemark

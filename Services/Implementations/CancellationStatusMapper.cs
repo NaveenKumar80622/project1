@@ -9,46 +9,65 @@ namespace PickNBook.Api.Services
             string? auditStatus,
             decimal refundAmount)
         {
-            // 1. Explicit failure state
-            if (string.Equals(auditRefundStatus, "FAILED", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(auditStatus, "Failed", StringComparison.OrdinalIgnoreCase))
+            var rf = auditRefundStatus?.Trim() ?? string.Empty;
+            var st = auditStatus?.Trim() ?? string.Empty;
+
+            // 1. Explicit OnHold state (e.g. Cashfree balance shortfall)
+            if (rf.Equals("ONHOLD", StringComparison.OrdinalIgnoreCase) ||
+                rf.Equals("ON_HOLD", StringComparison.OrdinalIgnoreCase) ||
+                rf.Equals("RefundOnHold", StringComparison.OrdinalIgnoreCase) ||
+                rf.IndexOf("HOLD", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                st.IndexOf("HOLD", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "OnHold";
+            }
+
+            // 2. Explicit failure state
+            if (rf.Equals("FAILED", StringComparison.OrdinalIgnoreCase) ||
+                st.Equals("Failed", StringComparison.OrdinalIgnoreCase))
             {
                 return "Failed";
             }
 
-            // 2. Actively processing in Cashfree or Wallet queue
-            if (string.Equals(auditRefundStatus, "PROCESSING", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(auditStatus, "Processing", StringComparison.OrdinalIgnoreCase))
+            // 3. Actively processing in Cashfree or Wallet queue
+            if (rf.Equals("PROCESSING", StringComparison.OrdinalIgnoreCase) ||
+                st.Equals("Processing", StringComparison.OrdinalIgnoreCase))
             {
                 return "Processing";
             }
 
-            // 3. Confirmed successful execution
-            if (string.Equals(auditRefundStatus, "COMPLETED", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(auditRefundStatus, "REFUNDED", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(auditStatus, "Completed", StringComparison.OrdinalIgnoreCase))
+            // 4. Confirmed successful execution (Must verify refund gateway confirmed it)
+            if (rf.Equals("COMPLETED", StringComparison.OrdinalIgnoreCase) ||
+                rf.Equals("REFUNDED", StringComparison.OrdinalIgnoreCase) ||
+                rf.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
             {
                 return refundAmount > 0
                     ? "Refunded"
                     : "Completed";
             }
 
-            // 4. Zero refund or no refund required
-            if (string.Equals(auditRefundStatus, "NOT_REQUIRED", StringComparison.OrdinalIgnoreCase))
+            // 5. Zero refund or no refund required
+            if (rf.Equals("NOT_REQUIRED", StringComparison.OrdinalIgnoreCase))
             {
                 return "Completed";
             }
 
-            // 5. Queued / Pending execution
-            if (string.Equals(auditRefundStatus, "PENDING", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(auditStatus, "Pending", StringComparison.OrdinalIgnoreCase))
+            // 6. Queued / Pending execution
+            if (rf.Equals("PENDING", StringComparison.OrdinalIgnoreCase) ||
+                st.Equals("Pending", StringComparison.OrdinalIgnoreCase))
             {
                 return "Pending";
             }
 
-            // 6. Safe Fallback:
-            // Refund amount alone does NOT prove money was refunded.
-            // If positive refund exists but gateway has not confirmed, status is Pending.
+            // 7. Cancellation completed but refund payout not verified
+            if (st.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                return refundAmount > 0
+                    ? "Pending"
+                    : "Completed";
+            }
+
+            // 8. Safe Fallback:
             return refundAmount > 0
                 ? "Pending"
                 : "Completed";
