@@ -77,7 +77,7 @@ namespace PickNBook.Api.Controllers
             // Send customer query to PickNBook support email (non-blocking for query creation)
             try
             {
-                string recipientEmail = _configuration?["SupportEmail"] ?? "contact@picknbook.in";
+                string recipientEmail = "contact@picknbook.in";
                 string emailSubject = $"New Contact Query: {query.Subject}";
                 string emailBody = $@"
                     <h2>New Contact Query</h2>
@@ -91,7 +91,8 @@ namespace PickNBook.Api.Controllers
                 await _emailService.SendEmailAsync(
                     recipientEmail,
                     emailSubject,
-                    emailBody
+                    emailBody,
+                    query.Email
                 );
             }
             catch (Exception ex)

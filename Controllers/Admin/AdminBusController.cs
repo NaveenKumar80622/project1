@@ -1734,6 +1734,13 @@ namespace PickNBook.Api.Controllers
                         refundAmount);
 
                     var (cleanPnr, opPnr) = ResolvePnrAndOperatorPnr(x.Pnr, x.SrdvBookingId, x.SrdvBookingResponseJson);
+                    var totalFare = x.TotalPriceInr;
+                    var netFare = x.NetFareInr;
+                    var customerRetained = Math.Max(0m, totalFare - refundAmount);
+                    var supplierCancellation = cancellation != null && cancellation.SupplierCancellationCharge > 0 ? cancellation.SupplierCancellationCharge : cancellationCharge;
+                    var supplierRefund = cancellation != null && cancellation.SupplierRefundAmount > 0 ? cancellation.SupplierRefundAmount : Math.Max(0m, netFare - supplierCancellation);
+                    var supplierRetained = Math.Max(0m, netFare - supplierRefund);
+                    var calculatedProfit = Math.Round(customerRetained - supplierRetained, 2);
 
                     return new AdminBusCancellationRequestDto
                     {
@@ -1753,6 +1760,10 @@ namespace PickNBook.Api.Controllers
                         Status = x.Status,
                         CustomerRefundAmountInr = refundAmount,
                         AdminRefundAmountInr = refundAmount,
+                        TotalFare = totalFare,
+                        NetFare = netFare,
+                        Profit = calculatedProfit,
+                        CalculatedProfit = calculatedProfit,
                         Remark = x.CancellationReason,
                         Details = new AdminBusCancellationDetailsDto
                         {
@@ -1763,6 +1774,10 @@ namespace PickNBook.Api.Controllers
                             CustomerCancellationChargeInr = cancellationCharge,
                             CustomerServiceChargeInr = 0m,
                             AdminRefundAmountInr = refundAmount,
+                        TotalFare = totalFare,
+                        NetFare = netFare,
+                        Profit = calculatedProfit,
+                        CalculatedProfit = calculatedProfit,
                             AdminCancellationChargeInr = cancellationCharge,
                             AdminServiceChargeInr = 0m,
                             SupplierRemark = null,

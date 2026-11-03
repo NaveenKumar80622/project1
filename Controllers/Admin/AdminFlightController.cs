@@ -166,11 +166,14 @@ namespace PickNBook.Api.Controllers
                 }).ToList();
 
 
-                var customerFare = x.CustomerFareInr > 0 ? x.CustomerFareInr : x.TotalPriceInr;
-                var netFare = x.NetFareInr > 0 ? x.NetFareInr : x.TotalPriceInr;
-                var profit = customerFare - netFare;
 
                 paymentsByBooking.TryGetValue(x.Id, out var payment);
+                var convenienceFee = payment?.ConvenienceFee ?? 0m;
+                var customerFare = x.CustomerFareInr > 0 ? x.CustomerFareInr : x.TotalPriceInr;
+                var netFare = x.NetFareInr > 0 ? x.NetFareInr : x.TotalPriceInr;
+                var profit = (customerFare - netFare) + convenienceFee;
+
+
 
                 return new AdminFlightBookingResponseDto
                 {
@@ -213,7 +216,7 @@ namespace PickNBook.Api.Controllers
                     TaxInr = x.SupplierTaxAmount,
                     MarkupAmountInr = x.MarkupAmount > 0 ? x.MarkupAmount : x.B2CMarkupAmountInr,
                     DiscountAmountInr = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : x.B2CDiscountAmountInr,
-                    ConvenienceFeeInr = 0,
+                    ConvenienceFeeInr = convenienceFee,
                     SsrAmountInr = x.SsrAmountInr,
                     CustomerFareInr = customerFare,
                     NetFareInr = netFare,
@@ -794,6 +797,7 @@ namespace PickNBook.Api.Controllers
                         ? x.AdminRefundStatus
                         : "Pending";
 
+
                     decimal totalFare = booking.CustomerFareInr > 0 ? booking.CustomerFareInr : booking.TotalPriceInr;
                     decimal offeredFare = booking.NetFareInr > 0 ? booking.NetFareInr : (booking.SupplierTotalFare > 0 ? booking.SupplierTotalFare : totalFare);
 
@@ -815,9 +819,11 @@ namespace PickNBook.Api.Controllers
 
                     // calculatedProfit = (offered fare - (Cancellation charges all including service charge )) - Customer Refund
                     decimal profit;
-                    if (airlineCancellationCharges > 0 || customerRefund > 0 || adminRefund > 0)
+                    if (airlineCancellationCharges > 0 || customerRefund > 0 || adminRefund > 0 || x.CustomerCancellationChargeInr > 0)
                     {
-                        profit = (offeredFare - totalCancellationAndService) - customerRefund;
+                        decimal customerRetained = Math.Max(0m, totalFare - customerRefund);
+                        decimal supplierRetained = Math.Max(0m, offeredFare - adminRefund);
+                        profit = Math.Round(customerRetained - supplierRetained, 2);
                     }
                     else
                     {
@@ -825,9 +831,16 @@ namespace PickNBook.Api.Controllers
                     }
 
                     // Cancellation status is "Pending" for active cancellation requests awaiting fulfillment / on-hold refund
-                    var displayCancellationStatus = string.Equals(x.CancellationStatus, "Rejected", StringComparison.OrdinalIgnoreCase)
-                        ? "Rejected"
-                        : "Pending";
+                    var rawStatus = !string.IsNullOrWhiteSpace(x.CancellationStatus) && !x.CancellationStatus.Equals("Pending", StringComparison.OrdinalIgnoreCase)
+                        ? x.CancellationStatus
+                        : (!string.IsNullOrWhiteSpace(cancellation?.Status) && !cancellation.Status.Equals("Pending", StringComparison.OrdinalIgnoreCase)
+                            ? cancellation.Status
+                            : (!string.IsNullOrWhiteSpace(booking.Status) ? booking.Status : (x.CancellationStatus ?? "Pending")));
+
+                    var displayCancellationStatus = string.IsNullOrWhiteSpace(rawStatus) ? "Pending" : rawStatus.Trim();
+
+
+
 
                     return new AdminFlightCancellationRequestDto
                     {

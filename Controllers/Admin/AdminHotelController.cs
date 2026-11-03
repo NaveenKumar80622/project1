@@ -274,6 +274,14 @@ public class AdminHotelController : AdminApiController
                 cancellation?.Status,
                 refundAmount);
 
+            var totalFare = b.TotalPrice;
+            var supplierCost = b.NetPrice > 0 ? b.NetPrice : (b.SrdvOfferedPrice > 0 ? b.SrdvOfferedPrice : b.TotalPrice);
+            var customerRetained = Math.Max(0m, totalFare - refundAmount);
+            var supplierCancellation = cancellation != null && cancellation.SupplierCancellationCharge > 0 ? cancellation.SupplierCancellationCharge : cancellationCharge;
+            var supplierRefund = cancellation != null && cancellation.SupplierRefundAmount > 0 ? cancellation.SupplierRefundAmount : Math.Max(0m, supplierCost - supplierCancellation);
+            var supplierRetained = Math.Max(0m, supplierCost - supplierRefund);
+            var calculatedProfit = Math.Round(customerRetained - supplierRetained, 2);
+
             return new AdminHotelCancellationRequestDto
             {
                 Id = b.Id,
@@ -292,6 +300,10 @@ public class AdminHotelController : AdminApiController
                 Status = b.Status,
                 CustomerRefundAmountInr = refundAmount,
                 AdminRefundAmountInr = refundAmount,
+                TotalFare = totalFare,
+                NetFare = supplierCost,
+                Profit = calculatedProfit,
+                CalculatedProfit = calculatedProfit,
                 Remark = b.CancellationReason,
                 Details = new AdminHotelCancellationDetailsDto
                 {
@@ -302,6 +314,10 @@ public class AdminHotelController : AdminApiController
                     CustomerCancellationChargeInr = cancellationCharge,
                     CustomerServiceChargeInr = 0m,
                     AdminRefundAmountInr = refundAmount,
+                TotalFare = totalFare,
+                NetFare = supplierCost,
+                Profit = calculatedProfit,
+                CalculatedProfit = calculatedProfit,
                     AdminCancellationChargeInr = cancellationCharge,
                     AdminServiceChargeInr = 0m,
                     SupplierRemark = null,

@@ -255,6 +255,10 @@ namespace PickNBook.Api.Models.DTOs
         public string Status { get; set; } = "Pending";
         public decimal CustomerRefundAmountInr { get; set; }
         public decimal AdminRefundAmountInr { get; set; }
+        public decimal TotalFare { get; set; }
+        public decimal NetFare { get; set; }
+        public decimal Profit { get; set; }
+        public decimal CalculatedProfit { get; set; }
         public string? Remark { get; set; }
         public AdminHotelCancellationDetailsDto Details { get; set; } = new();
     }
@@ -268,6 +272,10 @@ namespace PickNBook.Api.Models.DTOs
         public decimal CustomerCancellationChargeInr { get; set; }
         public decimal CustomerServiceChargeInr { get; set; }
         public decimal AdminRefundAmountInr { get; set; }
+        public decimal TotalFare { get; set; }
+        public decimal NetFare { get; set; }
+        public decimal Profit { get; set; }
+        public decimal CalculatedProfit { get; set; }
         public decimal AdminCancellationChargeInr { get; set; }
         public decimal AdminServiceChargeInr { get; set; }
         public string? SupplierRemark { get; set; }
@@ -284,6 +292,10 @@ namespace PickNBook.Api.Models.DTOs
         public decimal CustomerCancellationChargeInr { get; set; }
         public decimal CustomerServiceChargeInr { get; set; }
         public decimal AdminRefundAmountInr { get; set; }
+        public decimal TotalFare { get; set; }
+        public decimal NetFare { get; set; }
+        public decimal Profit { get; set; }
+        public decimal CalculatedProfit { get; set; }
         public decimal AdminCancellationChargeInr { get; set; }
         public decimal AdminServiceChargeInr { get; set; }
         public string? SupplierRemark { get; set; }

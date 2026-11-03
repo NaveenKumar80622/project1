@@ -27,16 +27,17 @@ namespace PickNBook.Api.Services
             }
         }
 
-        public async Task SendEmailAsync(string toEmail, string subject, string body)
+        public async Task SendEmailAsync(string toEmail, string subject, string body, string? replyToEmail = null)
         {
-            await SendEmailWithAttachmentsAsync(toEmail, subject, body, []);
+            await SendEmailWithAttachmentsAsync(toEmail, subject, body, [], replyToEmail);
         }
 
         public async Task SendEmailWithAttachmentsAsync(
             string toEmail,
             string subject,
             string body,
-            IEnumerable<EmailAttachment> attachments)
+            IEnumerable<EmailAttachment> attachments,
+            string? replyToEmail = null)
         {
             using var message = new MailMessage
             {
@@ -50,6 +51,11 @@ namespace PickNBook.Api.Services
             };
 
             message.To.Add(toEmail);
+
+            if (!string.IsNullOrWhiteSpace(replyToEmail))
+            {
+                message.ReplyToList.Add(new MailAddress(replyToEmail));
+            }
 
             var attachmentStreams = new List<MemoryStream>();
             try

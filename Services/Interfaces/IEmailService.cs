@@ -2,12 +2,13 @@ namespace PickNBook.Api.Services
 {
     public interface IEmailService
     {
-        Task SendEmailAsync(string toEmail, string subject, string body);
+        Task SendEmailAsync(string toEmail, string subject, string body, string? replyToEmail = null);
         Task SendEmailWithAttachmentsAsync(
             string toEmail,
             string subject,
             string body,
-            IEnumerable<EmailAttachment> attachments);
+            IEnumerable<EmailAttachment> attachments,
+            string? replyToEmail = null);
     }
 
     public sealed class EmailAttachment

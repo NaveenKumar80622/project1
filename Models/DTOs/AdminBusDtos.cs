@@ -87,6 +87,10 @@ public class AdminBusCancellationRequestDto
     public string Status { get; set; } = "Pending";
     public decimal CustomerRefundAmountInr { get; set; }
     public decimal AdminRefundAmountInr { get; set; }
+    public decimal TotalFare { get; set; }
+    public decimal NetFare { get; set; }
+    public decimal Profit { get; set; }
+    public decimal CalculatedProfit { get; set; }
     public string? Remark { get; set; }
     public AdminBusCancellationDetailsDto Details { get; set; } = new();
 }
@@ -100,6 +104,10 @@ public class AdminBusCancellationDetailsDto
     public decimal CustomerCancellationChargeInr { get; set; }
     public decimal CustomerServiceChargeInr { get; set; }
     public decimal AdminRefundAmountInr { get; set; }
+    public decimal TotalFare { get; set; }
+    public decimal NetFare { get; set; }
+    public decimal Profit { get; set; }
+    public decimal CalculatedProfit { get; set; }
     public decimal AdminCancellationChargeInr { get; set; }
     public decimal AdminServiceChargeInr { get; set; }
     public string? SupplierRemark { get; set; }
@@ -116,6 +124,10 @@ public class BusCancellationRequestUpdateDto
     public decimal CustomerCancellationChargeInr { get; set; }
     public decimal CustomerServiceChargeInr { get; set; }
     public decimal AdminRefundAmountInr { get; set; }
+    public decimal TotalFare { get; set; }
+    public decimal NetFare { get; set; }
+    public decimal Profit { get; set; }
+    public decimal CalculatedProfit { get; set; }
     public decimal AdminCancellationChargeInr { get; set; }
     public decimal AdminServiceChargeInr { get; set; }
     public string? SupplierRemark { get; set; }
