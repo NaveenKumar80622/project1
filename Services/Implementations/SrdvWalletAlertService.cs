@@ -40,7 +40,7 @@ namespace PickNBook.Api.Services.Implementations
             _logger = logger;
         }
 
-        public async Task EvaluateAndAlertAsync(decimal availableBalance, CancellationToken cancellationToken = default)
+        public async Task EvaluateAndAlertAsync(decimal availableBalance, string serviceType = "Bus", CancellationToken cancellationToken = default)
         {
             if (!_settings.Enabled)
             {
@@ -52,25 +52,28 @@ namespace PickNBook.Api.Services.Implementations
                 return;
             }
 
+            var normalizedService = string.IsNullOrWhiteSpace(serviceType) ? "Bus" : serviceType.Trim();
+            var cooldownKey = $"{CooldownCacheKey}_{normalizedService.ToLowerInvariant()}";
+
             // Check Cooldown to prevent spamming notifications
-            if (_cache.TryGetValue(CooldownCacheKey, out DateTime lastAlertTime))
+            if (_cache.TryGetValue(cooldownKey, out DateTime lastAlertTime))
             {
                 var elapsedMinutes = (DateTime.UtcNow - lastAlertTime).TotalMinutes;
                 if (elapsedMinutes < _settings.AlertCooldownMinutes)
                 {
                     _logger.LogInformation(
-                        "SRDV Wallet balance is low ({Balance} < {Threshold}), but alert cooldown is active (Last alerted: {LastAlert:u}, Elapsed: {Elapsed:F1}m, Cooldown: {Cooldown}m). Suppressing duplicate alert.",
-                        availableBalance, _settings.LowBalanceThreshold, lastAlertTime, elapsedMinutes, _settings.AlertCooldownMinutes);
+                        "SRDV {Service} Wallet balance is low ({Balance} < {Threshold}), but alert cooldown is active (Last alerted: {LastAlert:u}, Elapsed: {Elapsed:F1}m, Cooldown: {Cooldown}m). Suppressing duplicate alert.",
+                        normalizedService, availableBalance, _settings.LowBalanceThreshold, lastAlertTime, elapsedMinutes, _settings.AlertCooldownMinutes);
                     return;
                 }
             }
 
             _logger.LogCritical(
-                "CRITICAL: SRDV Bus Wallet balance ({Balance:N2}) is below threshold ({Threshold:N2})! Initiating admin alerts.",
-                availableBalance, _settings.LowBalanceThreshold);
+                "CRITICAL: SRDV {Service} Wallet balance ({Balance:N2}) is below threshold ({Threshold:N2})! Initiating admin alerts.",
+                normalizedService, availableBalance, _settings.LowBalanceThreshold);
 
             // Record alert timestamp in cache with TTL
-            _cache.Set(CooldownCacheKey, DateTime.UtcNow, TimeSpan.FromMinutes(_settings.AlertCooldownMinutes));
+            _cache.Set(cooldownKey, DateTime.UtcNow, TimeSpan.FromMinutes(_settings.AlertCooldownMinutes));
 
             // 1. Gather all admin recipients
             var adminEmails = new List<string>();
@@ -100,30 +103,36 @@ namespace PickNBook.Api.Services.Implementations
                 .Distinct()
                 .ToList();
 
+            var actionUrl = normalizedService.Equals("Hotel", StringComparison.OrdinalIgnoreCase) 
+                ? "/admin/hotel/srdv-wallet/balance" 
+                : (normalizedService.Equals("Flight", StringComparison.OrdinalIgnoreCase) 
+                    ? "/admin/flight/srdv-wallet/balance" 
+                    : "/admin/bus/srdv-wallet/balance");
+
             // 2. Dispatch In-App Notification to all Admins
             try
             {
-                var idempotencyKey = $"SRDV_LOW_BAL_{DateTime.UtcNow:yyyyMMddHH}";
-                var inAppMsg = $"Critical: SRDV Bus Wallet available balance (₹{availableBalance:N2}) is below threshold of ₹{_settings.LowBalanceThreshold:N2}. Please recharge the wallet immediately to prevent booking interruptions.";
+                var idempotencyKey = $"SRDV_LOW_BAL_{normalizedService.ToUpperInvariant()}_{DateTime.UtcNow:yyyyMMddHH}";
+                var inAppMsg = $"Critical: SRDV {normalizedService} Wallet available balance (₹{availableBalance:N2}) is below threshold of ₹{_settings.LowBalanceThreshold:N2}. Please recharge the wallet immediately to prevent booking interruptions.";
 
                 await _inAppNotificationService.CreateNotificationAsync(
                     type: "SupplierWallet",
                     category: "Finance",
-                    title: "SRDV Bus Wallet Low Balance Alert",
+                    title: $"SRDV {normalizedService} Wallet Low Balance Alert",
                     message: inAppMsg,
                     severity: "Critical",
                     referenceType: "SupplierWallet",
-                    referenceId: "SRDV_BUS",
-                    actionUrl: "/admin/bus/srdv-wallet/balance",
+                    referenceId: $"SRDV_{normalizedService.ToUpperInvariant()}",
+                    actionUrl: actionUrl,
                     idempotencyKey: idempotencyKey,
                     targetRole: "Admin",
                     cancellationToken: cancellationToken
                 );
-                _logger.LogInformation("Dispatched SRDV wallet low balance in-app notification to Admin role.");
+                _logger.LogInformation("Dispatched SRDV {Service} wallet low balance in-app notification to Admin role.", normalizedService);
             }
             catch (Exception inAppEx)
             {
-                _logger.LogError(inAppEx, "Failed to create in-app notification for SRDV low balance alert.");
+                _logger.LogError(inAppEx, "Failed to create in-app notification for SRDV {Service} low balance alert.", normalizedService);
             }
 
             // 3. Dispatch Email Notifications to all Admin recipients
@@ -138,18 +147,19 @@ namespace PickNBook.Api.Services.Implementations
                         templateKey: "ADMIN_SRDV_LOW_BALANCE",
                         payload: new
                         {
+                            ServiceType = normalizedService,
                             Balance = availableBalance,
                             Threshold = _settings.LowBalanceThreshold,
                             Deficit = _settings.LowBalanceThreshold - availableBalance,
                             Timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss UTC"),
-                            ActionUrl = "/admin/bus/srdv-wallet/balance"
+                            ActionUrl = actionUrl
                         }
                     );
-                    _logger.LogInformation("Enqueued SRDV low balance email alert for {Recipient}", email);
+                    _logger.LogInformation("Enqueued SRDV {Service} low balance email alert for {Recipient}", normalizedService, email);
                 }
                 catch (Exception mailEx)
                 {
-                    _logger.LogError(mailEx, "Failed to enqueue SRDV low balance email alert for {Recipient}", email);
+                    _logger.LogError(mailEx, "Failed to enqueue SRDV {Service} low balance email alert for {Recipient}", normalizedService, email);
                 }
             }
 

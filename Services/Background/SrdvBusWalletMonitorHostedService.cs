@@ -55,12 +55,25 @@ namespace PickNBook.Api.Services.Background
                         var balanceDto = await srdvBusService.GetSrdvMasterWalletBalanceAsync();
                         if (balanceDto != null && balanceDto.IsSuccess && balanceDto.AvailableBalance.HasValue)
                         {
-                            await alertService.EvaluateAndAlertAsync(balanceDto.AvailableBalance.Value, stoppingToken);
+                            if (balanceDto.AvailableBalance.Value < _settings.LowBalanceThreshold)
+                            {
+                                _logger.LogWarning(
+                                    "SRDV Bus Wallet balance ({Balance}) is below threshold ({Threshold}). Confirming with quick retry in 5s...",
+                                    balanceDto.AvailableBalance.Value, _settings.LowBalanceThreshold);
+
+                                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                                var retryDto = await srdvBusService.GetSrdvMasterWalletBalanceAsync();
+                                if (retryDto != null && retryDto.IsSuccess && retryDto.AvailableBalance.HasValue && retryDto.AvailableBalance.Value < _settings.LowBalanceThreshold)
+                                {
+                                    await alertService.EvaluateAndAlertAsync(retryDto.AvailableBalance.Value, "Bus", stoppingToken);
+                                }
+                            }
                         }
-                        else if (balanceDto != null && (!balanceDto.IsSuccess || !balanceDto.AvailableBalance.HasValue))
+                        else
                         {
-                            decimal available = balanceDto.AvailableBalance ?? 0m;
-                            await alertService.EvaluateAndAlertAsync(available, stoppingToken);
+                            _logger.LogWarning(
+                                "SRDV Bus Wallet balance check failed or returned non-success status. ErrorCode: {ErrorCode}, Message: {ErrorMessage}. Low balance evaluation skipped.",
+                                balanceDto?.Error?.ErrorCode, balanceDto?.Error?.ErrorMessage);
                         }
                     }
                     catch (Exception ex)

@@ -715,10 +715,9 @@ namespace PickNBook.Api.Controllers
                 var balance = await _srdvBusService.GetSrdvMasterWalletBalanceAsync(ip);
 
                 var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
-                if (alertService != null)
+                if (alertService != null && balance?.IsSuccess == true && balance.AvailableBalance.HasValue)
                 {
-                    decimal avail = (balance?.IsSuccess == true && balance.AvailableBalance.HasValue) ? balance.AvailableBalance.Value : 0m;
-                    _ = alertService.EvaluateAndAlertAsync(avail);
+                    _ = alertService.EvaluateAndAlertAsync(balance.AvailableBalance.Value, "Bus");
                 }
 
                 if (!balance.IsSuccess || balance.AvailableBalance == null || balance.AvailableBalance <= 0)

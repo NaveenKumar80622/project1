@@ -255,9 +255,21 @@ namespace PickNBook.Api.Controllers
                         // Pre-payment Strict Sufficient Funds Gate (SRDV /Balance)
                         var clientIp = HttpContext.GetClientIpAddress();
                         var walletBalance = await _srdvBusService.GetSrdvMasterWalletBalanceAsync(clientIp);
-                        decimal availableFunds = walletBalance?.AvailableBalance ?? 0m;
 
-                        if (walletBalance == null || !walletBalance.IsSuccess || availableFunds < providerAmount)
+                        if (walletBalance == null || !walletBalance.IsSuccess)
+                        {
+                            _logger.LogError("SRDV BUS WALLET QUERY FAILED: Could not retrieve balance. Error: {Error}. Aborting payment.",
+                                walletBalance?.Error?.ErrorMessage ?? "Null response from upstream SRDV");
+
+                            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                            {
+                                success = false,
+                                message = "Network error, please try again"
+                            });
+                        }
+
+                        decimal availableFunds = walletBalance.AvailableBalance ?? 0m;
+                        if (availableFunds < providerAmount)
                         {
                             _logger.LogCritical("SRDV WALLET INSUFFICIENT FUNDS: Required={Required}, Available={Available}. Aborting payment.",
                                 providerAmount, availableFunds);
@@ -265,7 +277,7 @@ namespace PickNBook.Api.Controllers
                             var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
                             if (alertService != null)
                             {
-                                _ = alertService.EvaluateAndAlertAsync(availableFunds);
+                                _ = alertService.EvaluateAndAlertAsync(availableFunds, "Bus");
                             }
 
                             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
@@ -506,9 +518,21 @@ namespace PickNBook.Api.Controllers
                         if (hotelService != null)
                         {
                             var hotelBalance = await hotelService.GetBalanceAsync();
-                            decimal availableFunds = hotelBalance?.AvailableBalance ?? 0m;
+                            if (hotelBalance == null || !hotelBalance.IsSuccess)
+                            {
+                                _logger.LogError("SRDV HOTEL WALLET QUERY FAILED: Could not retrieve balance. Error: {Error}. Aborting payment.",
+                                    hotelBalance?.Error?.ErrorMessage ?? "Null response from upstream SRDV");
 
-                            if (hotelBalance == null || !hotelBalance.IsSuccess || availableFunds < providerAmount)
+                                return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+                                {
+                                    success = false,
+                                    message = "Network error, please try again",
+                                    errorCode = "INSUFFICIENT_FUNDS"
+                                });
+                            }
+
+                            decimal availableFunds = hotelBalance.AvailableBalance ?? 0m;
+                            if (availableFunds < providerAmount)
                             {
                                 _logger.LogCritical("SRDV HOTEL WALLET INSUFFICIENT FUNDS: Required={Required}, Available={Available}. Aborting payment.",
                                     providerAmount, availableFunds);
@@ -516,7 +540,7 @@ namespace PickNBook.Api.Controllers
                                 var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
                                 if (alertService != null)
                                 {
-                                    _ = alertService.EvaluateAndAlertAsync(availableFunds);
+                                    _ = alertService.EvaluateAndAlertAsync(availableFunds, "Hotel");
                                 }
 
                                 return StatusCode(StatusCodes.Status503ServiceUnavailable, new

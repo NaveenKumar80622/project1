@@ -10,6 +10,6 @@ namespace PickNBook.Api.Services.Interfaces
         /// and dispatches In-App and Email notifications to all administrators if below threshold,
         /// respecting the alert cooldown period.
         /// </summary>
-        Task EvaluateAndAlertAsync(decimal availableBalance, CancellationToken cancellationToken = default);
+        Task EvaluateAndAlertAsync(decimal availableBalance, string serviceType = "Bus", CancellationToken cancellationToken = default);
     }
 }

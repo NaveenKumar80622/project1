@@ -32,7 +32,12 @@ namespace PickNBook.Api.Services
 
         private string? _tokenId;
         private DateTime _tokenExpiry;
-        private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = null };
+        private static readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = null,
+            PropertyNameCaseInsensitive = true,
+            NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
+        };
 
         private static readonly TimeSpan IndiaOffset = TimeSpan.FromHours(5.5);
         private static DateTime GetNowIst() => DateTime.UtcNow.Add(IndiaOffset);

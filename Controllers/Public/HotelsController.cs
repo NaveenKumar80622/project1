@@ -2896,12 +2896,12 @@ namespace PickNBook.Api.Controllers
 
             var res = await _hotelService.GetBalanceAsync(request);
 
-            if (res.AvailableBalance.HasValue)
+            if (res.AvailableBalance.HasValue && res.IsSuccess)
             {
                 var alertService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.Interfaces.ISrdvWalletAlertService>();
                 if (alertService != null)
                 {
-                    _ = alertService.EvaluateAndAlertAsync(res.AvailableBalance.Value);
+                    _ = alertService.EvaluateAndAlertAsync(res.AvailableBalance.Value, "Hotel");
                 }
             }
 
