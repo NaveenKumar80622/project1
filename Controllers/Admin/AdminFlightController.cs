@@ -1037,6 +1037,37 @@ namespace PickNBook.Api.Controllers
                         bookingCancellation.RefundStatus = row.CustomerRefundStatus;
                         bookingCancellation.CompletedAtUtc = DateTime.UtcNow;
                     }
+
+                    // Dispatch Dynamic Cancellation Email & PDF Advice
+                    try
+                    {
+                        var ticketEmailService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.ITicketEmailService>();
+                        if (ticketEmailService != null && !string.IsNullOrWhiteSpace(reservation.PassengerEmail))
+                        {
+                            var cancelEmailReq = new PickNBook.Api.Models.DTOs.SendFlightTicketEmailRequest
+                            {
+                                ToEmail = reservation.PassengerEmail,
+                                PassengerName = reservation.PassengerName,
+                                BookingReference = reservation.BookingReference,
+                                Airline = reservation.Airline,
+                                Origin = reservation.FromCity,
+                                Destination = reservation.ToCity,
+                                DepartureTime = reservation.DepartureTime,
+                                ArrivalTime = reservation.ArrivalTime,
+                                Pnr = reservation.Pnr,
+                                Price = reservation.TotalPriceInr,
+                                Currency = "INR",
+                                NonRefundable = reservation.NonRefundable,
+                                CancellationCharges = reservation.CancellationCharges,
+                                IsPartialCancellation = row.IsPartialCancellation
+                            };
+                            await ticketEmailService.SendFlightCancellationAsync(cancelEmailReq, row.CustomerRefundAmountInr);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(ex, "Failed to send cancellation email for flight booking {Ref}", reservation.BookingReference);
+                    }
                 }
             }
 

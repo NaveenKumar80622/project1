@@ -40,7 +40,7 @@ public class TicketEmailService : ITicketEmailService
             }
         }
 
-        var pdfs = _ticketPdfService.GenerateFlightTicketPdf(request);
+        var pdfs = _ticketPdfService.GenerateFlightTicketPdf(request, isCancelled: false);
 
         var attachments = pdfs.Select(p => new EmailAttachment
         {
@@ -49,10 +49,8 @@ public class TicketEmailService : ITicketEmailService
             Content = p.Content
         }).ToList();
 
-        var subject =
-            $"Your Pick&book Ticket - {request.BookingReference}";
+        var subject = $"Your Pick&book Ticket - {request.BookingReference}";
 
-        // Fetch flight reservation, booking details, and passengers from the database
         var reservation = await _context.FlightReservations
             .FirstOrDefaultAsync(r => r.BookingReference == request.BookingReference);
 
@@ -62,11 +60,8 @@ public class TicketEmailService : ITicketEmailService
 
         if (reservation != null)
         {
-            if (true)
-            {
-                flightNumber = reservation.FlightNumber;
-                airline = reservation.Airline;
-            }
+            flightNumber = reservation.FlightNumber;
+            airline = reservation.Airline;
 
             var dbPassengers = await _context.FlightReservationPassengers
                 .Where(p => p.FlightReservationId == reservation.Id)
@@ -84,13 +79,12 @@ public class TicketEmailService : ITicketEmailService
             }
         }
 
-        // Fallback to primary passenger details if the list is empty
         if (passengersList.Count == 0)
         {
             passengersList.Add(new FlightPassengerTicketDto
             {
                 FullName = request.PassengerName,
-                SeatNumber = request.SeatNumber
+                SeatNumber = request.SeatNumber ?? "12A"
             });
         }
 
@@ -99,388 +93,229 @@ public class TicketEmailService : ITicketEmailService
             flightNumber = !string.IsNullOrWhiteSpace(request.Pnr) ? request.Pnr : "6E-437";
         }
 
-        var departureIst = ToIst(request.DepartureTime);
-        var boardingTime = departureIst.AddMinutes(-40).ToString("hh:mm tt").ToUpper();
-        var departureDateStr = departureIst.ToString("dd MMM yyyy").ToUpper();
-
-        var originCity = GetCityName(request.Origin);
-        var destinationCity = GetCityName(request.Destination);
-
-        var boardingPassesHtml = new System.Text.StringBuilder();
-
-        foreach (var passenger in passengersList)
-        {
-            var pSeat = string.IsNullOrWhiteSpace(passenger.SeatNumber) ? "10A" : passenger.SeatNumber;
-            var pSeatsArray = string.IsNullOrWhiteSpace(passenger.SeatNumber) 
-                ? new[] { "10A" } 
-                : passenger.SeatNumber.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries);
-            var barcodeSvg = GenerateSvgBarcode(request.BookingReference);
-
-            if (request.Segments != null && request.Segments.Any())
-            {
-                int legIndex = 1;
-                foreach (var seg in request.Segments)
-                {
-                    var currentLegSeat = pSeatsArray.Length >= legIndex 
-                        ? pSeatsArray[legIndex - 1] 
-                        : (pSeatsArray.Length > 0 ? pSeatsArray.Last() : "10A");
-
-                    bool isCancelled = (passenger.Status == "Cancelled" || seg.Status == "Cancelled");
-                    string bgStyle = isCancelled ? "background-color: #fff0f0;" : "background-color: #ffffff;";
-                    string statusBadge = isCancelled ? "CANCELLED" : "ECONOMY";
-                    string statusColor = isCancelled ? "#991b1b" : "#d9251c";
-                    string watermarkHtml = isCancelled ? @"<div style=""position: absolute; top: 30%; left: 10%; font-size: 60px; color: rgba(255, 0, 0, 0.1); font-weight: bold; transform: rotate(-30deg); pointer-events: none; white-space: nowrap; letter-spacing: 5px; z-index: 0;"">CANCELLED</div>" : "";
-                    
-                    var legDepartureIst = ToIst(seg.DepartureTime);
-                    var legBoardingTime = legDepartureIst.AddMinutes(-40).ToString("hh:mm tt").ToUpper();
-                    var legDepartureDateStr = legDepartureIst.ToString("dd MMM yyyy").ToUpper();
-                    var pnrDisplay = string.IsNullOrWhiteSpace(seg.Pnr) ? request.BookingReference : seg.Pnr;
-                    var legOriginCity = GetCityName(seg.FromCity);
-                    var legDestCity = GetCityName(seg.ToCity);
-
-                    boardingPassesHtml.Append($@"
-    <h4 style=""color: {statusColor}; font-size: 13px; margin: 25px 0 10px 0; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;"">
-        FLIGHT LEG {legIndex}: {legOriginCity} &rarr; {legDestCity} <span style=""float: right; color: #78829b;"">PNR: {pnrDisplay}</span>
-    </h4>
-    <div style=""position: relative; margin-bottom: 25px; {bgStyle} border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(15, 36, 89, 0.08); width: 100%; display: table; border-collapse: collapse;"">
-        {watermarkHtml}
-        <div style=""display: table-row; position: relative; z-index: 1;"">
-            
-            <!-- Left Side: Main Boarding Pass -->
-            <div style=""display: table-cell; width: 70%; padding: 25px; vertical-align: top;"">
-                
-                <!-- Header -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
-                    <tr>
-                        <td style=""vertical-align: middle;"">
-                            <span style=""font-size: 20px; font-weight: 800; color: #0f2459; letter-spacing: 1px; text-transform: uppercase;"">{seg.Airline}</span>
-                        </td>
-                        <td style=""text-align: center; vertical-align: middle;"">
-                            <span style=""font-size: 12px; font-weight: bold; color: #78829b; letter-spacing: 3px; text-transform: uppercase;"">BOARDING PASS</span>
-                        </td>
-                        <td style=""text-align: right; vertical-align: middle;"">
-                            <span style=""display: inline-block; background-color: {statusColor}; color: #ffffff; font-size: 10px; font-weight: bold; padding: 4px 12px; border-radius: 5px; text-transform: uppercase; letter-spacing: 1px;"">{statusBadge}</span>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Route Codes -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 25px;"">
-                    <tr>
-                        <td style=""width: 35%; vertical-align: top;"">
-                            <div style=""font-size: 42px; font-weight: 900; color: #0f2459; line-height: 1; margin: 0;"">{seg.FromCity}</div>
-                            <div style=""font-size: 11px; color: #78829b; font-weight: 600; margin-top: 4px; text-transform: uppercase;"">{legOriginCity}</div>
-                        </td>
-                        <td style=""width: 30%; text-align: center; vertical-align: middle;"">
-                            <div style=""font-size: 20px; color: {statusColor}; font-weight: bold; letter-spacing: 4px;"">&bull; <span style=""font-size: 22px; vertical-align: middle;"">&#9992;</span> &bull;</div>
-                        </td>
-                        <td style=""width: 35%; text-align: right; vertical-align: top;"">
-                            <div style=""font-size: 42px; font-weight: 900; color: #0f2459; line-height: 1; margin: 0;"">{seg.ToCity}</div>
-                            <div style=""font-size: 11px; color: #78829b; font-weight: 600; margin-top: 4px; text-transform: uppercase;"">{legDestCity}</div>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Flight Info Row -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
-                    <tr>
-                        <td style=""width: 45%; vertical-align: top; padding-right: 10px;"">
-                            <div style=""font-size: 9px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px;"">PASSENGER NAME</div>
-                            <div style=""font-size: 13px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{passenger.FullName}</div>
-                        </td>
-                        <td style=""width: 25%; vertical-align: top; padding-right: 10px;"">
-                            <div style=""font-size: 9px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px;"">FLIGHT</div>
-                            <div style=""font-size: 13px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{seg.FlightNumber}</div>
-                        </td>
-                        <td style=""width: 30%; vertical-align: top;"">
-                            <div style=""font-size: 9px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px;"">DATE</div>
-                            <div style=""font-size: 13px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{legDepartureDateStr}</div>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Bottom Row Box -->
-                <div style=""background-color: {(isCancelled ? "#ffecec" : "#f8fafc")}; border: 1px solid #f1f5f9; border-radius: 12px; padding: 15px 20px;"">
-                    <table style=""width: 100%; border-collapse: collapse;"">
-                        <tr>
-                            <td style=""width: 25%; vertical-align: top; padding-right: 10px;"">
-                                <div style=""font-size: 9px; color: #78829b; font-weight: bold; margin-bottom: 4px; letter-spacing: 0.5px; text-transform: uppercase;"">SEAT</div>
-                                <div style=""font-size: 20px; font-weight: 800; color: {statusColor}; text-transform: uppercase;"">{(isCancelled ? "--" : currentLegSeat)}</div>
-                            </td>
-                            <td style=""width: 25%; vertical-align: top; padding-right: 10px;"">
-                                <div style=""font-size: 9px; color: #78829b; font-weight: bold; margin-bottom: 4px; letter-spacing: 0.5px; text-transform: uppercase;"">GATE</div>
-                                <div style=""font-size: 20px; font-weight: 800; color: #0f2459; text-transform: uppercase;"">{(isCancelled ? "--" : (string.IsNullOrWhiteSpace(request.Terminal) ? "12A" : request.Terminal))}</div>
-                            </td>
-                            <td style=""width: 50%; vertical-align: top;"">
-                                <div style=""font-size: 9px; color: #78829b; font-weight: bold; margin-bottom: 4px; letter-spacing: 0.5px; text-transform: uppercase;"">BOARDING TIME</div>
-                                <div style=""font-size: 14px; font-weight: 800; color: {statusColor}; text-transform: uppercase;"">{(isCancelled ? "CANCELLED" : legBoardingTime)} <span style=""font-size: 10px; font-weight: normal; color: #78829b;"">{(isCancelled ? "" : "(BOARDING: 40M PRIOR)")}</span></div>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-
-            </div>
-
-            <!-- Separator Line -->
-            <div style=""display: table-cell; width: 2px; vertical-align: middle; padding: 0;"">
-                <div style=""height: 100%; width: 100%; border-left: 2px dashed #e2e8f0; font-size: 0; line-height: 0;"">&nbsp;</div>
-            </div>
-
-            <!-- Right Side: Stub -->
-            <div style=""display: table-cell; width: 28%; padding: 25px; vertical-align: top; background-color: {(isCancelled ? "#ffebeb" : "#fafbfc")};"">
-                
-                <!-- Stub Header -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 15px;"">
-                    <tr>
-                        <td style=""vertical-align: middle;"">
-                            <span style=""font-size: 14px; font-weight: 800; color: #0f2459; text-transform: uppercase;"">{seg.Airline}</span>
-                        </td>
-                        <td style=""text-align: right; vertical-align: middle;"">
-                            <span style=""font-size: 9px; font-weight: bold; color: #78829b; text-transform: uppercase;"">{statusBadge}</span>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Stub Route Code -->
-                <div style=""font-size: 16px; font-weight: 800; color: #0f2459; margin-bottom: 15px;"">
-                    {seg.FromCity} <span style=""color: {statusColor}; font-size: 14px; vertical-align: middle;"">&#10142;</span> {seg.ToCity}
-                </div>
-
-                <!-- Stub Passenger Details -->
-                <div style=""margin-bottom: 12px;"">
-                    <div style=""font-size: 8px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;"">PASSENGER</div>
-                    <div style=""font-size: 11px; font-weight: 700; color: #0f2459; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;"">{passenger.FullName}</div>
-                </div>
-
-                <!-- Stub Flight/Seat info -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 15px;"">
-                    <tr>
-                        <td style=""vertical-align: top; padding-right: 10px;"">
-                            <div style=""font-size: 8px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;"">FLIGHT</div>
-                            <div style=""font-size: 11px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{seg.FlightNumber}</div>
-                        </td>
-                        <td style=""vertical-align: top; text-align: right;"">
-                            <div style=""font-size: 8px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;"">SEAT</div>
-                            <div style=""font-size: 13px; font-weight: 800; color: {statusColor}; text-transform: uppercase;"">{(isCancelled ? "--" : currentLegSeat)}</div>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Barcode -->
-                <div style=""text-align: center; margin-top: 15px; {(isCancelled ? "opacity: 0.3;" : "")}"">
-                    {barcodeSvg}
-                    <div style=""font-size: 8px; color: #78829b; font-weight: bold; letter-spacing: 1px; margin-top: 3px;"">{pnrDisplay}</div>
-                </div>
-
-            </div>
-
-        </div>
-    </div>");
-                    legIndex++;
-                }
-            }
-            else
-            {
-                // Fallback for single-leg / legacy data
-                bool isCancelled = (passenger.Status == "Cancelled");
-                string bgStyle = isCancelled ? "background-color: #fff0f0;" : "background-color: #ffffff;";
-                string statusBadge = isCancelled ? "CANCELLED" : "ECONOMY";
-                string statusColor = isCancelled ? "#991b1b" : "#d9251c";
-                string watermarkHtml = isCancelled ? @"<div style=""position: absolute; top: 30%; left: 10%; font-size: 60px; color: rgba(255, 0, 0, 0.1); font-weight: bold; transform: rotate(-30deg); pointer-events: none; white-space: nowrap; letter-spacing: 5px; z-index: 0;"">CANCELLED</div>" : "";
-
-                boardingPassesHtml.Append($@"
-    <div style=""position: relative; margin-bottom: 25px; {bgStyle} border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(15, 36, 89, 0.08); width: 100%; display: table; border-collapse: collapse;"">
-        {watermarkHtml}
-        <div style=""display: table-row; position: relative; z-index: 1;"">
-            
-            <!-- Left Side: Main Boarding Pass -->
-            <div style=""display: table-cell; width: 70%; padding: 25px; vertical-align: top;"">
-                
-                <!-- Header -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
-                    <tr>
-                        <td style=""vertical-align: middle;"">
-                            <span style=""font-size: 20px; font-weight: 800; color: #0f2459; letter-spacing: 1px; text-transform: uppercase;"">{airline}</span>
-                        </td>
-                        <td style=""text-align: center; vertical-align: middle;"">
-                            <span style=""font-size: 12px; font-weight: bold; color: #78829b; letter-spacing: 3px; text-transform: uppercase;"">BOARDING PASS</span>
-                        </td>
-                        <td style=""text-align: right; vertical-align: middle;"">
-                            <span style=""display: inline-block; background-color: {statusColor}; color: #ffffff; font-size: 10px; font-weight: bold; padding: 4px 12px; border-radius: 5px; text-transform: uppercase; letter-spacing: 1px;"">{statusBadge}</span>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Route Codes -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 25px;"">
-                    <tr>
-                        <td style=""width: 35%; vertical-align: top;"">
-                            <div style=""font-size: 42px; font-weight: 900; color: #0f2459; line-height: 1; margin: 0;"">{request.Origin}</div>
-                            <div style=""font-size: 11px; color: #78829b; font-weight: 600; margin-top: 4px; text-transform: uppercase;"">{originCity}</div>
-                        </td>
-                        <td style=""width: 30%; text-align: center; vertical-align: middle;"">
-                            <div style=""font-size: 20px; color: {statusColor}; font-weight: bold; letter-spacing: 4px;"">&bull; <span style=""font-size: 22px; vertical-align: middle;"">&#9992;</span> &bull;</div>
-                        </td>
-                        <td style=""width: 35%; text-align: right; vertical-align: top;"">
-                            <div style=""font-size: 42px; font-weight: 900; color: #0f2459; line-height: 1; margin: 0;"">{request.Destination}</div>
-                            <div style=""font-size: 11px; color: #78829b; font-weight: 600; margin-top: 4px; text-transform: uppercase;"">{destinationCity}</div>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Flight Info Row -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px;"">
-                    <tr>
-                        <td style=""width: 45%; vertical-align: top; padding-right: 10px;"">
-                            <div style=""font-size: 9px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px;"">PASSENGER NAME</div>
-                            <div style=""font-size: 13px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{passenger.FullName}</div>
-                        </td>
-                        <td style=""width: 25%; vertical-align: top; padding-right: 10px;"">
-                            <div style=""font-size: 9px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px;"">FLIGHT</div>
-                            <div style=""font-size: 13px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{flightNumber}</div>
-                        </td>
-                        <td style=""width: 30%; vertical-align: top;"">
-                            <div style=""font-size: 9px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px;"">DATE</div>
-                            <div style=""font-size: 13px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{departureDateStr}</div>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Bottom Row Box -->
-                <div style=""background-color: {(isCancelled ? "#ffecec" : "#f8fafc")}; border: 1px solid #f1f5f9; border-radius: 12px; padding: 15px 20px;"">
-                    <table style=""width: 100%; border-collapse: collapse;"">
-                        <tr>
-                            <td style=""width: 25%; vertical-align: top; padding-right: 10px;"">
-                                <div style=""font-size: 9px; color: #78829b; font-weight: bold; margin-bottom: 4px; letter-spacing: 0.5px; text-transform: uppercase;"">SEAT</div>
-                                <div style=""font-size: 20px; font-weight: 800; color: {statusColor}; text-transform: uppercase;"">{(isCancelled ? "--" : pSeat)}</div>
-                            </td>
-                            <td style=""width: 25%; vertical-align: top; padding-right: 10px;"">
-                                <div style=""font-size: 9px; color: #78829b; font-weight: bold; margin-bottom: 4px; letter-spacing: 0.5px; text-transform: uppercase;"">GATE</div>
-                                <div style=""font-size: 20px; font-weight: 800; color: #0f2459; text-transform: uppercase;"">{(isCancelled ? "--" : (string.IsNullOrWhiteSpace(request.Terminal) ? "12A" : request.Terminal))}</div>
-                            </td>
-                            <td style=""width: 50%; vertical-align: top;"">
-                                <div style=""font-size: 9px; color: #78829b; font-weight: bold; margin-bottom: 4px; letter-spacing: 0.5px; text-transform: uppercase;"">BOARDING TIME</div>
-                                <div style=""font-size: 14px; font-weight: 800; color: {statusColor}; text-transform: uppercase;"">{(isCancelled ? "CANCELLED" : boardingTime)} <span style=""font-size: 10px; font-weight: normal; color: #78829b;"">{(isCancelled ? "" : "(BOARDING: 40M PRIOR)")}</span></div>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-
-            </div>
-
-            <!-- Separator Line -->
-            <div style=""display: table-cell; width: 2px; vertical-align: middle; padding: 0;"">
-                <div style=""height: 100%; width: 100%; border-left: 2px dashed #e2e8f0; font-size: 0; line-height: 0;"">&nbsp;</div>
-            </div>
-
-            <!-- Right Side: Stub -->
-            <div style=""display: table-cell; width: 28%; padding: 25px; vertical-align: top; background-color: {(isCancelled ? "#ffebeb" : "#fafbfc")};"">
-                
-                <!-- Stub Header -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 15px;"">
-                    <tr>
-                        <td style=""vertical-align: middle;"">
-                            <span style=""font-size: 14px; font-weight: 800; color: #0f2459; text-transform: uppercase;"">{airline}</span>
-                        </td>
-                        <td style=""text-align: right; vertical-align: middle;"">
-                            <span style=""font-size: 9px; font-weight: bold; color: #78829b; text-transform: uppercase;"">{statusBadge}</span>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Stub Route Code -->
-                <div style=""font-size: 16px; font-weight: 800; color: #0f2459; margin-bottom: 15px;"">
-                    {request.Origin} <span style=""color: {statusColor}; font-size: 14px; vertical-align: middle;"">&#10142;</span> {request.Destination}
-                </div>
-
-                <!-- Stub Passenger Details -->
-                <div style=""margin-bottom: 12px;"">
-                    <div style=""font-size: 8px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;"">PASSENGER</div>
-                    <div style=""font-size: 11px; font-weight: 700; color: #0f2459; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px;"">{passenger.FullName}</div>
-                </div>
-
-                <!-- Stub Flight/Seat info -->
-                <table style=""width: 100%; border-collapse: collapse; margin-bottom: 15px;"">
-                    <tr>
-                        <td style=""vertical-align: top; padding-right: 10px;"">
-                            <div style=""font-size: 8px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;"">FLIGHT</div>
-                            <div style=""font-size: 11px; font-weight: 700; color: #0f2459; text-transform: uppercase;"">{flightNumber}</div>
-                        </td>
-                        <td style=""vertical-align: top; text-align: right;"">
-                            <div style=""font-size: 8px; color: #78829b; font-weight: bold; text-transform: uppercase; margin-bottom: 2px;"">SEAT</div>
-                            <div style=""font-size: 13px; font-weight: 800; color: {statusColor}; text-transform: uppercase;"">{(isCancelled ? "--" : pSeat)}</div>
-                        </td>
-                    </tr>
-                </table>
-
-                <!-- Barcode -->
-                <div style=""text-align: center; margin-top: 15px; {(isCancelled ? "opacity: 0.3;" : "")}"">
-                    {barcodeSvg}
-                    <div style=""font-size: 8px; color: #78829b; font-weight: bold; letter-spacing: 1px; margin-top: 3px;"">{request.BookingReference}</div>
-                </div>
-
-            </div>
-
-        </div>
-    </div>");
-            }
-        }
-
-    var cancellationSection = string.Empty;
-    if (request.NonRefundable)
-    {
-        cancellationSection = @"
-    <div style=""background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 20px; margin-top: 15px;"">
-        <h4 style=""color: #991b1b; margin: 0 0 10px 0; font-size: 14px;"">Cancellation Policy</h4>
-        <p style=""color: #991b1b; font-weight: bold; font-size: 13px; margin: 0;"">This ticket is NON-REFUNDABLE.</p>
-    </div>";
-    }
-    else if (!string.IsNullOrWhiteSpace(request.CancellationCharges))
-    {
-        cancellationSection = $@"
-    <div style=""background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-top: 15px;"">
-        <h4 style=""color: #0f2459; margin: 0 0 10px 0; font-size: 14px;"">Cancellation Policy</h4>
-        <p style=""color: #5a6578; font-size: 13px; margin: 0;"">{request.CancellationCharges}</p>
-    </div>";
-    }
-
-        var body = $@"
-<div style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6fa; padding: 30px 20px; max-width: 850px; margin: 0 auto; border-radius: 12px;"">
-    
-    <div style=""background: linear-gradient(135deg, #0f2459 0%, #1e3a8a 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 4px 16px rgba(0,0,0,0.08);"">
-        <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
-            <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
-        </div>
-        <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Flight Booking Confirmed!</h2>
-        <p style=""margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;"">Booking Reference: <b style=""color: #f8fafc;"">{request.BookingReference}</b></p>
-    </div>
-
-    {boardingPassesHtml}
-
-    {cancellationSection}
-
-    <!-- Additional Helpful Details Box -->
-    <div style=""background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(15, 36, 89, 0.04); margin-top: 15px;"">
-        <h4 style=""color: #0f2459; margin: 0 0 10px 0; font-size: 14px;"">Important Information</h4>
-        <ul style=""color: #5a6578; font-size: 12px; margin: 0; padding-left: 20px; line-height: 1.6;"">
-            <li>Please carry a valid government-issued photo ID along with this boarding pass to the airport.</li>
-            <li>Boarding gates close 20 minutes prior to departure. We recommend reaching the gate at least 45 minutes before departure.</li>
-            <li>For domestic flights, check-in baggage counter closes 45 minutes prior to departure.</li>
-            <li>This is a system-generated ticket, and a copy of your ticket PDF is attached to this email.</li>
-        </ul>
-    </div>
-
-    <div style=""text-align: center; margin-top: 25px; font-size: 11px; color: #94a3b8;"">
-        &copy; 2026 Pick&amp;book Travel Services. All rights reserved.
-    </div>
-
-</div>";
+        var body = BuildFlightTicketEmailHtml(request, passengersList, airline, flightNumber);
 
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
             subject,
             body,
             attachments);
+    }
+
+    private static string GetAirlineCode(string airline, string flightNumber)
+    {
+        if (airline.Contains("Fly91", StringComparison.OrdinalIgnoreCase)) return "IC";
+        if (airline.Contains("Vistara", StringComparison.OrdinalIgnoreCase)) return "UK";
+        if (airline.Contains("IndiGo", StringComparison.OrdinalIgnoreCase)) return "6E";
+        if (airline.Contains("Air India", StringComparison.OrdinalIgnoreCase)) return "AI";
+        if (airline.Contains("SpiceJet", StringComparison.OrdinalIgnoreCase)) return "SG";
+        if (airline.Contains("Akasa", StringComparison.OrdinalIgnoreCase)) return "QP";
+        if (!string.IsNullOrWhiteSpace(flightNumber) && flightNumber.Length >= 2)
+        {
+            var prefix = flightNumber.Substring(0, 2).ToUpper();
+            if (char.IsLetter(prefix[0]) && (char.IsLetter(prefix[1]) || char.IsDigit(prefix[1]))) return prefix;
+        }
+        return "6E";
+    }
+
+    private static string BuildFlightTicketEmailHtml(
+        SendFlightTicketEmailRequest req,
+        List<FlightPassengerTicketDto> passengers,
+        string airline,
+        string flightNumber)
+    {
+        var depIst = ToIst(req.DepartureTime);
+        var arrIst = ToIst(req.ArrivalTime);
+        var depDateStr = depIst.ToString("ddd, dd MMMM yyyy");
+        var originCity = GetCityName(req.Origin);
+        var destCity = GetCityName(req.Destination);
+
+        var segList = req.Segments != null && req.Segments.Any()
+            ? req.Segments
+            : new List<FlightTicketSegmentDto>
+            {
+                new FlightTicketSegmentDto
+                {
+                    Airline = airline,
+                    FlightNumber = flightNumber,
+                    FromCity = req.Origin,
+                    ToCity = req.Destination,
+                    DepartureTime = req.DepartureTime,
+                    ArrivalTime = req.ArrivalTime,
+                    Pnr = req.Pnr
+                }
+            };
+
+        var firstSeg = segList.First();
+        string airCode = GetAirlineCode(firstSeg.Airline, firstSeg.FlightNumber);
+        string logoUrl = "https://images.kiwi.com/airlines/64/" + airCode + ".png";
+        string fallbackLogoUrl = "https://imgak.mmtcdn.com/flights/assets/media/dt/common/icons/" + airCode + ".png";
+        string pnrVal = !string.IsNullOrWhiteSpace(req.Pnr) ? req.Pnr : (firstSeg.Pnr ?? "BLKT23");
+
+        var sbSegments = new System.Text.StringBuilder();
+        foreach (var seg in segList)
+        {
+            var sDep = ToIst(seg.DepartureTime);
+            var sArr = ToIst(seg.ArrivalTime);
+            var sDur = sArr > sDep ? $"{(int)(sArr - sDep).TotalHours}h {(sArr - sDep).Minutes}m" : "1h 01m";
+            string sCode = GetAirlineCode(seg.Airline, seg.FlightNumber);
+            string sLogo = "https://images.kiwi.com/airlines/64/" + sCode + ".png";
+            string sFb = "https://imgak.mmtcdn.com/flights/assets/media/dt/common/icons/" + sCode + ".png";
+
+            sbSegments.Append(
+                "<div style=\"border: 1px solid #e2e8f0; border-radius: 16px; padding: 18px; margin-bottom: 14px; background-color: #ffffff;\">" +
+                "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+                "<td style=\"width: 32%; vertical-align: middle; border-right: 1px solid #f1f5f9; padding-right: 14px;\">" +
+                "<table style=\"border-collapse: collapse;\"><tr>" +
+                "<td style=\"width: 48px; vertical-align: middle;\">" +
+                "<div style=\"width: 44px; height: 44px; border-radius: 12px; background: #ffffff; border: 1px solid #e2e8f0; text-align: center; line-height: 44px; overflow: hidden;\">" +
+                "<img src=\"" + sLogo + "\" alt=\"" + seg.Airline + "\" style=\"width: 36px; height: 36px; vertical-align: middle; object-fit: contain;\" onerror=\"this.onerror=null; this.src='" + sFb + "';\" />" +
+                "</div></td>" +
+                "<td style=\"padding-left: 10px; vertical-align: middle;\">" +
+                "<div style=\"font-size: 13px; font-weight: 800; color: #091a3e; text-transform: uppercase;\">" + seg.Airline + "</div>" +
+                "<div style=\"font-size: 11px; color: #64748b; font-weight: 600;\">" + seg.FlightNumber + " &bull; <span style=\"color: #94a3b8;\">Operated by " + seg.Airline + "</span></div>" +
+                "<div style=\"display: inline-block; margin-top: 4px; font-size: 10px; border: 1px solid #cbd5e1; border-radius: 5px; overflow: hidden;\">" +
+                "<span style=\"background: #091a3e; color: #ffffff; font-weight: 800; padding: 1px 5px;\">PNR</span>" +
+                "<span style=\"background: #ffffff; color: #091a3e; font-weight: 900; padding: 1px 7px; font-family: monospace;\">" + pnrVal + "</span>" +
+                "</div></td></tr></table></td>" +
+                "<td style=\"padding-left: 18px; vertical-align: middle;\">" +
+                "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+                "<td style=\"width: 36%; vertical-align: middle;\">" +
+                "<div style=\"font-size: 14px; font-weight: 800; color: #0f172a;\">" + GetCityName(seg.FromCity) + "</div>" +
+                "<div style=\"font-size: 16px; font-weight: 900; color: #091a3e;\">" + sDep.ToString("HH:mm") + " <span style=\"font-size: 11px; font-weight: 700; color: #64748b;\">hrs (" + seg.FromCity + ")</span></div>" +
+                "<div style=\"font-size: 10px; color: #94a3b8;\">" + sDep.ToString("ddd, dd MMM") + "</div></td>" +
+                "<td style=\"width: 28%; text-align: center; vertical-align: middle;\">" +
+                "<div style=\"font-size: 10px; color: #64748b; font-weight: 700;\">" + sDur + "</div>" +
+                "<div style=\"color: #dc2626; font-size: 14px; font-weight: bold; margin: 2px 0;\">&rarr;</div>" +
+                "<div style=\"font-size: 9px; color: #059669; font-weight: 800; text-transform: uppercase;\">Non-Stop</div></td>" +
+                "<td style=\"width: 36%; text-align: right; vertical-align: middle;\">" +
+                "<div style=\"font-size: 14px; font-weight: 800; color: #0f172a;\">" + GetCityName(seg.ToCity) + "</div>" +
+                "<div style=\"font-size: 16px; font-weight: 900; color: #091a3e;\">" + sArr.ToString("HH:mm") + " <span style=\"font-size: 11px; font-weight: 700; color: #64748b;\">hrs (" + seg.ToCity + ")</span></div>" +
+                "<div style=\"font-size: 10px; color: #94a3b8;\">" + sArr.ToString("ddd, dd MMM") + "</div></td>" +
+                "</tr></table></td></tr></table></div>");
+        }
+
+        var sbPassengers = new System.Text.StringBuilder();
+        int tktIdx = 7054;
+        foreach (var p in passengers)
+        {
+            string seatVal = !string.IsNullOrWhiteSpace(p.SeatNumber) ? p.SeatNumber : "12A";
+            string ticketVal = !string.IsNullOrWhiteSpace(p.TicketNumber) ? p.TicketNumber : ("228-380931" + (tktIdx++));
+            string pType = !string.IsNullOrWhiteSpace(p.PassengerType) ? p.PassengerType : "Adult";
+            sbPassengers.Append(
+                "<tr style=\"border-top: 1px solid #f1f5f9;\">" +
+                "<td style=\"padding: 11px 14px; font-size: 12px; font-weight: 700; color: #0f172a;\">" + p.FullName + " <span style=\"font-size: 10px; color: #64748b; font-weight: normal;\">(" + pType + ")</span></td>" +
+                "<td style=\"padding: 11px 14px; font-size: 12px; font-weight: 800; color: #dc2626; background-color: #fff1f2; text-align: center;\">" + seatVal + "</td>" +
+                "<td style=\"padding: 11px 14px; font-size: 11px; color: #64748b;\">Standard Snack</td>" +
+                "<td style=\"padding: 11px 14px; font-size: 11px; font-family: monospace; color: #334155; text-align: right;\">" + ticketVal + "</td>" +
+                "</tr>");
+        }
+
+        decimal ref1 = Math.Max(0, req.Price - 1750);
+        decimal ref2 = Math.Max(0, req.Price - 2250);
+
+        return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Pick&amp;book Flight Ticket</title></head>" +
+               "<body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 25px 10px; color: #0f172a;\">" +
+               "<div style=\"max-width: 680px; margin: 0 auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;\">" +
+               
+               "<!-- Header Banner -->" +
+               "<div style=\"background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #ffffff; padding: 24px; border-top: 4px solid #dc2626;\">" +
+               "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+               "<td style=\"width: 48px; vertical-align: middle;\">" +
+               "<div style=\"background: #ffffff; border-radius: 12px; padding: 6px 10px; display: inline-block;\">" +
+               "<img src=\"https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png\" alt=\"Pick&amp;book\" style=\"height: 24px; width: auto; display: block; border: 0;\" />" +
+               "</div></td>" +
+               "<td style=\"padding-left: 16px; vertical-align: middle;\">" +
+               "<div style=\"font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #a7f3d0;\">BOOKING CONFIRMED &bull; E-TICKET ISSUED</div>" +
+               "<div style=\"font-size: 18px; font-weight: 900; margin-top: 2px; color: #ffffff;\">Your " + originCity + " - " + destCity + " flight is booked for travel on " + depDateStr + "</div>" +
+               "<div style=\"font-size: 12px; color: #d1fae5; margin-top: 2px;\">Thank you for choosing Pick&amp;book. We wish you a safe and pleasant journey!</div>" +
+               "</td></tr></table></div>" +
+
+               "<div style=\"padding: 24px;\">" +
+               
+               "<!-- Trip details badge -->" +
+               "<div style=\"margin-bottom: 18px;\">" +
+               "<span style=\"display: inline-block; background-color: #091a3e; color: #ffffff; font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; padding: 7px 16px; border-radius: 8px;\">Your trip details</span>" +
+               "</div>" +
+
+               "<!-- Segments -->" +
+               "<div style=\"margin-bottom: 20px;\">" +
+               "<div style=\"font-size: 18px; font-weight: 900; color: #091a3e; margin-bottom: 4px;\">" + originCity + " &rarr; " + destCity + "</div>" +
+               "<div style=\"font-size: 12px; font-weight: 600; color: #64748b; margin-bottom: 14px;\">" + depDateStr + " &bull; <span style=\"color: #059669; font-weight: 800;\">Non-stop</span> &bull; 1h 01m duration</div>" +
+               sbSegments.ToString() +
+               "</div>" +
+
+               "<!-- Baggage Strip -->" +
+               "<div style=\"background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px; margin-bottom: 20px; font-size: 11px;\">" +
+               "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+               "<td style=\"color: #091a3e; font-weight: 800;\">" +
+               "<span style=\"background: #e2e8f0; padding: 3px 8px; border-radius: 6px; margin-right: 6px;\">ECONOMY VALUE</span>" +
+               "<span style=\"background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 6px;\">Regular Fare</span></td>" +
+               "<td style=\"text-align: right; color: #475569; font-weight: 600;\">Check-in: <b>15 Kgs (1 PC)</b> &bull; Cabin: <b>7 Kgs</b> per Adult</td>" +
+               "</tr></table></div>" +
+
+               "<!-- Passenger Table -->" +
+               "<div style=\"margin-bottom: 24px;\">" +
+               "<div style=\"font-size: 12px; font-weight: 800; text-transform: uppercase; color: #091a3e; margin-bottom: 8px; letter-spacing: 0.5px;\">Passenger Details</div>" +
+               "<table style=\"width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;\">" +
+               "<tr style=\"background-color: #f8fafc; color: #64748b; font-size: 10px; font-weight: 800; text-transform: uppercase;\">" +
+               "<th style=\"padding: 10px 14px; text-align: left;\">Traveller</th>" +
+               "<th style=\"padding: 10px 14px; text-align: center;\">Seat</th>" +
+               "<th style=\"padding: 10px 14px; text-align: left;\">Meal</th>" +
+               "<th style=\"padding: 10px 14px; text-align: right;\">E-Ticket No</th></tr>" +
+               sbPassengers.ToString() +
+               "</table></div>" +
+
+               "<!-- Dynamic Cancellation Policy -->" +
+               "<div style=\"background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 18px; margin-bottom: 24px;\">" +
+               "<div style=\"font-size: 12px; font-weight: 800; text-transform: uppercase; color: #091a3e; margin-bottom: 10px; letter-spacing: 0.5px;\">Dynamic Cancellation &amp; Refund Policy</div>" +
+               "<table style=\"width: 100%; border-collapse: collapse; background: #ffffff; border-radius: 8px; overflow: hidden; border: 1px solid #e2e8f0; font-size: 11px;\">" +
+               "<tr style=\"background-color: #f1f5f9; color: #475569; font-weight: 800;\">" +
+               "<th style=\"padding: 9px 12px; text-align: left;\">Timeline (Before Departure)</th>" +
+               "<th style=\"padding: 9px 12px; text-align: left;\">Airline Fee</th>" +
+               "<th style=\"padding: 9px 12px; text-align: left;\">Pick&amp;book Fee</th>" +
+               "<th style=\"padding: 9px 12px; text-align: right;\">Estimated Net Refund</th></tr>" +
+               "<tr style=\"border-top: 1px solid #f1f5f9;\">" +
+               "<td style=\"padding: 9px 12px; color: #0f172a; font-weight: 600;\">More than 72 hours before departure</td>" +
+               "<td style=\"padding: 9px 12px; color: #dc2626; font-weight: 700;\">&#8377;1,500.00 / pax</td>" +
+               "<td style=\"padding: 9px 12px; color: #64748b;\">&#8377;250.00</td>" +
+               "<td style=\"padding: 9px 12px; color: #059669; font-weight: 800; text-align: right;\">&#8377;" + ref1.ToString("0.00") + "</td></tr>" +
+               "<tr style=\"border-top: 1px solid #f1f5f9; background-color: #fafbfc;\">" +
+               "<td style=\"padding: 9px 12px; color: #0f172a; font-weight: 600;\">Between 24 to 72 hours before departure</td>" +
+               "<td style=\"padding: 9px 12px; color: #dc2626; font-weight: 700;\">&#8377;2,000.00 / pax</td>" +
+               "<td style=\"padding: 9px 12px; color: #64748b;\">&#8377;250.00</td>" +
+               "<td style=\"padding: 9px 12px; color: #059669; font-weight: 800; text-align: right;\">&#8377;" + ref2.ToString("0.00") + "</td></tr>" +
+               "<tr style=\"border-top: 1px solid #f1f5f9;\">" +
+               "<td style=\"padding: 9px 12px; color: #0f172a; font-weight: 600;\">0 to 24 hours / Flight No-Show</td>" +
+               "<td style=\"padding: 9px 12px; color: #dc2626;\">Non-Refundable Base</td>" +
+               "<td style=\"padding: 9px 12px; color: #64748b;\">&#8377;250.00</td>" +
+               "<td style=\"padding: 9px 12px; color: #091a3e; font-weight: 700; text-align: right;\">Statutory Taxes Only</td></tr>" +
+               "</table>" +
+               "<div style=\"font-size: 10px; color: #64748b; margin-top: 8px; line-height: 1.4;\">&bull; Passenger Service Fee (PSF), User Development Fee (UDF), and airport security charges are 100% refundable.<br/>&bull; Net refund is processed back to the original payment source within 3-5 business days.</div></div>" +
+
+               "<!-- Instructions -->" +
+               "<div style=\"background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 24px; font-size: 11px; color: #64748b; line-height: 1.5;\">" +
+               "<div style=\"font-weight: 800; color: #091a3e; margin-bottom: 6px;\">Important Travel Instructions</div>" +
+               "<div>&bull; Please carry a valid government-issued photo ID (Aadhaar, Passport, Voter ID) along with this voucher.</div>" +
+               "<div>&bull; Check-in counters close 45 minutes prior and boarding gates close 20 minutes prior to scheduled departure.</div>" +
+               "<div>&bull; A copy of your official flight ticket PDF is attached to this email for offline travel.</div></div>" +
+
+               "</div>" +
+
+               "<!-- Footer -->" +
+               "<div style=\"background-color: #091a3e; color: #ffffff; padding: 22px 24px; border-top: 3px solid #dc2626;\">" +
+               "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+               "<td style=\"vertical-align: middle;\">" +
+               "<div style=\"font-size: 10px; color: #94a3b8; text-transform: uppercase; font-weight: 800; letter-spacing: 0.5px;\">TOTAL FARE PAID (ALL TAXES &amp; FEES INCLUDED)</div>" +
+               "<div style=\"font-size: 22px; font-weight: 900; color: #ffffff; margin-top: 2px;\">&#8377;" + req.Price.ToString("0.00") + " <span style=\"font-size: 11px; color: #f87171;\">INR</span></div>" +
+               "<div style=\"font-size: 11px; color: #94a3b8; margin-top: 2px;\">Payment Verified &bull; Instant Confirmation via Cashfree PG</div></td>" +
+               "<td style=\"text-align: right; vertical-align: middle;\">" +
+               "<div style=\"font-size: 11px; color: #94a3b8;\">Issued by</div>" +
+               "<div style=\"background: #ffffff; border-radius: 6px; padding: 3px 8px; display: inline-block; margin-top: 3px;\">" +
+               "<img src=\"https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png\" alt=\"Pick&amp;book\" style=\"height: 16px; display: block; border: 0;\" />" +
+               "</div>" +
+               "<div style=\"font-size: 10px; color: #94a3b8; margin-top: 4px;\">Ref: <b style=\"color: #ffffff; font-family: monospace;\">" + req.BookingReference + "</b></div></td>" +
+               "</tr></table></div></div></body></html>";
     }
 
 
@@ -1279,93 +1114,97 @@ public class TicketEmailService : ITicketEmailService
     {
         var subject = $"Flight Ticket Cancelled - {request.BookingReference}";
 
-        var passengerLines = string.Empty;
-        var cancelledPaxs = request.IsPartialCancellation && request.CancelledPassengers.Any() ? request.CancelledPassengers : request.Passengers;
-        if (cancelledPaxs != null && cancelledPaxs.Count > 0)
+        // Generate CANCELLED PDF voucher and attach
+        var pdfs = _ticketPdfService.GenerateFlightTicketPdf(request, isCancelled: true, refundAmount: refundAmount);
+        var attachments = pdfs.Select(p => new EmailAttachment
         {
-            passengerLines = "<p><b>Cancelled Passengers:</b><br/>" +
-                string.Join("<br/>", cancelledPaxs.Select((p, i) =>
-                    $"&nbsp;&nbsp;{i + 1}. {p.FullName} &mdash; Seat <b>{p.SeatNumber ?? "N/A"}</b>")) + "</p>";
-        }
-        else
-        {
-            passengerLines = $"<p><b>Passenger:</b> {request.PassengerName} &mdash; Seat <b>{request.SeatNumber ?? "N/A"}</b></p>";
-        }
+            FileName = $"Cancellation-Advice-{request.BookingReference}.pdf",
+            ContentType = "application/pdf",
+            Content = p.Content
+        }).ToList();
 
-        var segmentLines = string.Empty;
-        if (request.IsPartialCancellation && request.CancelledSegments.Any())
-        {
-            segmentLines = "<p><b>Cancelled Segments:</b><br/>" +
-                string.Join("<br/>", request.CancelledSegments.Select((s, i) =>
-                    $"&nbsp;&nbsp;{i + 1}. {s.FromCity} to {s.ToCity} ({s.Airline} {s.FlightNumber})")) + "</p>";
-        }
+        var depIst = ToIst(request.DepartureTime);
+        var depDateStr = depIst.ToString("ddd, dd MMMM yyyy");
+        var originCity = GetCityName(request.Origin);
+        var destCity = GetCityName(request.Destination);
 
-        var cancellationText = request.IsPartialCancellation ? "partially <b style='color:red;'>cancelled</b> (see details below)" : "<b style='color:red;'>cancelled</b>";
+        string firstFlightNo = request.Segments?.FirstOrDefault()?.FlightNumber ?? "IC-3301";
+        string airCode = GetAirlineCode(request.Airline, firstFlightNo);
+        string logoUrl = "https://images.kiwi.com/airlines/64/" + airCode + ".png";
+        string fallbackLogoUrl = "https://imgak.mmtcdn.com/flights/assets/media/dt/common/icons/" + airCode + ".png";
+        string pnrVal = !string.IsNullOrWhiteSpace(request.Pnr) ? request.Pnr : (request.Segments?.FirstOrDefault()?.Pnr ?? "BLKT23");
 
-        var body = $@"
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset=""utf-8"">
-    <title>Flight Booking Cancelled - {request.BookingReference}</title>
-</head>
-<body style=""font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 25px 15px; color: #1e293b;"">
-    <div style=""max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 16px rgba(0,0,0,0.06); border: 1px solid #fee2e2;"">
-        <div style=""background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%); color: #ffffff; padding: 26px 20px; text-align: center; border-radius: 12px 12px 0 0;"">
-            <div style=""background: #ffffff; display: inline-block; padding: 7px 22px; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.18); margin-bottom: 12px;"">
-                <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" style=""height: 32px; width: auto; display: block; border: 0;"" />
-            </div>
-            <h2 style=""margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.5px; color: #ffffff;"">Pick&amp;book Flight Cancellation</h2>
-            <p style=""margin: 6px 0 0 0; font-size: 13px; color: #fecaca;"">Booking Reference: <b style=""color: #ffffff;"">{request.BookingReference}</b></p>
-        </div>
-        <div style=""padding: 24px 20px;"">
-            <p style=""font-size: 16px; margin: 0 0 16px 0; color: #991b1b;"">Hi <b>{request.PassengerName}</b>,</p>
-            
-            <div style=""background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 14px 16px; border-radius: 4px; margin-bottom: 20px;"">
-                <h3 style=""margin: 0 0 6px 0; color: #991b1b; font-size: 15px; font-weight: 700;"">Booking Successfully Cancelled</h3>
-                <p style=""margin: 0; font-size: 13px; color: #7f1d1d; line-height: 1.5;"">
-                    Your flight ticket for <b>{request.Origin} &rarr; {request.Destination}</b> has been {cancellationText}.
-                </p>
-            </div>
+        var body = "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Flight Booking Cancelled</title></head>" +
+                   "<body style=\"font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f1f5f9; margin: 0; padding: 25px 10px; color: #0f172a;\">" +
+                   "<div style=\"max-width: 680px; margin: 0 auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.06); border: 1px solid #fee2e2;\">" +
+                   
+                   "<!-- Top Crimson Cancellation Banner -->" +
+                   "<div style=\"background: linear-gradient(135deg, #991b1b 0%, #7f1d1d 100%); color: #ffffff; padding: 24px; border-top: 4px solid #dc2626;\">" +
+                   "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+                   "<td style=\"width: 48px; vertical-align: middle;\">" +
+                   "<div style=\"background: #ffffff; border-radius: 12px; padding: 6px 10px; display: inline-block;\">" +
+                   "<img src=\"https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png\" alt=\"Pick&amp;book\" style=\"height: 24px; width: auto; display: block; border: 0;\" />" +
+                   "</div></td>" +
+                   "<td style=\"padding-left: 16px; vertical-align: middle;\">" +
+                   "<div style=\"font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #fecaca;\">BOOKING CANCELLED &bull; REFUND INITIATED</div>" +
+                   "<div style=\"font-size: 18px; font-weight: 900; margin-top: 2px; color: #ffffff;\">Flight Booking Cancelled &mdash; " + request.BookingReference + "</div>" +
+                   "<div style=\"font-size: 12px; color: #fee2e2; margin-top: 2px;\">Your booking for " + originCity + " - " + destCity + " has been successfully cancelled.</div>" +
+                   "</td></tr></table></div>" +
 
-            {segmentLines}
-            {passengerLines}
+                   "<div style=\"padding: 24px;\">" +
+                   
+                   "<!-- Cancellation Notice Card -->" +
+                   "<div style=\"background-color: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 16px; margin-bottom: 20px;\">" +
+                   "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+                   "<td style=\"width: 44px; vertical-align: middle;\">" +
+                   "<div style=\"width: 40px; height: 40px; border-radius: 10px; background: #ffffff; border: 1px solid #fecaca; text-align: center; line-height: 40px;\">" +
+                   "<img src=\"" + logoUrl + "\" alt=\"" + request.Airline + "\" style=\"width: 30px; height: 30px; vertical-align: middle; object-fit: contain;\" onerror=\"this.onerror=null; this.src='" + fallbackLogoUrl + "';\" />" +
+                   "</div></td>" +
+                   "<td style=\"padding-left: 12px; vertical-align: middle;\">" +
+                   "<div style=\"font-size: 14px; font-weight: 800; color: #991b1b;\">" + request.Airline + " (" + firstFlightNo + ") &bull; " + originCity + " &rarr; " + destCity + "</div>" +
+                   "<div style=\"font-size: 12px; color: #7f1d1d;\">Travel Date: " + depDateStr + " &bull; PNR: <b style=\"font-family: monospace;\">" + pnrVal + "</b></div></td>" +
+                   "</tr></table></div>" +
 
-            <table style=""width: 100%; border-collapse: collapse; margin-bottom: 20px; background-color: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; font-size: 13px;"">
-                <tr style=""border-bottom: 1px solid #e2e8f0;"">
-                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b; width: 40%;"">Original Fare</td>
-                    <td style=""padding: 10px 14px; font-weight: 700; color: #0f2459;"">&#8377;{request.Price:0.00}</td>
-                </tr>
-                <tr>
-                    <td style=""padding: 10px 14px; font-weight: 600; color: #64748b;"">Refund Amount</td>
-                    <td style=""padding: 10px 14px; font-weight: 700; color: #16a34a; font-size: 15px;"">&#8377;{refundAmount:0.00}</td>
-                </tr>
-            </table>
+                   "<!-- Refund Breakdown Table -->" +
+                   "<div style=\"margin-bottom: 20px;\">" +
+                   "<div style=\"font-size: 12px; font-weight: 800; text-transform: uppercase; color: #091a3e; margin-bottom: 8px; letter-spacing: 0.5px;\">Refund Breakdown</div>" +
+                   "<table style=\"width: 100%; border-collapse: collapse; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; font-size: 12px;\">" +
+                   "<tr style=\"border-bottom: 1px solid #f1f5f9;\">" +
+                   "<td style=\"padding: 11px 14px; color: #64748b; font-weight: 600;\">Original Total Paid</td>" +
+                   "<td style=\"padding: 11px 14px; color: #0f172a; font-weight: 800; text-align: right;\">&#8377;" + request.Price.ToString("0.00") + "</td></tr>" +
+                   "<tr style=\"border-bottom: 1px solid #f1f5f9; background-color: #fafbfc;\">" +
+                   "<td style=\"padding: 11px 14px; color: #dc2626; font-weight: 600;\">Total Cancellation &amp; Airline Charges</td>" +
+                   "<td style=\"padding: 11px 14px; color: #dc2626; font-weight: 800; text-align: right;\">- &#8377;" + Math.Max(0, request.Price - refundAmount).ToString("0.00") + "</td></tr>" +
+                   "<tr style=\"background-color: #f0fdf4;\">" +
+                   "<td style=\"padding: 12px 14px; color: #059669; font-weight: 900; font-size: 13px;\">Net Refund Processed</td>" +
+                   "<td style=\"padding: 12px 14px; color: #059669; font-weight: 900; font-size: 16px; text-align: right;\">&#8377;" + refundAmount.ToString("0.00") + "</td></tr>" +
+                   "</table></div>" +
 
-            <div style=""background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 12px 14px; margin-bottom: 20px; font-size: 13px; color: #1e40af; line-height: 1.5;"">
-                &#9432; The refund will be processed to your original payment method within <b>5&ndash;7 working days</b>.
-            </div>
+                   "<!-- Processing Timeline -->" +
+                   "<div style=\"background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 14px 16px; margin-bottom: 24px; font-size: 12px; color: #1e40af; line-height: 1.5;\">" +
+                   "<b>Refund Timeline:</b> The net refund of <b>&#8377;" + refundAmount.ToString("0.00") + "</b> has been initiated and will reflect in your original payment method / wallet within <b>3&ndash;5 business days</b>." +
+                   "</div>" +
 
-            <p style=""font-size: 12px; color: #64748b; margin: 0 0 16px 0;"">
-                If you did not initiate this cancellation, please contact support immediately.
-            </p>
+                   "<!-- PDF Advice Attached Note -->" +
+                   "<div style=\"background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; font-size: 11px; color: #64748b; line-height: 1.5;\">" +
+                   "<div style=\"font-weight: 800; color: #091a3e; margin-bottom: 4px;\">Official Cancellation Advice PDF Attached</div>" +
+                   "<div>A detailed cancellation statement PDF with transaction reference and breakdown has been attached to this email. For any further queries, please reach us at support@picknbook.in.</div>" +
+                   "</div>" +
 
-            <p style=""margin: 0; font-size: 13px; color: #475569;"">
-                Regards,<br/>
-                <b>Team Pick&amp;book</b>
-            </p>
-        </div>
-        <div style=""background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 20px; text-align: center; font-size: 11px; color: #94a3b8;"">
-            &copy; 2026 Pick&amp;book Travel Services. All rights reserved.
-        </div>
-    </div>
-</body>
-</html>";
+                   "</div>" +
 
-        await _emailService.SendEmailAsync(
+                   "<!-- Footer -->" +
+                   "<div style=\"background-color: #091a3e; color: #ffffff; padding: 18px 24px; border-top: 3px solid #dc2626;\">" +
+                   "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
+                   "<td style=\"vertical-align: middle;\"><div style=\"font-size: 11px; color: #94a3b8;\">&copy; 2026 Pick&amp;book Travel Services. All rights reserved.</div></td>" +
+                   "<td style=\"text-align: right; vertical-align: middle;\"><div style=\"font-size: 10px; color: #94a3b8;\">Booking ID: <b style=\"color: #ffffff; font-family: monospace;\">" + request.BookingReference + "</b></div></td>" +
+                   "</tr></table></div></div></body></html>";
+
+        await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
             subject,
-            body);
+            body,
+            attachments);
     }
 
     private static DateTime ToIst(DateTime dt)

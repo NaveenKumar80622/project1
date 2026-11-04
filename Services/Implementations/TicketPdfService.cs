@@ -10,214 +10,305 @@ namespace PickNBook.Api.Services;
 
 public class TicketPdfService : ITicketPdfService
 {
-    public List<(string FileName, byte[] Content)> GenerateFlightTicketPdf(SendFlightTicketEmailRequest request)
+    public List<(string FileName, byte[] Content)> GenerateFlightTicketPdf(SendFlightTicketEmailRequest request, bool isCancelled = false, decimal refundAmount = 0m)
     {
         var result = new List<(string FileName, byte[] Content)>();
+        using var document = new PdfDocument();
+        document.Info.Title = isCancelled 
+            ? $"Flight Voucher (CANCELLED) - {request.BookingReference}" 
+            : $"Flight Voucher - {request.BookingReference}";
 
-        var titleFont = new XFont("Arial", 18, XFontStyle.Bold);
-        var headerFont = new XFont("Arial", 11, XFontStyle.Bold);
-        var valueFont = new XFont("Arial", 11, XFontStyle.Regular);
-        var smallFont = new XFont("Arial", 9, XFontStyle.Regular);
+        BuildFlightTicketPage(document, request, isCancelled, refundAmount);
 
-        var passengersList = request.Passengers != null && request.Passengers.Any() 
-            ? request.Passengers 
-            : new List<FlightPassengerTicketDto> { new FlightPassengerTicketDto { FullName = request.PassengerName, SeatNumber = request.SeatNumber, Status = "Booked" } };
-
-        foreach (var px in passengersList)
-        {
-            var document = new PdfDocument();
-            document.Info.Title = $"Flight Ticket - {request.BookingReference}";
-
-            var page = document.AddPage();
-            var gfx = XGraphics.FromPdfPage(page);
-
-            double left = 40;
-            double width = page.Width - 80;
-            double y = 48;
-
-            string titleText = string.IsNullOrEmpty(request.AgentCompanyName) 
-                ? "Pick&book Flight Ticket" 
-                : $"{request.AgentCompanyName} Flight Ticket";
-
-            gfx.DrawString(
-                titleText,
-                titleFont,
-                XBrushes.DarkBlue,
-                new XRect(left, y, width, 30),
-                XStringFormats.TopLeft);
-
-            if (!string.IsNullOrEmpty(request.AgentLogoUrl))
-            {
-                var webRootPath = System.IO.Path.Combine(System.IO.Directory.GetCurrentDirectory(), "wwwroot");
-                var physicalPath = System.IO.Path.Combine(webRootPath, request.AgentLogoUrl.TrimStart('/'));
-                if (System.IO.File.Exists(physicalPath))
-                {
-                    try
-                    {
-                        using var logoImage = XImage.FromFile(physicalPath);
-                        double logoWidth = 80;
-                        double logoHeight = 40;
-                        double logoLeft = page.Width - 40 - logoWidth;
-                        gfx.DrawImage(logoImage, logoLeft, 35, logoWidth, logoHeight);
-                    }
-                    catch
-                    {
-                        // Resilient fallback
-                    }
-                }
-            }
-
-            y += 38;
-
-            gfx.DrawRectangle(XPens.Gray, left, y, width, 1);
-            y += 16;
-
-            DrawRow(gfx, headerFont, valueFont, left, ref y, "Booking Ref", request.BookingReference);
-            y += 10;
-            gfx.DrawLine(XPens.LightGray, left, y, width, y);
-            y += 15;
-
-            if (request.Segments != null && request.Segments.Any())
-            {
-                int legIndex = 1;
-                foreach (var seg in request.Segments)
-                {
-                    bool isCancelled = (px.Status == "Cancelled" || seg.Status == "Cancelled");
-                    var titleBrush = isCancelled ? XBrushes.Red : XBrushes.DarkBlue;
-                    var textBrush = isCancelled ? XBrushes.DarkRed : XBrushes.Black;
-                    
-                    var legTitle = $"Flight Leg {legIndex}: {seg.FromCity} -> {seg.ToCity}";
-                    if (isCancelled) legTitle += " **CANCELLED**";
-
-                    gfx.DrawString(legTitle, headerFont, titleBrush, left, y);
-                    y += 21;
-                    
-                    var pxName = px.FullName;
-                    if (px.Status == "Cancelled") pxName += " (CANCELLED)";
-                    
-                    DrawRow(gfx, headerFont, valueFont, left, ref y, $"Passenger ({px.PassengerType ?? "Adult"})", pxName, textBrush);
-                    DrawRow(gfx, headerFont, valueFont, left, ref y, "Airline", seg.Airline, textBrush);
-                    DrawRow(gfx, headerFont, valueFont, left, ref y, "Flight Number", seg.FlightNumber, textBrush);
-                    DrawRow(gfx, headerFont, valueFont, left, ref y, "Departure", seg.DepartureTime.ToString("dd MMM yyyy, hh:mm tt"), textBrush);
-                    DrawRow(gfx, headerFont, valueFont, left, ref y, "Arrival", seg.ArrivalTime.ToString("dd MMM yyyy, hh:mm tt"), textBrush);
-                    
-                    if (!string.IsNullOrWhiteSpace(seg.Pnr))
-                    {
-                        DrawRow(gfx, headerFont, valueFont, left, ref y, "PNR", seg.Pnr, textBrush);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(request.Pnr))
-                    {
-                        DrawRow(gfx, headerFont, valueFont, left, ref y, "PNR", request.Pnr, textBrush);
-                    }
-
-                    y += 10;
-                    gfx.DrawLine(XPens.LightGray, left, y, width, y);
-                    y += 15;
-                    
-                    if (y > page.Height - 80)
-                    {
-                        gfx.Dispose();
-                        page = document.AddPage();
-                        gfx = XGraphics.FromPdfPage(page);
-                        y = 48;
-                    }
-                    
-                    legIndex++;
-                }
-            }
-            else
-            {
-                // Fallback for single leg
-                bool isCancelled = px.Status == "Cancelled";
-                var titleBrush = isCancelled ? XBrushes.Red : XBrushes.DarkBlue;
-                var textBrush = isCancelled ? XBrushes.DarkRed : XBrushes.Black;
-                
-                var legTitle = $"Flight: {request.Origin} -> {request.Destination}";
-                if (isCancelled) legTitle += " **CANCELLED**";
-
-                gfx.DrawString(legTitle, headerFont, titleBrush, left, y);
-                y += 21;
-                
-                var pxName = px.FullName;
-                if (px.Status == "Cancelled") pxName += " (CANCELLED)";
-                
-                DrawRow(gfx, headerFont, valueFont, left, ref y, "Passenger", pxName, textBrush);
-                DrawRow(gfx, headerFont, valueFont, left, ref y, "Airline", request.Airline, textBrush);
-                DrawRow(gfx, headerFont, valueFont, left, ref y, "Departure", request.DepartureTime.ToString("dd MMM yyyy, hh:mm tt"), textBrush);
-                DrawRow(gfx, headerFont, valueFont, left, ref y, "Arrival", request.ArrivalTime.ToString("dd MMM yyyy, hh:mm tt"), textBrush);
-                
-                if (!string.IsNullOrWhiteSpace(request.Pnr))
-                {
-                    DrawRow(gfx, headerFont, valueFont, left, ref y, "PNR", request.Pnr, textBrush);
-                }
-
-                y += 10;
-                gfx.DrawLine(XPens.LightGray, left, y, width, y);
-                y += 15;
-                
-                if (y > page.Height - 80)
-                {
-                    gfx.Dispose();
-                    page = document.AddPage();
-                    gfx = XGraphics.FromPdfPage(page);
-                    y = 48;
-                }
-            }
-
-            DrawRow(gfx, headerFont, valueFont, left, ref y, "Fare", $"{request.Price:0.00} {request.Currency}");
-
-            y += 20;
-
-            gfx.DrawRectangle(XPens.Gray, left, y, width, 1);
-
-            y += 14;
-
-            gfx.DrawString(
-                "Please carry a valid government ID proof while traveling. This is a system generated ticket.",
-                smallFont,
-                XBrushes.DarkSlateGray,
-                new XRect(left, y, width, 40),
-                XStringFormats.TopLeft);
-
-            gfx.Dispose();
-            using var stream = new MemoryStream();
-            document.Save(stream, false);
-            document.Dispose();
-            
-            var safeName = string.Join("_", (px.FullName ?? "Passenger").Split(System.IO.Path.GetInvalidFileNameChars()));
-            result.Add(($"Ticket-{safeName}.pdf", stream.ToArray()));
-        }
-
+        using var stream = new MemoryStream();
+        document.Save(stream, false);
+        result.Add(($"flight-voucher-{request.BookingReference}.pdf", stream.ToArray()));
         return result;
     }
 
-    private static void DrawRow(
-        XGraphics gfx,
-        XFont headerFont,
-        XFont valueFont,
-        double left,
-        ref double y,
-        string label,
-        string value,
-        XSolidBrush brush = null)
+    private static void BuildFlightTicketPage(
+        PdfDocument document,
+        SendFlightTicketEmailRequest req,
+        bool isCancelled = false,
+        decimal refundAmount = 0m)
     {
-        brush ??= XBrushes.Black;
-        
-        gfx.DrawString(
-            label,
-            headerFont,
-            brush,
-            new XRect(left, y, 170, 18),
-            XStringFormats.TopLeft);
+        var page = document.AddPage();
+        page.Width = XUnit.FromPoint(595); // Standard A4 Width
+        page.Height = XUnit.FromPoint(842); // Standard A4 Height
 
-        gfx.DrawString(
-            value,
-            valueFont,
-            brush,
-            new XRect(left + 175, y, 340, 18),
-            XStringFormats.TopLeft);
+        using var gfx = XGraphics.FromPdfPage(page);
 
-        y += 21;
+        // Official Pick&book Brand Brushes & Pens
+        var midnightBrush = new XSolidBrush(XColor.FromArgb(9, 26, 62));        // #091a3e Midnight Navy
+        var crimsonBrush = new XSolidBrush(XColor.FromArgb(220, 38, 38));       // #dc2626 Crimson Red
+        var darkBrush = new XSolidBrush(XColor.FromArgb(15, 23, 42));           // #0f172a
+        var slateBrush = new XSolidBrush(XColor.FromArgb(51, 65, 85));          // #334155
+        var grayBrush = new XSolidBrush(XColor.FromArgb(100, 116, 139));        // #64748b
+        var lightGrayPen = new XPen(XColor.FromArgb(226, 232, 240), 1.0);
+        var greenBgBrush = new XSolidBrush(XColor.FromArgb(220, 252, 231));     // #dcfce7
+        var greenTextBrush = new XSolidBrush(XColor.FromArgb(21, 128, 61));     // #15803d
+        var redBgBrush = new XSolidBrush(XColor.FromArgb(254, 226, 226));       // #fee2e2
+        var redTextBrush = new XSolidBrush(XColor.FromArgb(185, 28, 28));       // #b91c1c
+        var bannerGreenBrush = new XSolidBrush(XColor.FromArgb(5, 150, 105));   // #059669
+        var bannerRedBrush = new XSolidBrush(XColor.FromArgb(153, 27, 27));     // #991b1b
+        var cardBgBrush = new XSolidBrush(XColor.FromArgb(248, 250, 252));      // #f8fafc
+
+        double left = 28;
+        double contentW = page.Width - 56; // 539 pt
+        double right = left + contentW;
+        double y = 28;
+
+        // 1. Red Brand Accent Top Stripe
+        gfx.DrawRectangle(crimsonBrush, left, y, contentW, 4);
+        y += 4;
+
+        // 2. Official Header Bar
+        double headerH = 62;
+        gfx.DrawRectangle(XBrushes.White, left, y, contentW, headerH);
+        gfx.DrawLine(lightGrayPen, left, y + headerH, right, y + headerH);
+
+        // Pick&book Brand Logo
+        string[] candidateLogoPaths = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png"),
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\picknbook-logo.png",
+            @"C:\Users\ADMIN\.gemini\antigravity\brain\9c45650d-a19c-4a49-a537-6fbae5822546\picknbook-logo.png"
+        };
+        string? foundLogo = candidateLogoPaths.FirstOrDefault(File.Exists);
+        if (foundLogo != null)
+        {
+            try
+            {
+                using var logoImg = XImage.FromFile(foundLogo);
+                gfx.DrawImage(logoImg, left + 14, y + 8, 112, 22);
+            }
+            catch { }
+        }
+        else
+        {
+            gfx.DrawString("Pick&book", new XFont("Arial", 14, XFontStyle.Bold), crimsonBrush, left + 14, y + 25);
+        }
+
+        string subTitle = isCancelled ? "FLIGHT TICKET CANCELLATION & REFUND ADVICE" : "OFFICIAL FLIGHT E-TICKET";
+        gfx.DrawString(subTitle, new XFont("Arial", 9.5, XFontStyle.Bold), midnightBrush, left + 14, y + 44);
+        gfx.DrawString($"Booking Date: {req.DepartureTime:dd MMM yyyy}", new XFont("Arial", 8, XFontStyle.Regular), grayBrush, left + 14, y + 54);
+
+        // Header Meta Info
+        double metaBoxW = 220;
+        double metaLeft = right - metaBoxW - 14;
+        gfx.DrawString("Booking ID:", new XFont("Arial", 8, XFontStyle.Regular), grayBrush, metaLeft, y + 16);
+        gfx.DrawString(req.BookingReference, new XFont("Arial", 9.5, XFontStyle.Bold), crimsonBrush, new XRect(metaLeft, y + 6, metaBoxW, 14), XStringFormats.TopRight);
+
+        string statusBadge = isCancelled ? "CANCELLED" : "CONFIRMED";
+        XBrush badgeBg = isCancelled ? redBgBrush : greenBgBrush;
+        XBrush badgeTextBrush = isCancelled ? redTextBrush : greenTextBrush;
+        gfx.DrawRoundedRectangle(badgeBg, right - 95, y + 33, 80, 18, 4, 4);
+        gfx.DrawString(statusBadge, new XFont("Arial", 8, XFontStyle.Bold), badgeTextBrush, new XRect(right - 95, y + 33, 80, 18), XStringFormats.Center);
+
+        y += headerH;
+
+        // 3. Confirmation Banner
+        double bannerH = 46;
+        XBrush bannerBg = isCancelled ? bannerRedBrush : bannerGreenBrush;
+        gfx.DrawRectangle(bannerBg, left, y, contentW, bannerH);
+
+        string bannerTag = isCancelled ? "CANCELLATION CONFIRMED • REFUND PROCESSED" : "BOOKING CONFIRMED • E-TICKET ISSUED";
+        gfx.DrawString(bannerTag, new XFont("Arial", 7.5, XFontStyle.Bold), XBrushes.White, left + 14, y + 14);
+
+        string bannerTitle = isCancelled
+            ? $"Your flight booking for {req.Origin} - {req.Destination} has been cancelled."
+            : $"Your {req.Origin} - {req.Destination} flight is booked for travel on {req.DepartureTime:ddd, dd MMM yyyy}";
+        gfx.DrawString(bannerTitle, new XFont("Arial", 11, XFontStyle.Bold), XBrushes.White, left + 14, y + 28);
+
+        string bannerSub = isCancelled
+            ? "Refund has been processed per applicable airline & service tariff rules."
+            : "Thank you for choosing Pick&book. We wish you a safe and pleasant journey!";
+        gfx.DrawString(bannerSub, new XFont("Arial", 7.5, XFontStyle.Regular), XBrushes.White, left + 14, y + 40);
+
+        y += bannerH + 8;
+
+        // 4. Trip Details Section Identifier
+        gfx.DrawRoundedRectangle(midnightBrush, left, y, 125, 20, 5, 5);
+        gfx.DrawString("YOUR TRIP DETAILS", new XFont("Arial", 8, XFontStyle.Bold), XBrushes.White, new XRect(left, y, 125, 20), XStringFormats.Center);
+
+        int pxCount = req.Passengers?.Count ?? 1;
+        gfx.DrawString($"{pxCount} Traveler(s) • Economy Class", new XFont("Arial", 8, XFontStyle.Bold), grayBrush, new XRect(right - 200, y + 4, 186, 12), XStringFormats.TopRight);
+
+        y += 24;
+
+        // 5. Flight Route Summary Card
+        double routeH = 110;
+        gfx.DrawRectangle(cardBgBrush, left, y, contentW, routeH);
+        gfx.DrawRectangle(lightGrayPen, left, y, contentW, routeH);
+
+        // Header inside Card
+        gfx.DrawString($"{req.Origin} - {req.Destination}", new XFont("Arial", 11, XFontStyle.Bold), darkBrush, left + 14, y + 16);
+        string stopsText = req.StopsCount == 0 ? "Non-stop" : $"{req.StopsCount} stop(s)";
+        string durationText = req.DurationMinutes > 0 ? $"{req.DurationMinutes / 60}h {req.DurationMinutes % 60}m duration" : "Direct Flight";
+        gfx.DrawString($"{req.DepartureTime:ddd, dd MMM yyyy} • {stopsText} • {durationText}", new XFont("Arial", 8, XFontStyle.Regular), grayBrush, left + 14, y + 28);
+        gfx.DrawLine(lightGrayPen, left, y + 34, right, y + 34);
+
+        // Flight details row
+        double flightRowY = y + 42;
+
+        // Left Airline Box
+        double airlineBoxW = 145;
+        gfx.DrawRoundedRectangle(XBrushes.White, left + 14, flightRowY, airlineBoxW, 46, 4, 4);
+        gfx.DrawRoundedRectangle(lightGrayPen, left + 14, flightRowY, airlineBoxW, 46, 4, 4);
+
+        string airlineName = !string.IsNullOrWhiteSpace(req.Airline) ? req.Airline : "FLY91";
+        string flightNo = !string.IsNullOrWhiteSpace(req.Segments?.FirstOrDefault()?.FlightNumber) ? req.Segments.First().FlightNumber : "IC-3301";
+        gfx.DrawString(airlineName.ToUpper(), new XFont("Arial", 9.5, XFontStyle.Bold), darkBrush, left + 22, flightRowY + 16);
+        gfx.DrawString($"{flightNo} • Operated by {airlineName}", new XFont("Arial", 7.5, XFontStyle.Regular), grayBrush, left + 22, flightRowY + 28);
+
+        // PNR badge inside airline box
+        string pnrVal = !string.IsNullOrWhiteSpace(req.Pnr) ? req.Pnr : (!string.IsNullOrWhiteSpace(req.Segments?.FirstOrDefault()?.Pnr) ? req.Segments.First().Pnr : "BLKT23");
+        gfx.DrawRoundedRectangle(midnightBrush, left + 22, flightRowY + 31, 26, 12, 2, 2);
+        gfx.DrawString("PNR", new XFont("Arial", 6.5, XFontStyle.Bold), XBrushes.White, new XRect(left + 22, flightRowY + 31, 26, 12), XStringFormats.Center);
+        gfx.DrawString(pnrVal, new XFont("Arial", 8, XFontStyle.Bold), darkBrush, left + 52, flightRowY + 41);
+
+        // Origin
+        double origX = left + 175;
+        gfx.DrawString(req.Origin, new XFont("Arial", 10, XFontStyle.Bold), darkBrush, origX, flightRowY + 14);
+        gfx.DrawString($"{req.DepartureTime:HH:mm} hrs", new XFont("Arial", 12, XFontStyle.Bold), darkBrush, origX, flightRowY + 28);
+        gfx.DrawString($"{req.DepartureTime:ddd, dd MMM}", new XFont("Arial", 7.5, XFontStyle.Regular), grayBrush, origX, flightRowY + 38);
+
+        // Duration Arrow
+        double arrowX = origX + 110;
+        gfx.DrawString(durationText, new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, new XRect(arrowX - 25, flightRowY + 8, 80, 10), XStringFormats.Center);
+        gfx.DrawLine(lightGrayPen, arrowX - 20, flightRowY + 24, arrowX + 50, flightRowY + 24);
+        gfx.DrawString(">", new XFont("Arial", 9, XFontStyle.Bold), crimsonBrush, arrowX + 12, flightRowY + 22);
+        gfx.DrawString(stopsText, new XFont("Arial", 7, XFontStyle.Bold), greenTextBrush, new XRect(arrowX - 25, flightRowY + 34, 80, 10), XStringFormats.Center);
+
+        // Destination
+        double destX = right - 130;
+        gfx.DrawString(req.Destination, new XFont("Arial", 10, XFontStyle.Bold), darkBrush, destX, flightRowY + 14);
+        gfx.DrawString($"{req.ArrivalTime:HH:mm} hrs", new XFont("Arial", 12, XFontStyle.Bold), darkBrush, destX, flightRowY + 28);
+        gfx.DrawString($"{req.ArrivalTime:ddd, dd MMM}", new XFont("Arial", 7.5, XFontStyle.Regular), grayBrush, destX, flightRowY + 38);
+
+        // Amenities & Baggage Strip
+        double stripY = y + routeH - 18;
+        gfx.DrawLine(lightGrayPen, left, stripY - 2, right, stripY - 2);
+        gfx.DrawString("ECONOMY VALUE  •  Regular Fare", new XFont("Arial", 7.5, XFontStyle.Bold), darkBrush, left + 14, stripY + 10);
+        gfx.DrawString("Check-in: 15 Kgs (1 PC) per Adult  •  Cabin: 7 Kgs per Adult", new XFont("Arial", 7.5, XFontStyle.Regular), slateBrush, new XRect(right - 260, stripY + 2, 246, 12), XStringFormats.TopRight);
+
+        y += routeH + 8;
+
+        // 6. Passenger Details Table
+        var pList = req.Passengers != null && req.Passengers.Count > 0
+            ? req.Passengers
+            : new List<FlightPassengerTicketDto> { new FlightPassengerTicketDto { FullName = req.PassengerName, SeatNumber = req.SeatNumber ?? "12A", PassengerType = "Adult" } };
+
+        double pTableH = 34 + (pList.Count * 18);
+        gfx.DrawRectangle(XBrushes.White, left, y, contentW, pTableH);
+        gfx.DrawRectangle(lightGrayPen, left, y, contentW, pTableH);
+
+        // Table Header
+        gfx.DrawRectangle(cardBgBrush, left, y, contentW, 20);
+        gfx.DrawString("TRAVELLER", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, left + 14, y + 14);
+        gfx.DrawString("SEAT", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, left + 280, y + 14);
+        gfx.DrawString("MEAL", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, left + 340, y + 14);
+        gfx.DrawString("E-TICKET NO", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, right - 95, y + 14);
+        gfx.DrawLine(lightGrayPen, left, y + 20, right, y + 20);
+
+        double rowY = y + 33;
+        int eTicketSuffix = 7054;
+        foreach (var p in pList)
+        {
+            string pType = !string.IsNullOrWhiteSpace(p.PassengerType) ? $" ({p.PassengerType})" : " (Adult)";
+            gfx.DrawString($"{p.FullName}{pType}", new XFont("Arial", 8, XFontStyle.Bold), darkBrush, left + 14, rowY);
+            gfx.DrawString(p.SeatNumber ?? "12A", new XFont("Arial", 8.5, XFontStyle.Bold), crimsonBrush, left + 280, rowY);
+            gfx.DrawString("Standard Snack", new XFont("Arial", 7.5, XFontStyle.Regular), grayBrush, left + 340, rowY);
+            string tktNo = !string.IsNullOrWhiteSpace(p.TicketNumber) ? p.TicketNumber : $"228-380931{eTicketSuffix++}";
+            gfx.DrawString(tktNo, new XFont("Arial", 8, XFontStyle.Regular), darkBrush, right - 95, rowY);
+            gfx.DrawLine(lightGrayPen, left + 14, rowY + 5, right - 14, rowY + 5);
+            rowY += 18;
+        }
+
+        y += pTableH + 8;
+
+        // 7. Dynamic Cancellation Policy
+        double cancelH = 88;
+        gfx.DrawRectangle(cardBgBrush, left, y, contentW, cancelH);
+        gfx.DrawRectangle(lightGrayPen, left, y, contentW, cancelH);
+
+        gfx.DrawString("DYNAMIC CANCELLATION & REFUND POLICY", new XFont("Arial", 8, XFontStyle.Bold), midnightBrush, left + 14, y + 14);
+        string farePolicyBadge = req.NonRefundable ? "Non-Refundable Fare" : "Partially Refundable Fare";
+        gfx.DrawString(farePolicyBadge, new XFont("Arial", 7.5, XFontStyle.Bold), req.NonRefundable ? redTextBrush : greenTextBrush, new XRect(right - 160, y + 4, 146, 12), XStringFormats.TopRight);
+        gfx.DrawLine(lightGrayPen, left, y + 20, right, y + 20);
+
+        // Table Header
+        double polY = y + 32;
+        gfx.DrawString("Timeline (Before Departure)", new XFont("Arial", 7, XFontStyle.Bold), grayBrush, left + 14, polY);
+        gfx.DrawString("Airline Fee", new XFont("Arial", 7, XFontStyle.Bold), grayBrush, left + 200, polY);
+        gfx.DrawString("Pick&book Fee", new XFont("Arial", 7, XFontStyle.Bold), grayBrush, left + 320, polY);
+        gfx.DrawString("Estimated Net Refund", new XFont("Arial", 7, XFontStyle.Bold), grayBrush, right - 105, polY);
+        gfx.DrawLine(lightGrayPen, left + 14, polY + 3, right - 14, polY + 3);
+
+        // Row 1
+        polY += 13;
+        gfx.DrawString("More than 72 hours before departure", new XFont("Arial", 7.5, XFontStyle.Regular), darkBrush, left + 14, polY);
+        gfx.DrawString("INR 1,500.00 / pax", new XFont("Arial", 7.5, XFontStyle.Bold), crimsonBrush, left + 200, polY);
+        gfx.DrawString("INR 250.00", new XFont("Arial", 7.5, XFontStyle.Regular), darkBrush, left + 320, polY);
+        decimal refund1 = Math.Max(0, req.Price - 1750);
+        gfx.DrawString($"INR {refund1:0.00}", new XFont("Arial", 7.5, XFontStyle.Bold), greenTextBrush, right - 105, polY);
+
+        // Row 2
+        polY += 13;
+        gfx.DrawString("Between 24 to 72 hours before departure", new XFont("Arial", 7.5, XFontStyle.Regular), darkBrush, left + 14, polY);
+        gfx.DrawString("INR 2,000.00 / pax", new XFont("Arial", 7.5, XFontStyle.Bold), crimsonBrush, left + 200, polY);
+        gfx.DrawString("INR 250.00", new XFont("Arial", 7.5, XFontStyle.Regular), darkBrush, left + 320, polY);
+        decimal refund2 = Math.Max(0, req.Price - 2250);
+        gfx.DrawString($"INR {refund2:0.00}", new XFont("Arial", 7.5, XFontStyle.Bold), greenTextBrush, right - 105, polY);
+
+        // Row 3
+        polY += 13;
+        gfx.DrawString("0 to 24 hours / Flight No-Show", new XFont("Arial", 7.5, XFontStyle.Regular), darkBrush, left + 14, polY);
+        gfx.DrawString("Non-Refundable Base", new XFont("Arial", 7.5, XFontStyle.Regular), crimsonBrush, left + 200, polY);
+        gfx.DrawString("INR 250.00", new XFont("Arial", 7.5, XFontStyle.Regular), darkBrush, left + 320, polY);
+        gfx.DrawString("Statutory Taxes Only", new XFont("Arial", 7.5, XFontStyle.Bold), midnightBrush, right - 105, polY);
+
+        // Policy note
+        polY += 12;
+        gfx.DrawString("• Passenger Service Fee (PSF) and airport charges are 100% refundable. Refunds processed in 3-5 business days.", new XFont("Arial", 6.5, XFontStyle.Regular), grayBrush, left + 14, polY);
+
+        y += cancelH + 8;
+
+        // 8. Payment Footer & QR Code Bar
+        double footerH = 68;
+        gfx.DrawRectangle(midnightBrush, left, y, contentW, footerH);
+
+        // Left Fare Details
+        if (isCancelled)
+        {
+            gfx.DrawString("TOTAL REFUND AMOUNT PROCESSED", new XFont("Arial", 7.5, XFontStyle.Bold), XBrushes.LightGray, left + 14, y + 16);
+            gfx.DrawString($"INR {refundAmount:0.00}", new XFont("Arial", 16, XFontStyle.Bold), new XSolidBrush(XColor.FromArgb(52, 211, 153)), left + 14, y + 36);
+            gfx.DrawString($"Original Paid: INR {req.Price:0.00}  •  Cancellation Fee: INR {Math.Max(0, req.Price - refundAmount):0.00}", new XFont("Arial", 7, XFontStyle.Regular), XBrushes.White, left + 14, y + 48);
+        }
+        else
+        {
+            gfx.DrawString("TOTAL FARE PAID (ALL TAXES & FEES INCLUDED)", new XFont("Arial", 7.5, XFontStyle.Bold), XBrushes.LightGray, left + 14, y + 16);
+            gfx.DrawString($"INR {req.Price:0.00}", new XFont("Arial", 16, XFontStyle.Bold), XBrushes.White, left + 14, y + 36);
+            gfx.DrawString("Payment Verified • Instant Confirmation via Cashfree PG", new XFont("Arial", 7, XFontStyle.Regular), XBrushes.LightGray, left + 14, y + 48);
+        }
+
+        gfx.DrawString("Issued by Pick&book Travel Services  •  support@picknbook.in  •  +91 99999 99999", new XFont("Arial", 6.5, XFontStyle.Regular), XBrushes.LightGray, left + 14, y + 60);
+
+        // Right QR Code
+        try
+        {
+            string qrPayload = $"PICKNBOOK-FLIGHT\nRef: {req.BookingReference}\nPNR: {pnrVal}\nPax: {req.PassengerName}\nRoute: {req.Origin}->{req.Destination}\nDate: {req.DepartureTime:yyyy-MM-dd}\nStatus: {statusBadge}\nSupport: https://picknbook.in";
+            using var qrGen = new QRCodeGenerator();
+            var qrData = qrGen.CreateQrCode(qrPayload, QRCodeGenerator.ECCLevel.M);
+            using var qrCode = new PngByteQRCode(qrData);
+            byte[] qrBytes = qrCode.GetGraphic(3);
+            var qrImg = XImage.FromStream(() => new MemoryStream(qrBytes));
+            gfx.DrawImage(qrImg, right - 58, y + 8, 48, 48);
+            gfx.DrawString("VERIFIED TICKET", new XFont("Arial", 5.5, XFontStyle.Bold), XBrushes.White, new XRect(right - 68, y + 57, 68, 8), XStringFormats.Center);
+        }
+        catch { }
     }
 
     public byte[] GenerateBusTicketPdf(SendBusTicketEmailRequest request, bool isCancelled = false, decimal refundAmount = 0m)
