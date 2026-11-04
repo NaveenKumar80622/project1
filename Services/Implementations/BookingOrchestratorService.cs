@@ -839,12 +839,11 @@ namespace PickNBook.Api.Services.Implementations
                     ? srdvTravelOperatorPnr.Trim()
                     : (!string.IsNullOrWhiteSpace(srdvTicketNo) ? srdvTicketNo.Trim() : null);
 
-                var shortPnr = !string.IsNullOrWhiteSpace(srdvPnr)
-                    ? srdvPnr.Trim()
-                    : (operatorPnr ?? reservation.Pnr);
+                var supplierBookingId = !string.IsNullOrWhiteSpace(srdvPnr) ? srdvPnr.Trim() : null;
 
-                reservation.Pnr = shortPnr.Length > 100 ? shortPnr[..100] : shortPnr;
-                reservation.SrdvBookingId = operatorPnr ?? (srdvPnr ?? reservation.Pnr);
+                var mainPnr = operatorPnr ?? (supplierBookingId ?? reservation.Pnr);
+                reservation.Pnr = mainPnr.Length > 100 ? mainPnr[..100] : mainPnr;
+                reservation.SrdvBookingId = supplierBookingId ?? (operatorPnr ?? reservation.SrdvBookingId);
                 reservation.SrdvTicketNo = srdvTicketNo;
                 reservation.Status = "Booked";
                 reservation.SrdvBookingResponseJson = srdvResponseJson;
@@ -909,6 +908,7 @@ namespace PickNBook.Api.Services.Implementations
                             PassengerName = reservation.PassengerName,
                             BookingReference = reservation.BookingReference,
                             Pnr = reservation.Pnr,
+                            TicketNo = reservation.SrdvTicketNo,
                             OperatorName = bus.OperatorName,
                             BusType = bus.BusType,
                             Origin = srdvBusService.MapCityCodeToName(bus.FromCity),

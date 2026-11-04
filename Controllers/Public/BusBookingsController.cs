@@ -2743,10 +2743,10 @@ namespace PickNBook.Api.Controllers
                         reservation.Status = BusBookingStatus.Success;
                         if (srdvRes != null)
                         {
-                            reservation.SrdvBookingId = srdvRes.TravelOperatorPNR ?? srdvRes.SrdvBookingId;
+                            reservation.SrdvBookingId = !string.IsNullOrWhiteSpace(srdvRes.SrdvBookingId) ? srdvRes.SrdvBookingId : reservation.SrdvBookingId;
                             reservation.SrdvBookingResponseJson = srdvRes.ResponseJson;
                             reservation.SrdvTicketNo = srdvRes.TicketNo;
-                            reservation.Pnr = srdvRes.SrdvBookingId ?? srdvRes.TravelOperatorPNR ?? srdvRes.TicketNo ?? reservation.Pnr;
+                            reservation.Pnr = !string.IsNullOrWhiteSpace(srdvRes.TravelOperatorPNR) ? srdvRes.TravelOperatorPNR : (!string.IsNullOrWhiteSpace(srdvRes.TicketNo) ? srdvRes.TicketNo : reservation.Pnr);
                             bus.TraceId = !string.IsNullOrWhiteSpace(request.TraceId) ? request.TraceId : bus.TraceId;
                         }
 
@@ -2861,6 +2861,7 @@ namespace PickNBook.Api.Controllers
                                         PassengerName = res.PassengerName,
                                         BookingReference = res.BookingReference,
                                         Pnr = res.Pnr,
+                                        TicketNo = res.SrdvTicketNo,
                                         OperatorName = b.OperatorName,
                                         BusType = b.BusType,
                                         Origin = scopedSrdvBusService.MapCityCodeToName(b.FromCity),
@@ -3307,6 +3308,7 @@ namespace PickNBook.Api.Controllers
                     PassengerName = booking.PassengerName,
                     BookingReference = booking.BookingReference,
                     Pnr = booking.Pnr,
+                    TicketNo = booking.SrdvTicketNo,
                     OperatorName = bus.OperatorName,
                     BusType = bus.BusType,
                     Origin = srdvBusService.MapCityCodeToName(bus.FromCity),
@@ -5167,6 +5169,7 @@ namespace PickNBook.Api.Controllers
                             PassengerName = booking.PassengerName,
                             BookingReference = booking.BookingReference,
                             Pnr = booking.Pnr,
+                            TicketNo = booking.SrdvTicketNo,
                             OperatorName = booking.BusBooking.OperatorName,
                             BusType = booking.BusBooking.BusType,
                             Origin = _srdvBusService.MapCityCodeToName(booking.BusBooking.FromCity),
@@ -5338,6 +5341,7 @@ Refund: ₹{currentRefundAmount}
                         PassengerName = reservation.PassengerName,
                         BookingReference = reservation.BookingReference,
                         Pnr = reservation.Pnr,
+                        TicketNo = reservation.SrdvTicketNo,
                         OperatorName = bus.OperatorName,
                         BusType = bus.BusType,
                         Origin = _srdvBusService.MapCityCodeToName(bus.FromCity),

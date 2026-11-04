@@ -318,7 +318,8 @@ public class TicketPdfService : ITicketPdfService
         gfx.DrawString(req.BookingReference, new XFont("Arial", 9.5, XFontStyle.Bold), redBrush, new XRect(metaLeft, y + 6, metaBoxW, 14), XStringFormats.TopRight);
 
         gfx.DrawString("Bus Partner PNR:", new XFont("Arial", 8.5, XFontStyle.Regular), grayBrush, metaLeft, y + 30);
-        gfx.DrawString(req.Pnr, new XFont("Arial", 9, XFontStyle.Bold), darkBrush, new XRect(metaLeft, y + 20, metaBoxW, 14), XStringFormats.TopRight);
+        var busPartnerPnrValue = !string.IsNullOrWhiteSpace(req.TicketNo) ? req.TicketNo : (!string.IsNullOrWhiteSpace(req.Pnr) ? req.Pnr : "-");
+        gfx.DrawString(busPartnerPnrValue, new XFont("Arial", 9, XFontStyle.Bold), darkBrush, new XRect(metaLeft, y + 20, metaBoxW, 14), XStringFormats.TopRight);
 
         string statusBadge = isCancelled ? "CANCELLED" : "CONFIRMED";
         XBrush badgeBg = isCancelled ? redBgBrush : greenBgBrush;

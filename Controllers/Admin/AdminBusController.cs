@@ -366,6 +366,7 @@ namespace PickNBook.Api.Controllers
                             PassengerName = reservation.PassengerName,
                             BookingReference = reservation.BookingReference,
                             Pnr = reservation.Pnr,
+                            TicketNo = reservation.SrdvTicketNo,
                             OperatorName = reservation.BusBooking.OperatorName,
                             BusType = reservation.BusBooking.BusType,
                             Origin = srdvBusService.MapCityCodeToName(reservation.BusBooking.FromCity),
@@ -2308,23 +2309,7 @@ namespace PickNBook.Api.Controllers
             string cleanPnr = pnr ?? string.Empty;
             string? opPnr = null;
 
-            bool pnrIsOperator = !string.IsNullOrWhiteSpace(cleanPnr) && (cleanPnr.StartsWith("TS", StringComparison.OrdinalIgnoreCase) || cleanPnr.Length > 20);
-            bool srdvIsOperator = !string.IsNullOrWhiteSpace(srdvBookingId) && (srdvBookingId.StartsWith("TS", StringComparison.OrdinalIgnoreCase) || srdvBookingId.Length > 20);
-
-            if (pnrIsOperator)
-            {
-                opPnr = cleanPnr;
-                cleanPnr = !string.IsNullOrWhiteSpace(srdvBookingId) && !srdvIsOperator ? srdvBookingId : cleanPnr;
-            }
-            else
-            {
-                if (srdvIsOperator)
-                {
-                    opPnr = srdvBookingId;
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(opPnr) && !string.IsNullOrWhiteSpace(srdvBookingResponseJson))
+            if (!string.IsNullOrWhiteSpace(srdvBookingResponseJson))
             {
                 try
                 {
@@ -2332,7 +2317,15 @@ namespace PickNBook.Api.Controllers
                     if (sDoc.RootElement.TryGetProperty("Result", out var rElem) && rElem.TryGetProperty("TravelOperatorPNR", out var topElem))
                     {
                         var rawTop = topElem.GetString();
-                        if (!string.IsNullOrWhiteSpace(rawTop) && !rawTop.Equals(cleanPnr, StringComparison.OrdinalIgnoreCase))
+                        if (!string.IsNullOrWhiteSpace(rawTop))
+                        {
+                            opPnr = rawTop.Trim();
+                        }
+                    }
+                    else if (sDoc.RootElement.TryGetProperty("TravelOperatorPNR", out var rootTopElem))
+                    {
+                        var rawTop = rootTopElem.GetString();
+                        if (!string.IsNullOrWhiteSpace(rawTop))
                         {
                             opPnr = rawTop.Trim();
                         }
@@ -2341,7 +2334,25 @@ namespace PickNBook.Api.Controllers
                 catch { }
             }
 
-            return (cleanPnr, opPnr);
+            bool pnrIsOperator = !string.IsNullOrWhiteSpace(cleanPnr) && (cleanPnr.StartsWith("TS", StringComparison.OrdinalIgnoreCase) || cleanPnr.StartsWith("IC", StringComparison.OrdinalIgnoreCase) || cleanPnr.Length > 15);
+            bool srdvIsOperator = !string.IsNullOrWhiteSpace(srdvBookingId) && (srdvBookingId.StartsWith("TS", StringComparison.OrdinalIgnoreCase) || srdvBookingId.StartsWith("IC", StringComparison.OrdinalIgnoreCase) || srdvBookingId.Length > 15);
+
+            if (string.IsNullOrWhiteSpace(opPnr))
+            {
+                if (pnrIsOperator)
+                {
+                    opPnr = cleanPnr;
+                }
+                else if (srdvIsOperator)
+                {
+                    opPnr = srdvBookingId;
+                }
+            }
+
+            // User requirement: In api/admin/bus/bookings/all, TravelOperatorPNR should be displayed for PNR/Status
+            string displayPnr = !string.IsNullOrWhiteSpace(opPnr) ? opPnr : cleanPnr;
+
+            return (displayPnr, opPnr ?? displayPnr);
         }
 
         [HttpGet("bookings/{id}/voucher")]
@@ -2383,6 +2394,7 @@ namespace PickNBook.Api.Controllers
                     PassengerName = booking.PassengerName,
                     BookingReference = booking.BookingReference,
                     Pnr = booking.Pnr,
+                    TicketNo = booking.SrdvTicketNo,
                     OperatorName = bus.OperatorName,
                     BusType = bus.BusType,
                     Origin = srdvBusService.MapCityCodeToName(bus.FromCity),

@@ -724,7 +724,7 @@ public class TicketEmailService : ITicketEmailService
         </td>
         <td class=""stack-col text-mobile-left"" style=""padding: 18px 20px; text-align: right; vertical-align: middle; font-size: 12px;"">
           <div><span style=""color: #64748b;"">Booking ID:</span> <b style=""color: #dc2626; font-size: 13px;"">{request.BookingReference}</b></div>
-          <div style=""margin-top: 4px;""><span style=""color: #64748b; font-size: 11px;"">Bus Partner PNR:</span> <b style=""color: #1e293b; font-size: 12px;"">{request.Pnr}</b></div>
+          <div style=""margin-top: 4px;""><span style=""color: #64748b; font-size: 11px;"">Bus Partner PNR:</span> <b style=""color: #1e293b; font-size: 12px;"">{(!string.IsNullOrWhiteSpace(request.TicketNo) ? request.TicketNo : request.Pnr)}</b></div>
           <div style=""margin-top: 6px;""><span style=""display: inline-block; background-color: #dcfce7; color: #15803d; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;"">CONFIRMED</span></div>
         </td>
       </tr>
@@ -1094,7 +1094,7 @@ public class TicketEmailService : ITicketEmailService
         </td>
         <td class=""stack-col text-mobile-left"" style=""padding: 18px 20px; text-align: right; vertical-align: middle; font-size: 12px;"">
           <div><span style=""color: #64748b;"">Booking ID:</span> <b style=""color: #dc2626; font-size: 13px;"">{request.BookingReference}</b></div>
-          <div style=""margin-top: 4px;""><span style=""color: #64748b; font-size: 11px;"">Bus Partner PNR:</span> <b style=""color: #1e293b; font-size: 12px;"">{request.Pnr}</b></div>
+          <div style=""margin-top: 4px;""><span style=""color: #64748b; font-size: 11px;"">Bus Partner PNR:</span> <b style=""color: #1e293b; font-size: 12px;"">{(!string.IsNullOrWhiteSpace(request.TicketNo) ? request.TicketNo : request.Pnr)}</b></div>
           <div style=""margin-top: 6px;""><span style=""display: inline-block; background-color: #fee2e2; color: #dc2626; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;"">CANCELLED</span></div>
         </td>
       </tr>

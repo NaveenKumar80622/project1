@@ -927,6 +927,7 @@ namespace PickNBook.Api.Services.Background
                                     PassengerName = res.PassengerName,
                                     BookingReference = res.BookingReference,
                                     Pnr = res.Pnr,
+                                    TicketNo = res.SrdvTicketNo,
                                     OperatorName = res.BusBooking.OperatorName,
                                     BusType = res.BusBooking.BusType,
                                     Origin = srdvBusService.MapCityCodeToName(res.BusBooking.FromCity),

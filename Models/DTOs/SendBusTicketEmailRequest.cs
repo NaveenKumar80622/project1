@@ -9,6 +9,7 @@ namespace PickNBook.Api.Models.DTOs
         // ── Booking identity ─────────────────────────────────
         public string BookingReference { get; set; } = string.Empty;  // e.g. BS-20260417112019-571
         public string Pnr { get; set; } = string.Empty;               // carrier PNR e.g. OB97X3Y2
+        public string? TicketNo { get; set; }                         // supplier ticket number
         public string OperatorName { get; set; } = string.Empty;       // e.g. "GO TRAVELS"
         public string BusType { get; set; } = string.Empty;            // e.g. "TSRTC", "AC Sleeper"
 
