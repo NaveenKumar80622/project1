@@ -199,6 +199,30 @@ namespace PickNBook.Api.Controllers
                             SearchedAtUtc = DateTime.UtcNow
                         };
                         dbContext.HotelSearchLogs.Add(searchLog);
+
+                        if (!string.IsNullOrWhiteSpace(resolvedCityName))
+                        {
+                            var cleanCity = resolvedCityName.Trim();
+                            var destStat = await dbContext.HotelDestinationStats
+                                .FirstOrDefaultAsync(x => x.CityName == cleanCity);
+
+                            if (destStat is null)
+                            {
+                                dbContext.HotelDestinationStats.Add(new HotelDestinationStat
+                                {
+                                    CityName = cleanCity,
+                                    CityId = resolvedCityId,
+                                    SearchCount = 1,
+                                    BookingCount = 0,
+                                    LastSearchedAtUtc = DateTime.UtcNow
+                                });
+                            }
+                            else
+                            {
+                                destStat.SearchCount += 1;
+                                destStat.LastSearchedAtUtc = DateTime.UtcNow;
+                            }
+                        }
                         await dbContext.SaveChangesAsync();
                     }
                     catch
@@ -2972,6 +2996,52 @@ namespace PickNBook.Api.Controllers
 
             return Ok(res);
         }
+
+        [HttpGet("trending")]
+        [HttpGet("hot-stays")]
+        [HttpGet("/api/hotel/trending")]
+        [HttpGet("/api/Hotels/trending")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetTrendingHotels([FromQuery] string metric = "score")
+        {
+            var normalizedMetric = metric?.Trim().ToLowerInvariant() ?? "score";
+            var query = _dbContext.HotelDestinationStats.AsNoTracking();
+
+            query = normalizedMetric switch
+            {
+                "search" => query.OrderByDescending(x => x.SearchCount).ThenByDescending(x => x.BookingCount),
+                "booking" => query.OrderByDescending(x => x.BookingCount).ThenByDescending(x => x.SearchCount),
+                _ => query.OrderByDescending(x => x.SearchCount + (x.BookingCount * 3)).ThenByDescending(x => x.BookingCount)
+            };
+
+            var statRows = await query.Take(15).ToListAsync();
+            if (statRows.Count > 0)
+            {
+                var response = statRows.Select(x => new
+                {
+                    id = x.Id,
+                    city = x.CityName,
+                    name = !string.IsNullOrWhiteSpace(x.FeaturedHotelName) ? x.FeaturedHotelName : $"{x.CityName} Premier Stay",
+                    summary = $"Popular destination with {x.SearchCount} recent searches",
+                    price = x.StartingPrice.HasValue ? x.StartingPrice.Value.ToString("N0") : "3,999",
+                    searches = x.SearchCount,
+                    bookingCount = x.BookingCount,
+                    score = x.SearchCount + (x.BookingCount * 3),
+                    hotelImage = x.ImageUrl
+                }).ToList();
+                return Ok(response);
+            }
+
+            var curatedDefaults = new[]
+            {
+                new { id = 1, city = "Hyderabad", name = "Taj Krishna Hyderabad", summary = "Luxury stay with pool, spa and fine dining", price = "7,499", searches = (long)1420, bookingCount = (long)45, score = (long)1555, hotelImage = (string?)null },
+                new { id = 2, city = "Bengaluru", name = "The Leela Palace Bengaluru", summary = "Grand royal palace hotel in the garden city", price = "9,999", searches = (long)1310, bookingCount = (long)38, score = (long)1424, hotelImage = (string?)null },
+                new { id = 3, city = "Delhi", name = "ITC Maurya New Delhi", summary = "Iconic luxury property with signature Bukharas", price = "8,250", searches = (long)1200, bookingCount = (long)32, score = (long)1296, hotelImage = (string?)null },
+                new { id = 4, city = "Mumbai", name = "The Taj Mahal Palace Mumbai", summary = "World famous luxury heritage hotel facing Gateway of India", price = "12,500", searches = (long)1090, bookingCount = (long)29, score = (long)1177, hotelImage = (string?)null },
+                new { id = 5, city = "Goa", name = "Taj Exotica Resort & Spa Goa", summary = "Mediterranean-inspired beach resort in Benaulim", price = "11,200", searches = (long)980, bookingCount = (long)25, score = (long)1055, hotelImage = (string?)null },
+                new { id = 6, city = "Jaipur", name = "Rambagh Palace Jaipur", summary = "Jewel of Jaipur heritage luxury palace", price = "14,000", searches = (long)870, bookingCount = (long)21, score = (long)933, hotelImage = (string?)null }
+            };
+            return Ok(curatedDefaults);
+        }
     }
 }
-

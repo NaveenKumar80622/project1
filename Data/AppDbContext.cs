@@ -42,6 +42,7 @@ namespace PickNBook.Api.Data
         public DbSet<Traveler> Travelers => Set<Traveler>();
         public DbSet<FlightRouteStat> FlightRouteStats => Set<FlightRouteStat>();
         public DbSet<BusRouteStat> BusRouteStats => Set<BusRouteStat>();
+        public DbSet<HotelDestinationStat> HotelDestinationStats => Set<HotelDestinationStat>();
         public DbSet<PlaceSearchStat> PlaceSearchStats => Set<PlaceSearchStat>();
         public DbSet<BusCity> BusCities => Set<BusCity>();
         public DbSet<HotelCity> HotelCities => Set<HotelCity>();
@@ -889,6 +890,13 @@ namespace PickNBook.Api.Data
                 entity.Property(x => x.FromCity).HasMaxLength(80).IsRequired();
                 entity.Property(x => x.ToCity).HasMaxLength(80).IsRequired();
                 entity.HasIndex(x => new { x.FromCity, x.ToCity }).IsUnique();
+            });
+            modelBuilder.Entity<HotelDestinationStat>(entity =>
+            {
+                entity.ToTable("hotel_destination_stats");
+                entity.HasKey(x => x.Id);
+                entity.Property(x => x.CityName).HasMaxLength(150).IsRequired();
+                entity.HasIndex(x => x.CityName).IsUnique();
             });
             modelBuilder.Entity<PlaceSearchStat>(entity =>
             {

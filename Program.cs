@@ -415,6 +415,33 @@ app.UseSwaggerUI(c =>
     c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
 });
 
+using (var initScope = app.Services.CreateScope())
+{
+    try
+    {
+        var initDb = initScope.ServiceProvider.GetRequiredService<AppDbContext>();
+        initDb.Database.ExecuteSqlRaw(@"
+            CREATE TABLE IF NOT EXISTS hotel_destination_stats (
+                Id INT AUTO_INCREMENT PRIMARY KEY,
+                CityName VARCHAR(150) NOT NULL,
+                CityId BIGINT NULL,
+                FeaturedHotelName VARCHAR(255) NULL,
+                StartingPrice DECIMAL(18,2) NULL,
+                ImageUrl TEXT NULL,
+                SearchCount BIGINT NOT NULL DEFAULT 0,
+                BookingCount BIGINT NOT NULL DEFAULT 0,
+                LastSearchedAtUtc DATETIME NULL,
+                LastBookedAtUtc DATETIME NULL,
+                UNIQUE KEY UQ_hotel_destination_stats_CityName (CityName)
+            );
+        ");
+    }
+    catch (Exception initEx)
+    {
+        app.Logger.LogWarning(initEx, "Table hotel_destination_stats initialization notice.");
+    }
+}
+
 var shouldSeed = builder.Configuration.GetValue<bool>("SeedDatabase", false);
 if (shouldSeed)
 {

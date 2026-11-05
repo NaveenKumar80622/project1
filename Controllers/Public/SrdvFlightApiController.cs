@@ -277,6 +277,31 @@ namespace PickNBook.Api.Controllers.Public
                         };
                         
                         _dbContext.FlightSearchLogs.Add(searchLog);
+
+                        var originClean = !string.IsNullOrWhiteSpace(fromCityName) ? fromCityName.Trim() : fromCity?.Trim();
+                        var destClean = !string.IsNullOrWhiteSpace(toCityName) ? toCityName.Trim() : toCity?.Trim();
+                        if (!string.IsNullOrWhiteSpace(originClean) && !string.IsNullOrWhiteSpace(destClean))
+                        {
+                            var routeStat = await _dbContext.FlightRouteStats
+                                .FirstOrDefaultAsync(x => (x.FromCity == originClean || x.FromCity == fromCity) && (x.ToCity == destClean || x.ToCity == toCity));
+
+                            if (routeStat is null)
+                            {
+                                _dbContext.FlightRouteStats.Add(new FlightRouteStat
+                                {
+                                    FromCity = originClean,
+                                    ToCity = destClean,
+                                    SearchCount = 1,
+                                    BookingCount = 0,
+                                    LastSearchedAtUtc = DateTime.UtcNow
+                                });
+                            }
+                            else
+                            {
+                                routeStat.SearchCount += 1;
+                                routeStat.LastSearchedAtUtc = DateTime.UtcNow;
+                            }
+                        }
                         await _dbContext.SaveChangesAsync();
                         _logger.LogInformation("Successfully inserted flight search log to Database. TraceId: {TraceId}, Route: {RouteSummary}", traceId, routeSummary);
                     }
@@ -4632,9 +4657,53 @@ namespace PickNBook.Api.Controllers.Public
         [HttpGet("/api/flight/popular-destinations")]
         [HttpGet("popular-routes")]
         [HttpGet("popular-destinations")]
+        [HttpGet("/api/flight/hot-routes")]
+        [HttpGet("hot-routes")]
         [AllowAnonymous]
-        public async Task<IActionResult> GetPopularRoutes()
+        public async Task<IActionResult> GetPopularRoutes([FromQuery] string metric = "score")
         {
+            var normalizedMetric = metric?.Trim().ToLowerInvariant() ?? "score";
+            var statQuery = _dbContext.FlightRouteStats.AsNoTracking();
+
+            statQuery = normalizedMetric switch
+            {
+                "search" => statQuery.OrderByDescending(x => x.SearchCount).ThenByDescending(x => x.BookingCount),
+                "booking" => statQuery.OrderByDescending(x => x.BookingCount).ThenByDescending(x => x.SearchCount),
+                _ => statQuery.OrderByDescending(x => x.SearchCount + (x.BookingCount * 3)).ThenByDescending(x => x.BookingCount)
+            };
+
+            var statRows = await statQuery.Take(15).ToListAsync();
+            if (statRows.Count > 0)
+            {
+                var curations = await _dbContext.PopularDestinations.AsNoTracking().Where(x => x.Status == "Active").ToListAsync();
+                var statResponse = statRows.Select(x =>
+                {
+                    var match = curations.FirstOrDefault(c => (c.Title != null && c.Title.Contains(x.FromCity, StringComparison.OrdinalIgnoreCase) && c.Title.Contains(x.ToCity, StringComparison.OrdinalIgnoreCase)));
+                    return new
+                    {
+                        id = x.Id,
+                        title = $"{x.FromCity} to {x.ToCity}",
+                        subTitle = $"{x.SearchCount} Searches",
+                        fromCity = x.FromCity,
+                        toCity = x.ToCity,
+                        fromAirportCode = "",
+                        toAirportCode = "",
+                        image = match?.ImageUrl,
+                        imageUrl = match?.ImageUrl,
+                        category = "Domestic",
+                        placement = "Main",
+                        url = (string?)null,
+                        status = "Active",
+                        searchCount = x.SearchCount,
+                        bookingCount = x.BookingCount,
+                        score = x.SearchCount + (x.BookingCount * 3),
+                        entryDateUtc = x.LastSearchedAtUtc ?? DateTime.UtcNow
+                    };
+                }).ToList();
+
+                return Ok(statResponse);
+            }
+
             var rows = await _dbContext.PopularDestinations
                 .AsNoTracking()
                 .Where(x => x.Status == "Active")
