@@ -1,7 +1,40 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace PickNBook.Api.Models.Payments
 {
+    public class NumberOrStringConverter : JsonConverter<string>
+    {
+        public override string? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                if (reader.TryGetInt64(out long l)) return l.ToString();
+                if (reader.TryGetDecimal(out decimal d)) return d.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                using var doc = JsonDocument.ParseValue(ref reader);
+                return doc.RootElement.GetRawText();
+            }
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                return reader.GetString();
+            }
+            if (reader.TokenType == JsonTokenType.Null)
+            {
+                return null;
+            }
+            using var fallbackDoc = JsonDocument.ParseValue(ref reader);
+            return fallbackDoc.RootElement.GetRawText();
+        }
+
+        public override void Write(Utf8JsonWriter writer, string value, JsonSerializerOptions options)
+        {
+            writer.WriteStringValue(value);
+        }
+    }
+
     /// <summary>
     /// Cashfree webhook payload structure.
     /// Cashfree sends this JSON body to the notify_url when payment events occur.
@@ -45,6 +78,7 @@ namespace PickNBook.Api.Models.Payments
     public class CashfreeWebhookPaymentDetail
     {
         [JsonPropertyName("cf_payment_id")]
+        [JsonConverter(typeof(NumberOrStringConverter))]
         public string CfPaymentId { get; set; } = string.Empty;
 
         [JsonPropertyName("payment_status")]
@@ -93,6 +127,7 @@ namespace PickNBook.Api.Models.Payments
         public string RefundId { get; set; } = string.Empty;
 
         [JsonPropertyName("cf_refund_id")]
+        [JsonConverter(typeof(NumberOrStringConverter))]
         public string CfRefundId { get; set; } = string.Empty;
 
         [JsonPropertyName("refund_status")]

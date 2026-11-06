@@ -77,7 +77,9 @@ namespace PickNBook.Api.Services.Background
                 .Where(p => p.RefundStatus == "RefundPending" 
                          || p.RefundStatus == "RefundFailed" 
                          || p.RefundStatus == "RefundOnHold" 
-                         || p.RefundStatus == "PENDING")
+                         || p.RefundStatus == "PENDING"
+                         || p.RefundStatus == "Processing"
+                         || p.RefundStatus == "RefundProcessing")
                 .ToListAsync(stoppingToken);
 
             foreach (var payment in failedRefunds)
@@ -89,8 +91,8 @@ namespace PickNBook.Api.Services.Background
                     string refundId = payment.RefundId ?? $"REF-{payment.CashfreeOrderId}";
                     System.Text.Json.JsonDocument? refundDoc = null;
 
-                    // If refund was already submitted to Cashfree and is on hold or pending, check live gateway status first
-                    if (!string.IsNullOrEmpty(payment.RefundId) || payment.RefundStatus == "RefundOnHold")
+                    // If refund was already submitted to Cashfree and is on hold, pending, or processing, check live gateway status first
+                    if (!string.IsNullOrEmpty(payment.RefundId) || payment.RefundStatus == "RefundOnHold" || payment.RefundStatus == "Processing" || payment.RefundStatus == "RefundProcessing")
                     {
                         try
                         {
@@ -102,10 +104,46 @@ namespace PickNBook.Api.Services.Background
                         }
                     }
 
-                    // If not found on gateway or status check wasn't possible, initiate
-                    if (refundDoc == null)
+                    // If direct refundId lookup failed, check all refunds for this order
+                    if (refundDoc == null && !string.IsNullOrEmpty(payment.CashfreeOrderId))
+                    {
+                        try
+                        {
+                            var existingRefundsDoc = await cashfreeService.GetRefundsForOrderAsync(payment.CashfreeOrderId);
+                            if (existingRefundsDoc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array && existingRefundsDoc.RootElement.GetArrayLength() > 0)
+                            {
+                                System.Text.Json.JsonElement? targetRefund = null;
+                                foreach (var el in existingRefundsDoc.RootElement.EnumerateArray())
+                                {
+                                    if (el.TryGetProperty("refund_status", out var st) && st.GetString()?.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase) == true)
+                                    {
+                                        targetRefund = el;
+                                        break;
+                                    }
+                                }
+                                var selected = targetRefund ?? existingRefundsDoc.RootElement.EnumerateArray().FirstOrDefault();
+                                refundDoc = System.Text.Json.JsonDocument.Parse(selected.GetRawText());
+                                if (selected.TryGetProperty("refund_id", out var rIdEl) && !string.IsNullOrEmpty(rIdEl.GetString()))
+                                {
+                                    refundId = rIdEl.GetString()!;
+                                }
+                            }
+                        }
+                        catch (Exception ordEx)
+                        {
+                            _logger.LogWarning(ordEx, "Failed to query refunds list for Order {OrderId}", payment.CashfreeOrderId);
+                        }
+                    }
+
+                    // If not found on gateway or status check wasn't possible, initiate (only if not already processing)
+                    if (refundDoc == null && payment.RefundStatus != "Processing" && payment.RefundStatus != "RefundProcessing")
                     {
                         refundDoc = await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, payment.FinalPayableAmount, refundId, payment.RefundReason ?? "Retry failed refund");
+                    }
+
+                    if (refundDoc == null)
+                    {
+                        continue;
                     }
 
                     string cashfreeRefundStatus = "PENDING";
@@ -122,11 +160,37 @@ namespace PickNBook.Api.Services.Background
                     payment.RefundId = refundId;
                     payment.UpdatedAt = DateTime.UtcNow;
 
+                    var cancelRecord = await dbContext.BookingCancellations.FirstOrDefaultAsync(c =>
+                        (c.PaymentId > 0 && c.PaymentId == payment.Id) ||
+                        (!string.IsNullOrEmpty(payment.PaymentReference) && c.BookingReference == payment.PaymentReference), stoppingToken);
+
                     if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
                     {
                         payment.RefundStatus = "Refunded";
                         payment.Status = "REFUNDED";
                         payment.LastError = null;
+
+                        if (cancelRecord != null)
+                        {
+                            cancelRecord.RefundStatus = "COMPLETED";
+                            cancelRecord.Status = "Completed";
+                            cancelRecord.CashfreeRefundId = refundId;
+                            cancelRecord.CompletedAtUtc = DateTime.UtcNow;
+                            if (cancelRecord.PaymentId == 0)
+                            {
+                                cancelRecord.PaymentId = payment.Id;
+                            }
+                        }
+
+                        if (payment.BookingId.HasValue && payment.BookingId.Value > 0 && string.Equals(payment.BookingType, "Hotel", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var hotelRes = await dbContext.HotelReservations.FirstOrDefaultAsync(h => h.Id == payment.BookingId.Value, stoppingToken);
+                            if (hotelRes != null && hotelRes.Status == "Cancelled" && hotelRes.RefundAmount <= 0)
+                            {
+                                hotelRes.RefundAmount = cancelRecord?.CustomerRefundAmount ?? payment.FinalPayableAmount;
+                            }
+                        }
+
                         await dbContext.SaveChangesAsync(stoppingToken);
                         _logger.LogInformation("Successfully verified and recovered refund for Payment {PaymentId}", payment.Id);
                     }
@@ -134,6 +198,11 @@ namespace PickNBook.Api.Services.Background
                     {
                         payment.RefundStatus = "RefundOnHold";
                         payment.LastError = statusDescription ?? "Refund on hold because of insufficient account balance";
+                        if (cancelRecord != null)
+                        {
+                            cancelRecord.RefundStatus = "ON_HOLD";
+                            cancelRecord.FailureReason = payment.LastError;
+                        }
                         await dbContext.SaveChangesAsync(stoppingToken);
                         _logger.LogWarning("Payment {PaymentId} refund {RefundId} is still ONHOLD on Cashfree due to balance shortfall.", payment.Id, refundId);
                     }
@@ -142,6 +211,11 @@ namespace PickNBook.Api.Services.Background
                         payment.RefundStatus = "RefundFailed";
                         payment.RefundAttempts += 1;
                         payment.LastError = statusDescription ?? "Cashfree refund cancelled/failed.";
+                        if (cancelRecord != null)
+                        {
+                            cancelRecord.RefundStatus = "FAILED";
+                            cancelRecord.FailureReason = payment.LastError;
+                        }
                         await dbContext.SaveChangesAsync(stoppingToken);
                     }
                     else

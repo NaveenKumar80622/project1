@@ -1035,6 +1035,16 @@ namespace PickNBook.Api.Services.Implementations
                                        || (!string.IsNullOrEmpty(cfRefundId) && r.CashfreeRefundId == cfRefundId)
                                        || (!string.IsNullOrEmpty(orderId) && r.BookingReference == orderId));
 
+            if (refundRecord == null && !string.IsNullOrEmpty(orderId))
+            {
+                var paymentForOrder = await _dbContext.Payments.FirstOrDefaultAsync(p => p.CashfreeOrderId == orderId);
+                if (paymentForOrder != null)
+                {
+                    refundRecord = await _dbContext.BookingCancellations
+                        .FirstOrDefaultAsync(r => (r.PaymentId > 0 && r.PaymentId == paymentForOrder.Id) || (!string.IsNullOrEmpty(paymentForOrder.PaymentReference) && r.BookingReference == paymentForOrder.PaymentReference));
+                }
+            }
+
             if (refundRecord != null)
             {
                 if (refundRecord.Status == "Completed")
@@ -1101,16 +1111,36 @@ namespace PickNBook.Api.Services.Implementations
                     refundRecord.CashfreeRefundId = cashfreeRefundId;
                     refundRecord.CompletedAtUtc = DateTime.UtcNow;
 
-                    if (refundRecord.PaymentId > 0)
+                    var assocPayment = refundRecord.PaymentId > 0
+                        ? await _dbContext.Payments.FirstOrDefaultAsync(p => p.Id == refundRecord.PaymentId)
+                        : (!string.IsNullOrEmpty(refundRecord.BookingReference) ? await _dbContext.Payments.FirstOrDefaultAsync(p => p.PaymentReference == refundRecord.BookingReference) : null);
+
+                    if (assocPayment != null)
                     {
-                        var assocPayment = await _dbContext.Payments.FirstOrDefaultAsync(p => p.Id == refundRecord.PaymentId);
-                        if (assocPayment != null)
+                        assocPayment.RefundStatus = "Refunded";
+                        assocPayment.Status = "REFUNDED";
+                        assocPayment.RefundId = cashfreeRefundId;
+                        assocPayment.UpdatedAt = DateTime.UtcNow;
+                        assocPayment.LastError = null;
+                        if (refundRecord.PaymentId == 0)
                         {
-                            assocPayment.RefundStatus = "Refunded";
-                            assocPayment.Status = "REFUNDED";
-                            assocPayment.RefundId = cashfreeRefundId;
-                            assocPayment.UpdatedAt = DateTime.UtcNow;
-                            assocPayment.LastError = null;
+                            refundRecord.PaymentId = assocPayment.Id;
+                        }
+                    }
+
+                    if (string.Equals(refundRecord.BookingType, "Hotel", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(refundRecord.BookingReference))
+                    {
+                        var hotelRes = await _dbContext.HotelReservations.FirstOrDefaultAsync(h => h.BookingReference == refundRecord.BookingReference);
+                        if (hotelRes != null && hotelRes.Status == "Cancelled")
+                        {
+                            if (refundAmount.HasValue && refundAmount.Value > 0)
+                            {
+                                hotelRes.RefundAmount = refundAmount.Value;
+                            }
+                            else if (refundRecord.CustomerRefundAmount > 0)
+                            {
+                                hotelRes.RefundAmount = refundRecord.CustomerRefundAmount;
+                            }
                         }
                     }
                 }
