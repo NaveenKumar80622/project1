@@ -2002,6 +2002,12 @@ namespace PickNBook.Api.Controllers
                         ? payment.Id 
                         : (walletTx != null ? (int)walletTx.Id : (int?)null);
 
+                    bool isPaymentSuccess = (payment != null && (
+                        string.Equals(payment.Status, "Success", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(payment.Status, "PAID", StringComparison.OrdinalIgnoreCase) ||
+                        payment.PaidAt.HasValue)) ||
+                        (walletTx != null);
+
                     string bookingStatus;
                     if (x.Status == "Cancelled" || x.Status == "Partially Cancelled")
                     {
@@ -2009,9 +2015,13 @@ namespace PickNBook.Api.Controllers
                     }
                     else if (x.Status == "Failed" || x.Status == "FAILED" ||
                              (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
-                             ((x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
+                             (!isPaymentSuccess && (x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow)))
                     {
                         bookingStatus = "Payment Failed";
+                    }
+                    else if ((x.Status == "Pending" || x.Status == "Initiated") && isPaymentSuccess)
+                    {
+                        bookingStatus = "Confirming";
                     }
                     else if (x.CheckInDate <= DateTime.UtcNow && (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS"))
                     {
@@ -2030,6 +2040,7 @@ namespace PickNBook.Api.Controllers
                     {
                         "Cancelled" => "Cancelled",
                         "Payment Failed" or "Failed" => "Payment Failed",
+                        "Confirming" or "Pending" => "Confirming",
                         _ => x.CheckInDate <= DateTime.UtcNow ? "Completed" : "Upcoming"
                     };
 
@@ -2197,6 +2208,12 @@ namespace PickNBook.Api.Controllers
                 ? payment.Id 
                 : (walletTx != null ? (int)walletTx.Id : (int?)null);
 
+            bool isPaymentSuccess = (payment != null && (
+                string.Equals(payment.Status, "Success", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(payment.Status, "PAID", StringComparison.OrdinalIgnoreCase) ||
+                payment.PaidAt.HasValue)) ||
+                (walletTx != null);
+
             string bookingStatus;
             if (x.Status == "Cancelled" || x.Status == "Partially Cancelled")
             {
@@ -2204,9 +2221,13 @@ namespace PickNBook.Api.Controllers
             }
             else if (x.Status == "Failed" || x.Status == "FAILED" ||
                      (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED" || payment.Status == "EXPIRED" || payment.Status == "CANCELLED" || payment.Status == "USER_DROPPED")) ||
-                     ((x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow || (payment != null && (payment.Status == "Failed" || payment.Status == "FAILED")))))
+                     (!isPaymentSuccess && (x.Status == "Pending" || x.Status == "Initiated") && (x.CheckInDate <= DateTime.UtcNow || x.CreatedAt.AddMinutes(30) <= DateTime.UtcNow)))
             {
                 bookingStatus = "Payment Failed";
+            }
+            else if ((x.Status == "Pending" || x.Status == "Initiated") && isPaymentSuccess)
+            {
+                bookingStatus = "Confirming";
             }
             else if (x.CheckInDate <= DateTime.UtcNow && (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS"))
             {
@@ -2225,6 +2246,7 @@ namespace PickNBook.Api.Controllers
             {
                 "Cancelled" => "Cancelled",
                 "Payment Failed" or "Failed" => "Payment Failed",
+                "Confirming" or "Pending" => "Confirming",
                 _ => x.CheckInDate <= DateTime.UtcNow ? "Completed" : "Upcoming"
             };
 

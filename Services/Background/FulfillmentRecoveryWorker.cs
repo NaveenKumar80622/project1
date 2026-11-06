@@ -31,20 +31,13 @@ namespace PickNBook.Api.Services.Background
 
             while (!stoppingToken.IsCancellationRequested)
             {
-                try
-                {
-                    await ProcessPendingFulfillmentsAsync(stoppingToken);
-                    await ProcessFailedRefundsAsync(stoppingToken);
-                    await ProcessStrandedFulfillmentsAsync(stoppingToken);
-                    await ProcessPendingFlightCancellationsAsync(stoppingToken);
-                    await ProcessPendingBusCancellationsAsync(stoppingToken);
-                    await ProcessPendingHotelReservationsAsync(stoppingToken);
-                    await ProcessExpiredReservationsAsync(stoppingToken);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error occurred executing FulfillmentRecoveryWorker.");
-                }
+                try { await ProcessPendingFulfillmentsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessPendingFulfillmentsAsync"); }
+                try { await ProcessFailedRefundsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessFailedRefundsAsync"); }
+                try { await ProcessStrandedFulfillmentsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessStrandedFulfillmentsAsync"); }
+                try { await ProcessPendingFlightCancellationsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessPendingFlightCancellationsAsync"); }
+                try { await ProcessPendingBusCancellationsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessPendingBusCancellationsAsync"); }
+                try { await ProcessPendingHotelReservationsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessPendingHotelReservationsAsync"); }
+                try { await ProcessExpiredReservationsAsync(stoppingToken); } catch (Exception ex) { _logger.LogError(ex, "Error in ProcessExpiredReservationsAsync"); }
 
                 await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
             }
@@ -1051,6 +1044,21 @@ namespace PickNBook.Api.Services.Background
                         if (updatedRes != null && updatedRes.Status == "Confirmed")
                         {
                             _logger.LogInformation("HotelReservation {BookingReference} settled to Confirmed.", updatedRes.BookingReference);
+
+                            // Also update associated Payment.FulfillmentStatus to "Success"
+                            var paymentToUpdate = await dbContext.Payments
+                                .FirstOrDefaultAsync(p => (p.BookingId == updatedRes.Id || 
+                                                           p.BookingReferenceId == updatedRes.Id || 
+                                                           p.PaymentReference == updatedRes.BookingReference), stoppingToken);
+                            if (paymentToUpdate != null && paymentToUpdate.FulfillmentStatus != "Success")
+                            {
+                                paymentToUpdate.FulfillmentStatus = "Success";
+                                paymentToUpdate.UpdatedAt = DateTime.UtcNow;
+                                await dbContext.SaveChangesAsync(stoppingToken);
+                                _logger.LogInformation("Updated Payment {PaymentId} FulfillmentStatus to Success for settled HotelReservation {BookingReference}",
+                                    paymentToUpdate.Id, updatedRes.BookingReference);
+                            }
+
                             if (ticketEmailService != null)
                             {
                                 try
