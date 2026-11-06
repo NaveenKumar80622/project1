@@ -1892,7 +1892,7 @@ namespace PickNBook.Api.Controllers
                     }
                     else if (normalizedStatus == "upcoming")
                     {
-                        query = query.Where(x => (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS") && x.CheckInDate > DateTime.UtcNow);
+                        query = query.Where(x => (x.Status == "Confirmed" || x.Status == "Booked" || x.Status == "SUCCESS" || x.Status == "Pending") && x.CheckInDate > DateTime.UtcNow);
                     }
                     else if (normalizedStatus == "completed" || normalizedStatus == "past")
                     {

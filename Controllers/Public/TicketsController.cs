@@ -123,7 +123,13 @@ public class TicketsController : BaseApiController
             ? busConfirmedStatuses
             : new[] { "SUCCESS", "Success", "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED", "Cancelled", "CANCELLED", "Refunded", "REFUNDED" };
         var flightConfirmedStatuses = new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Ticketed", "TICKETED", "Success", "SUCCESS", "Completed", "COMPLETED" };
+        var flightEligibleStatuses = request.ActiveOnly
+            ? flightConfirmedStatuses
+            : new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Ticketed", "TICKETED", "Success", "SUCCESS", "Completed", "COMPLETED", "Cancelled", "CANCELLED", "Refunded", "REFUNDED" };
         var hotelConfirmedStatuses = new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED", "Success", "SUCCESS" };
+        var hotelEligibleStatuses = request.ActiveOnly
+            ? hotelConfirmedStatuses
+            : new[] { "Booked", "BOOKED", "Confirmed", "CONFIRMED", "Completed", "COMPLETED", "Success", "SUCCESS", "Cancelled", "CANCELLED", "Refunded", "REFUNDED" };
 
         // ================= BUS TICKETS =================
         async Task<List<object>> GetBusTickets()
@@ -284,7 +290,7 @@ public class TicketsController : BaseApiController
         {
             var query = _context.FlightReservations
                 .Include(x => x.Segments)
-                .Where(x => flightConfirmedStatuses.Contains(x.Status));
+                .Where(x => flightEligibleStatuses.Contains(x.Status));
 
             if (request.ActiveOnly && !hasRef)
             {
@@ -314,17 +320,17 @@ public class TicketsController : BaseApiController
             }
 
             var bookings = await query
-                .OrderByDescending(x => x.DepartureTime)
+                .OrderByDescending(x => x.BookedAtUtc)
                 .ToListAsync();
 
             _logger.LogInformation("[TicketsController.Fetch] Table: FlightReservations. Matched {Count} records.", bookings.Count);
 
             if (!bookings.Any()) return new List<object>();
 
-            // Batch load passengers (Avoid N+1)
+            // Batch load passengers (Avoid N+1) - include all passengers so cancelled bookings retain their seat and traveler data
             var bookingIds = bookings.Select(b => b.Id).ToList();
             var allPassengers = await _context.FlightReservationPassengers
-                .Where(p => bookingIds.Contains(p.FlightReservationId) && !p.IsCancelled)
+                .Where(p => bookingIds.Contains(p.FlightReservationId))
                 .ToListAsync();
             var passengersByBooking = allPassengers.ToLookup(p => p.FlightReservationId);
 
@@ -337,11 +343,15 @@ public class TicketsController : BaseApiController
                 var durationStr = $"{totalMinutes / 60}h {totalMinutes % 60:D2}m";
 
                 var paxList = passengersByBooking[booking.Id].ToList();
+                var isCancelled = booking.Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                                  booking.Status.Equals("Refunded", StringComparison.OrdinalIgnoreCase);
 
                 result.Add(new
                 {
                     bookingReference = booking.BookingReference,
                     ticketType = "flight",
+                    bookingType = "flight",
+                    isCancelled = isCancelled,
                     pnr = !string.IsNullOrWhiteSpace(booking.Pnr) ? booking.Pnr : booking.GdsPnr ?? "",
                     gdsPnr = booking.GdsPnr ?? "",
                     airline = booking.Airline,
@@ -378,12 +388,26 @@ public class TicketsController : BaseApiController
                         fullName = p.FullName,
                         name = p.FullName,
                         seatNumber = p.SeatNumber,
+                        seat = p.SeatNumber,
                         ticketNumber = p.TicketNumber ?? "",
                         passengerType = p.PassengerType,
-                        gender = p.Gender
+                        gender = p.Gender,
+                        isCancelled = p.IsCancelled
                     }),
                     status = booking.Status,
                     totalFare = booking.TotalPriceInr,
+                    totalPaid = booking.TotalPriceInr,
+                    customerFare = booking.TotalPriceInr,
+                    passengerName = booking.PassengerName,
+                    passengerEmail = booking.PassengerEmail,
+                    passengerPhone = booking.PassengerPhone,
+                    contact = new
+                    {
+                        name = booking.PassengerName,
+                        email = booking.PassengerEmail,
+                        mobile = booking.PassengerPhone,
+                        phone = booking.PassengerPhone
+                    },
                     cancellationPolicy = booking.CancellationPolicyJson,
                     cancellationPolicyJson = booking.CancellationPolicyJson,
                     fareRules = booking.FareRulesJson,
@@ -397,8 +421,9 @@ public class TicketsController : BaseApiController
                     cancelledAt = booking.CancelledAtUtc.HasValue ? DateTime.SpecifyKind(booking.CancelledAtUtc.Value, DateTimeKind.Utc) : (DateTime?)null,
                     cancelledAtIst = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(booking.CancelledAtUtc.Value) : (DateTime?)null,
                     cancelledAtDisplay = booking.CancelledAtUtc.HasValue ? PickNBook.Api.Helpers.IndiaTimeHelper.FormatIst(booking.CancelledAtUtc.Value, "dd MMM yyyy, hh:mm tt") : null,
-                    cancellationReason = booking.CancellationReason,
+                    cancellationReason = booking.CancellationReason ?? string.Empty,
                     cancellationCharges = booking.CancellationChargeInr ?? 0m,
+                    cancellationCharge = booking.CancellationChargeInr ?? 0m,
                     refundAmount = booking.RefundAmountInr ?? 0m
                 });
             }
@@ -410,7 +435,7 @@ public class TicketsController : BaseApiController
         async Task<List<object>> GetHotelTickets()
         {
             var query = _context.HotelReservations
-                .Where(x => hotelConfirmedStatuses.Contains(x.Status));
+                .Where(x => hotelEligibleStatuses.Contains(x.Status));
 
             if (request.ActiveOnly && !hasRef)
             {

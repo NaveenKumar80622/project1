@@ -73,7 +73,7 @@ public class AdminHotelController : AdminApiController
                 var s = status.Trim();
                 if (s.Equals("Booked", StringComparison.OrdinalIgnoreCase) || s.Equals("Confirmed", StringComparison.OrdinalIgnoreCase) || s.Equals("Success", StringComparison.OrdinalIgnoreCase))
                 {
-                    query = query.Where(b => b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS" || b.Status == "Success");
+                    query = query.Where(b => b.Status == "Booked" || b.Status == "Confirmed" || b.Status == "SUCCESS" || b.Status == "Success" || b.Status == "Pending");
                 }
                 else if (!s.Contains("Cancel", StringComparison.OrdinalIgnoreCase))
                 {
