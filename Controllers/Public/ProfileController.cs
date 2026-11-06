@@ -13,6 +13,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Claims;
 using System.Threading.Tasks;
+using System.Text.RegularExpressions;
 
 namespace PickNBook.Api.Controllers;
 
@@ -144,6 +145,7 @@ public class ProfileController : BaseApiController
         IFormFile? profileImageFile,
         string? profileImageUrl = null)
     {
+
         if (!TryGetCurrentUserId(out var userId))
             return Unauthorized("Invalid token");
 
@@ -153,40 +155,82 @@ public class ProfileController : BaseApiController
         var user = await _context.Users.FindAsync(userId);
         if (user == null)
             return NotFound("User not found.");
-
         if (firstName is not null)
         {
             var trimmedFirst = firstName.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedFirst))
-                return BadRequest(new { message = "First name cannot be empty or whitespace." });
+
+            if (!IsValidName(trimmedFirst))
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Please enter a valid first name."
+                });
+            }
 
             user.FirstName = trimmedFirst;
         }
-
         if (lastName is not null)
         {
             var trimmedLast = lastName.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedLast))
-                return BadRequest(new { message = "Last name cannot be empty or whitespace." });
+
+            if (!IsValidName(trimmedLast))
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Please enter a valid last name."
+                });
+            }
 
             user.LastName = trimmedLast;
         }
-
         if (phoneNumber is not null)
         {
             var trimmedPhone = phoneNumber.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedPhone))
-                return BadRequest(new { message = "Phone number cannot be empty or whitespace." });
 
-            var phoneTaken = await _context.Users.AnyAsync(u => u.PhoneNumber == trimmedPhone && u.Id != userId);
+            if (!Regex.IsMatch(trimmedPhone, @"^[6-9][0-9]{9}$"))
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9."
+                });
+            }
+
+            var phoneTaken = await _context.Users.AnyAsync(
+                u => u.PhoneNumber == trimmedPhone && u.Id != userId);
+
             if (phoneTaken)
-                return Conflict(new { message = "This phone number is already registered to another account." });
+            {
+                return Conflict(new
+                {
+                    success = false,
+                    message = "This phone number is already registered to another account."
+                });
+            }
 
             user.PhoneNumber = trimmedPhone;
         }
-
         if (location is not null)
-            user.City = location.Trim(); // Mapped to User.City without requiring DB migration
+        {
+            var trimmedLocation = location.Trim();
+
+            if (string.IsNullOrWhiteSpace(trimmedLocation) ||
+                trimmedLocation.Length > 100 ||
+                !Regex.IsMatch(
+                    trimmedLocation,
+                    @"^[\p{L}\p{M}0-9][\p{L}\p{M}0-9\s,.'-]*$"))
+            {
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Enter a valid location with a maximum of 100 characters."
+                });
+            }
+
+            user.City = trimmedLocation;
+        } // Mapped to User.City without requiring DB migration
 
         // Profile image handling (optional)
         if (profileImageFile != null && profileImageFile.Length > 0)
@@ -282,7 +326,36 @@ public class ProfileController : BaseApiController
             return false;
         }
     }
+    private static bool IsValidName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return false;
 
+        if (name.Length < 2 || name.Length > 50)
+            return false;
+
+        // Allow letters, spaces, apostrophes, hyphens and periods.
+        if (!Regex.IsMatch(
+            name,
+            @"^[\p{L}\p{M}]+(?:[ '\-.][\p{L}\p{M}]+)*$"))
+        {
+            return false;
+        }
+
+        // Reject names consisting entirely of the same repeated letter.
+        var lettersOnly = new string(
+            name.Where(char.IsLetter).ToArray());
+
+        if (lettersOnly.Length >= 3 &&
+            lettersOnly.All(c =>
+                char.ToLowerInvariant(c) ==
+                char.ToLowerInvariant(lettersOnly[0])))
+        {
+            return false;
+        }
+
+        return true;
+    }
     private bool TryGetCurrentUserId(out int userId)
     {
         userId = 0;

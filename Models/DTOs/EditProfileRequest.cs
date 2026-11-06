@@ -6,18 +6,18 @@ namespace PickNBook.Api.Models.DTOs;
 public class EditProfileRequest
 {
     [StringLength(50, MinimumLength = 2, ErrorMessage = "First name must be between 2 and 50 characters.")]
-    [RegularExpression(@"^[a-zA-Z\s.'-]+$", ErrorMessage = "First name must contain only letters and cannot contain numbers or special characters.")]
+    [RegularExpression(@"^[\p{L}\p{M}]+(?:[ '\-.][\p{L}\p{M}]+)*$", ErrorMessage = "First name contains invalid characters.")]
     public string? FirstName { get; set; }
 
     [StringLength(50, MinimumLength = 1, ErrorMessage = "Last name cannot exceed 50 characters.")]
-    [RegularExpression(@"^[a-zA-Z\s.'-]+$", ErrorMessage = "Last name must contain only letters and cannot contain numbers or special characters.")]
+    [RegularExpression(@"^[\p{L}\p{M}]+(?:[ '\-.][\p{L}\p{M}]+)*$", ErrorMessage = "Last name contains invalid characters.")]
     public string? LastName { get; set; }
 
     [RegularExpression(@"^[6-9]\d{9}$", ErrorMessage = "Phone number must be a valid 10-digit Indian mobile number.")]
     public string? PhoneNumber { get; set; }
 
     [StringLength(100, MinimumLength = 2, ErrorMessage = "Location cannot exceed 100 characters.")]
-    [RegularExpression(@"^[a-zA-Z0-9\s,.'-]+$", ErrorMessage = "Location contains invalid characters.")]
+    [RegularExpression(@"^[\p{L}\p{M}0-9][\p{L}\p{M}0-9\s,.'-]*$", ErrorMessage = "Location contains invalid characters.")]
     public string? Location { get; set; }
 
     /// <summary>
@@ -29,18 +29,18 @@ public class EditProfileRequest
 public class EditProfileJsonRequest
 {
     [StringLength(50, MinimumLength = 2, ErrorMessage = "First name must be between 2 and 50 characters.")]
-    [RegularExpression(@"^[a-zA-Z\s.'-]+$", ErrorMessage = "First name must contain only letters and cannot contain numbers or special characters.")]
+    [RegularExpression(@"^[\p{L}\p{M}]+(?:[ '\-.][\p{L}\p{M}]+)*$", ErrorMessage = "First name contains invalid characters.")]
     public string? FirstName { get; set; }
 
     [StringLength(50, MinimumLength = 1, ErrorMessage = "Last name cannot exceed 50 characters.")]
-    [RegularExpression(@"^[a-zA-Z\s.'-]+$", ErrorMessage = "Last name must contain only letters and cannot contain numbers or special characters.")]
+    [RegularExpression(@"^[\p{L}\p{M}]+(?:[ '\-.][\p{L}\p{M}]+)*$", ErrorMessage = "Last name contains invalid characters.")]
     public string? LastName { get; set; }
 
     [RegularExpression(@"^[6-9]\d{9}$", ErrorMessage = "Phone number must be a valid 10-digit Indian mobile number.")]
     public string? PhoneNumber { get; set; }
 
     [StringLength(100, MinimumLength = 2, ErrorMessage = "Location cannot exceed 100 characters.")]
-    [RegularExpression(@"^[a-zA-Z0-9\s,.'-]+$", ErrorMessage = "Location contains invalid characters.")]
+    [RegularExpression(@"^[\p{L}\p{M}0-9][\p{L}\p{M}0-9\s,.'-]*$", ErrorMessage = "Location contains invalid characters.")]
     public string? Location { get; set; }
 
     [MaxLength(255, ErrorMessage = "Profile image path cannot exceed 255 characters.")]
