@@ -135,10 +135,40 @@ namespace PickNBook.Api.Services.Background
                         }
                     }
 
+                    var cancelRecord = await dbContext.BookingCancellations.FirstOrDefaultAsync(c =>
+                        (c.PaymentId > 0 && c.PaymentId == payment.Id) ||
+                        (!string.IsNullOrEmpty(payment.PaymentReference) && c.BookingReference == payment.PaymentReference), stoppingToken);
+
+                    decimal targetRefundAmount = payment.GatewayPaidAmount > 0
+                        ? payment.GatewayPaidAmount
+                        : payment.FinalPayableAmount;
+
+                    if (cancelRecord != null)
+                    {
+                        if (cancelRecord.GatewayRefundAmount > 0)
+                        {
+                            targetRefundAmount = cancelRecord.GatewayRefundAmount;
+                        }
+                        else if (cancelRecord.CustomerRefundAmount > 0 && cancelRecord.WalletRefundAmount == 0)
+                        {
+                            targetRefundAmount = cancelRecord.CustomerRefundAmount;
+                        }
+                        else if (cancelRecord.WalletRefundAmount > 0 && cancelRecord.GatewayRefundAmount == 0)
+                        {
+                            targetRefundAmount = 0m;
+                        }
+                    }
+
                     // If not found on gateway or status check wasn't possible, initiate (only if not already processing)
                     if (refundDoc == null && payment.RefundStatus != "Processing" && payment.RefundStatus != "RefundProcessing")
                     {
-                        refundDoc = await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, payment.FinalPayableAmount, refundId, payment.RefundReason ?? "Retry failed refund");
+                        if (targetRefundAmount <= 0)
+                        {
+                            _logger.LogInformation("Recovery: Target gateway refund amount is 0 for Order {OrderId}. Skipping Cashfree refund call.", payment.CashfreeOrderId);
+                            continue;
+                        }
+
+                        refundDoc = await cashfreeService.InitiateRefundAsync(payment.CashfreeOrderId, targetRefundAmount, refundId, payment.RefundReason ?? "Retry failed refund");
                     }
 
                     if (refundDoc == null)
@@ -159,10 +189,6 @@ namespace PickNBook.Api.Services.Background
 
                     payment.RefundId = refundId;
                     payment.UpdatedAt = DateTime.UtcNow;
-
-                    var cancelRecord = await dbContext.BookingCancellations.FirstOrDefaultAsync(c =>
-                        (c.PaymentId > 0 && c.PaymentId == payment.Id) ||
-                        (!string.IsNullOrEmpty(payment.PaymentReference) && c.BookingReference == payment.PaymentReference), stoppingToken);
 
                     if (cashfreeRefundStatus.Equals("SUCCESS", StringComparison.OrdinalIgnoreCase))
                     {

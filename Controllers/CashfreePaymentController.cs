@@ -85,6 +85,37 @@ namespace PickNBook.Api.Controllers
                     return Unauthorized(new { message = "User not logged in." });
                 }
 
+                // Idempotency / Order Recovery Protection (P0 #2)
+                if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+                {
+                    var cleanKey = request.IdempotencyKey.Trim();
+                    var existingPayment = await _dbContext.Payments
+                        .Where(p => p.UserId == userIdStr && p.PaymentReference == cleanKey)
+                        .OrderByDescending(p => p.Id)
+                        .FirstOrDefaultAsync();
+
+                    if (existingPayment != null)
+                    {
+                        if (existingPayment.Status == PaymentStatus.Created || existingPayment.Status == PaymentStatus.Pending || existingPayment.Status == PaymentStatus.Success)
+                        {
+                            _logger.LogInformation("Idempotent CreateOrder recovered existing active payment {PaymentId} for key {Key}", existingPayment.Id, cleanKey);
+                            return Ok(new CreateOrderResponseDto
+                            {
+                                TotalAmount = existingPayment.TotalAmount,
+                                WalletUsedAmount = existingPayment.WalletUsedAmount,
+                                GatewayPaidAmount = existingPayment.GatewayPaidAmount,
+                                PaymentMethod = existingPayment.PaymentMethod ?? "Cashfree",
+                                IsWalletFullyPaid = existingPayment.GatewayPaidAmount == 0 && existingPayment.WalletUsedAmount > 0,
+                                CashfreeOrderId = existingPayment.CashfreeOrderId,
+                                PaymentSessionId = existingPayment.PaymentSessionId,
+                                CfOrderId = existingPayment.CashfreeCfOrderId,
+                                OrderStatus = existingPayment.Status,
+                                PaymentReference = existingPayment.PaymentReference
+                            });
+                        }
+                    }
+                }
+
                 // Phone Validation for Cashfree (requires 10-15 digits)
                 var cleanPhone = new string((request.CustomerPhone ?? "").Where(char.IsDigit).ToArray());
                 if (cleanPhone.Length < 10 || cleanPhone.Length > 15)
@@ -762,12 +793,91 @@ namespace PickNBook.Api.Controllers
                             decimal baseFare = TryGetProp(fareNode, "BaseFare", out var bFare) ? bFare.GetDecimal() : 0m;
                             decimal tax = TryGetProp(fareNode, "Tax", out var tFare) ? tFare.GetDecimal() : 0m;
 
+                            // P0 #1: Authoritative Supplier Quote Revalidation
+                            string traceIdStr = TryGetProp(root, "TraceId", out var tNode) ? tNode.ToString() : "";
+                            string resultIndexStr = TryGetProp(root, "ResultIndex", out var rNode) ? rNode.ToString() : "";
+                            if (!string.IsNullOrEmpty(traceIdStr) && !string.IsNullOrEmpty(resultIndexStr))
+                            {
+                                var quoteKey = $"srdv:flight:quote:{traceIdStr}:{resultIndexStr.Trim()}";
+                                if (_cache.TryGetValue(quoteKey, out PickNBook.Api.Models.DTOs.FlightQuoteCacheItem? cachedQuote) && cachedQuote != null)
+                                {
+                                    if (Math.Abs(cachedQuote.SupplierBaseFare - baseFare) > 0.5m || Math.Abs(cachedQuote.SupplierTaxAmount - tax) > 0.5m)
+                                    {
+                                        _logger.LogWarning("Price tampering or fare mismatch detected for Flight TraceId {TraceId}. Client Base: {ClientBase}, Verified: {VerifiedBase}", traceIdStr, baseFare, cachedQuote.SupplierBaseFare);
+                                        return BadRequest(new { message = "Flight fare has changed or does not match the authoritative quote. Please refresh your quote before proceeding to payment." });
+                                    }
+                                    baseFare = cachedQuote.SupplierBaseFare;
+                                    tax = cachedQuote.SupplierTaxAmount;
+                                }
+                                else if (long.TryParse(traceIdStr, out var liveTraceId) && liveTraceId > 0)
+                                {
+                                    var srdvService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.ISrdvFlightService>();
+                                    if (srdvService != null)
+                                    {
+                                        try
+                                        {
+                                            var rawFq = await srdvService.GetFareQuoteRawAsync(new PickNBook.Api.Models.DTOs.AirFareQuoteRequestDto
+                                            {
+                                                TraceId = liveTraceId,
+                                                ResultIndex = resultIndexStr.Trim()
+                                            });
+                                            using var fqDoc = JsonDocument.Parse(rawFq);
+                                            var fqRoot = fqDoc.RootElement;
+                                            var fqRes = fqRoot.TryGetProperty("Results", out var rNodeObj) ? rNodeObj : (fqRoot.TryGetProperty("Response", out var respNodeObj) ? respNodeObj : fqRoot);
+                                            if (fqRes.TryGetProperty("Fare", out var liveFareNode))
+                                            {
+                                                decimal liveBase = liveFareNode.TryGetProperty("BaseFare", out var lbf) ? lbf.GetDecimal() : baseFare;
+                                                decimal liveTax = liveFareNode.TryGetProperty("Tax", out var ltx) ? ltx.GetDecimal() : tax;
+                                                if (Math.Abs(liveBase - baseFare) > 0.5m || Math.Abs(liveTax - tax) > 0.5m)
+                                                {
+                                                    return BadRequest(new { message = "Flight fare has changed with the supplier. Please refresh and review the updated fare." });
+                                                }
+                                                baseFare = liveBase;
+                                                tax = liveTax;
+                                            }
+                                        }
+                                        catch (Exception fqEx)
+                                        {
+                                            _logger.LogWarning(fqEx, "Live FareQuote revalidation check failed for TraceId {TraceId}.", traceIdStr);
+                                        }
+                                    }
+                                }
+                            }
+
                             if (providerAmount == 0) providerAmount = baseFare + tax;
+
+                            decimal computedSsrFromPax = 0m;
+                            if (TryGetProp(root, "Passengers", out var ssrPaxArray) && ssrPaxArray.ValueKind == JsonValueKind.Array)
+                            {
+                                foreach (var p in ssrPaxArray.EnumerateArray())
+                                {
+                                    if (p.TryGetProperty("Baggage", out var bArr) && bArr.ValueKind == JsonValueKind.Array)
+                                    {
+                                        foreach (var b in bArr.EnumerateArray())
+                                            if (b.TryGetProperty("Price", out var bp) && decimal.TryParse(bp.ToString(), out var bVal)) computedSsrFromPax += bVal;
+                                    }
+                                    if (p.TryGetProperty("MealDynamic", out var mArr) && mArr.ValueKind == JsonValueKind.Array)
+                                    {
+                                        foreach (var m in mArr.EnumerateArray())
+                                            if (m.TryGetProperty("Price", out var mp) && decimal.TryParse(mp.ToString(), out var mVal)) computedSsrFromPax += mVal;
+                                    }
+                                    if (p.TryGetProperty("Seat", out var sArr) && sArr.ValueKind == JsonValueKind.Array)
+                                    {
+                                        foreach (var s in sArr.EnumerateArray())
+                                            if ((s.TryGetProperty("Amount", out var sp) || s.TryGetProperty("Price", out sp)) && decimal.TryParse(sp.ToString(), out var sVal)) computedSsrFromPax += sVal;
+                                    }
+                                }
+                            }
 
                             if (TryGetProp(fareNode, "TotalBaggageCharges", out var bagNode) && decimal.TryParse(bagNode.ToString(), out var parsedBag)) ssrAmount += parsedBag;
                             if (TryGetProp(fareNode, "TotalMealCharges", out var mealNode) && decimal.TryParse(mealNode.ToString(), out var parsedMeal)) ssrAmount += parsedMeal;
                             if (TryGetProp(fareNode, "TotalSeatCharges", out var seatNode) && decimal.TryParse(seatNode.ToString(), out var parsedSeat)) ssrAmount += parsedSeat;
                             if (TryGetProp(fareNode, "TotalSpecialServiceCharges", out var specialNode) && decimal.TryParse(specialNode.ToString(), out var parsedSpecial)) ssrAmount += parsedSpecial;
+
+                            if (computedSsrFromPax > 0 && Math.Abs(computedSsrFromPax - ssrAmount) > 0.5m)
+                            {
+                                ssrAmount = computedSsrFromPax;
+                            }
 
                             var pricingBreakdown = await _flightPricingService.CalculatePricingAsync(
                                 supplierBaseFare: baseFare,
@@ -976,11 +1086,18 @@ namespace PickNBook.Api.Controllers
                 }
 
                 // ==========================================
+                // PHASE 3: PAYMENT EXECUTION BRANCHES
+                // ==========================================
+                string resolvedPaymentRef = !string.IsNullOrWhiteSpace(request.IdempotencyKey) && request.IdempotencyKey.Trim().Length <= 45
+                    ? request.IdempotencyKey.Trim()
+                    : $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+
+                // ==========================================
                 // BRANCH 1: FULL WALLET (Zero Gateway)
                 // ==========================================
                 if (paymentMethod == "Wallet")
                 {
-                    string paymentRef = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+                    string paymentRef = resolvedPaymentRef;
                     int customerUserId = int.Parse(userIdStr);
 
                     Payment payment = null!;
@@ -1104,7 +1221,7 @@ namespace PickNBook.Api.Controllers
                 // ==========================================
                 if (paymentMethod == "Hybrid")
                 {
-                    string paymentRef = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+                    string paymentRef = resolvedPaymentRef;
                     int customerUserId = int.Parse(userIdStr);
 
                     WalletTransaction reservationTx;
@@ -1219,7 +1336,7 @@ namespace PickNBook.Api.Controllers
                 // ==========================================
                 // BRANCH 3: CASHFREE ONLY
                 // ==========================================
-                string paymentRefCashfree = $"PAY-{DateTime.UtcNow:yyyyMMddHHmmss}-{Random.Shared.Next(1000, 9999)}";
+                string paymentRefCashfree = resolvedPaymentRef;
 
                 var paymentCashfree = await _paymentService.CreatePaymentAsync(
                     userIdStr, request.BookingType,
@@ -1287,6 +1404,20 @@ namespace PickNBook.Api.Controllers
         {
             try
             {
+                var payment = await _paymentService.GetPaymentByCashfreeOrderIdAsync(orderId);
+                if (payment == null)
+                {
+                    return NotFound(new { message = "Payment order not found." });
+                }
+
+                var currentUserId = _currentUserService.GetUserOrGuestId();
+                bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
+                if (!isAdmin && !string.IsNullOrEmpty(payment.UserId) && payment.UserId != currentUserId)
+                {
+                    _logger.LogWarning("Unauthorized access attempt to verify payment {OrderId} by user {UserId}", orderId, currentUserId);
+                    return Forbid();
+                }
+
                 var result = await _paymentService.VerifyPaymentAsync(orderId);
                 return Ok(result);
             }
@@ -1307,6 +1438,14 @@ namespace PickNBook.Api.Controllers
                 if (payment == null)
                 {
                     return NotFound(new { message = "Payment order not found." });
+                }
+
+                var currentUserId = _currentUserService.GetUserOrGuestId();
+                bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
+                if (!isAdmin && !string.IsNullOrEmpty(payment.UserId) && payment.UserId != currentUserId)
+                {
+                    _logger.LogWarning("Unauthorized cancel attempt for payment {OrderId} by user {UserId}", orderId, currentUserId);
+                    return Forbid();
                 }
 
                 if (payment.Status == PaymentStatus.Success)

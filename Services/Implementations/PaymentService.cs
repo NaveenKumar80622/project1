@@ -765,7 +765,9 @@ namespace PickNBook.Api.Services.Implementations
                     PaidAt = payment.PaidAt,
                     FailureReason = payment.FailureReason,
                     FulfillmentStatus = payment.FulfillmentStatus,
-                    BookingReferenceId = payment.BookingReferenceId
+                    BookingReferenceId = payment.BookingReferenceId,
+                    ReservationId = payment.BookingReferenceId ?? payment.BookingId,
+                    BookingReference = payment.PaymentReference
                 };
             }
 
@@ -788,7 +790,9 @@ namespace PickNBook.Api.Services.Implementations
                     PaidAt = payment.PaidAt,
                     FailureReason = payment.FailureReason,
                     FulfillmentStatus = payment.FulfillmentStatus,
-                    BookingReferenceId = payment.BookingReferenceId
+                    BookingReferenceId = payment.BookingReferenceId,
+                    ReservationId = payment.BookingReferenceId ?? payment.BookingId,
+                    BookingReference = payment.PaymentReference
                 };
             }
 
@@ -878,9 +882,9 @@ namespace PickNBook.Api.Services.Implementations
                 }
                 else if (totalAttempts == 0)
                 {
-                    // User returned from gateway without initiating any transaction (dropped / abandoned)
-                    await UpdatePaymentStatusAsync(payment.Id, PaymentStatus.Failed, null, null, "Payment cancelled or abandoned by user", DateTime.UtcNow);
-                    payment = await _dbContext.Payments.FindAsync(payment.Id) ?? payment;
+                    // Payment session opened but user has not completed or failed an attempt yet.
+                    // Keep status as Pending so mobile polling or active checkout does not prematurely kill the order and release wallet hold.
+                    _logger.LogInformation("Cashfree order {OrderId} has 0 recorded payment attempts. Keeping status as Pending.", cashfreeOrderId);
                 }
             }
 
@@ -896,7 +900,9 @@ namespace PickNBook.Api.Services.Implementations
                 PaidAt = payment.PaidAt,
                 FailureReason = payment.FailureReason,
                 FulfillmentStatus = payment.FulfillmentStatus,
-                BookingReferenceId = payment.BookingReferenceId
+                BookingReferenceId = payment.BookingReferenceId,
+                ReservationId = payment.BookingReferenceId ?? payment.BookingId,
+                BookingReference = payment.PaymentReference
             };
         }
 

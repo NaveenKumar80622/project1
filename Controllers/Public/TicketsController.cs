@@ -105,6 +105,7 @@ public class TicketsController : BaseApiController
         bool hasPhone = phoneCandidates.Count > 0;
         bool hasEmail = !string.IsNullOrWhiteSpace(email);
         bool hasUser = !string.IsNullOrWhiteSpace(userId);
+        bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
 
         if (!hasRef && !hasPhone && !hasEmail && !hasUser)
         {
@@ -112,6 +113,16 @@ public class TicketsController : BaseApiController
             {
                 success = false,
                 message = "Mobile, Email, or Booking Reference is required."
+            });
+        }
+
+        // Security check: Unauthenticated guests querying by Booking Reference must provide matching Mobile or Email
+        if (hasRef && !hasUser && !isAdmin && !hasPhone && !hasEmail)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                message = "For guest ticket lookup, matching Mobile number or Email is required alongside Booking Reference for verification."
             });
         }
 
@@ -147,19 +158,42 @@ public class TicketsController : BaseApiController
             if (hasRef)
             {
                 query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef || x.SrdvTicketNo == bookingRef || x.SrdvBookingId == bookingRef);
+                if (hasUser && !isAdmin)
+                {
+                    query = query.Where(x => x.UserId == userId);
+                }
+                else if (!hasUser && !isAdmin)
+                {
+                    if (hasPhone && hasEmail)
+                    {
+                        query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone) && 
+                            (string.IsNullOrEmpty(x.PassengerEmail) || x.PassengerEmail.ToLower() == email));
+                    }
+                    else if (hasPhone)
+                    {
+                        query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone));
+                    }
+                    else if (hasEmail)
+                    {
+                        query = query.Where(x => x.PassengerEmail != null && x.PassengerEmail.ToLower() == email);
+                    }
+                }
             }
             else if (hasPhone && hasEmail)
             {
                 query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone) && 
                     (string.IsNullOrEmpty(x.PassengerEmail) || x.PassengerEmail.ToLower() == email));
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasPhone)
             {
                 query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone));
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasEmail)
             {
                 query = query.Where(x => x.PassengerEmail != null && x.PassengerEmail.ToLower() == email);
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasUser)
             {
@@ -300,19 +334,42 @@ public class TicketsController : BaseApiController
             if (hasRef)
             {
                 query = query.Where(x => x.BookingReference == bookingRef || x.Pnr == bookingRef || x.GdsPnr == bookingRef);
+                if (hasUser && !isAdmin)
+                {
+                    query = query.Where(x => x.UserId == userId);
+                }
+                else if (!hasUser && !isAdmin)
+                {
+                    if (hasPhone && hasEmail)
+                    {
+                        query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone) && 
+                            (string.IsNullOrEmpty(x.PassengerEmail) || x.PassengerEmail.ToLower() == email));
+                    }
+                    else if (hasPhone)
+                    {
+                        query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone));
+                    }
+                    else if (hasEmail)
+                    {
+                        query = query.Where(x => x.PassengerEmail != null && x.PassengerEmail.ToLower() == email);
+                    }
+                }
             }
             else if (hasPhone && hasEmail)
             {
                 query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone) && 
                     (string.IsNullOrEmpty(x.PassengerEmail) || x.PassengerEmail.ToLower() == email));
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasPhone)
             {
                 query = query.Where(x => phoneCandidates.Contains(x.PassengerPhone));
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasEmail)
             {
                 query = query.Where(x => x.PassengerEmail != null && x.PassengerEmail.ToLower() == email);
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasUser)
             {
@@ -445,19 +502,42 @@ public class TicketsController : BaseApiController
             if (hasRef)
             {
                 query = query.Where(x => x.BookingReference == bookingRef || x.ProviderBookingId == bookingRef || x.ConfirmationNo == bookingRef);
+                if (hasUser && !isAdmin)
+                {
+                    query = query.Where(x => x.UserId == userId);
+                }
+                else if (!hasUser && !isAdmin)
+                {
+                    if (hasPhone && hasEmail)
+                    {
+                        query = query.Where(x => phoneCandidates.Contains(x.GuestPhone) && 
+                            (string.IsNullOrEmpty(x.GuestEmail) || x.GuestEmail.ToLower() == email));
+                    }
+                    else if (hasPhone)
+                    {
+                        query = query.Where(x => phoneCandidates.Contains(x.GuestPhone));
+                    }
+                    else if (hasEmail)
+                    {
+                        query = query.Where(x => x.GuestEmail.ToLower() == email);
+                    }
+                }
             }
             else if (hasPhone && hasEmail)
             {
                 query = query.Where(x => phoneCandidates.Contains(x.GuestPhone) && 
                     (string.IsNullOrEmpty(x.GuestEmail) || x.GuestEmail.ToLower() == email));
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasPhone)
             {
                 query = query.Where(x => phoneCandidates.Contains(x.GuestPhone));
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasEmail)
             {
                 query = query.Where(x => x.GuestEmail.ToLower() == email);
+                if (hasUser && !isAdmin) query = query.Where(x => x.UserId == userId);
             }
             else if (hasUser)
             {

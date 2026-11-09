@@ -325,8 +325,8 @@ namespace PickNBook.Api.Models.DTOs
     public class FlightGetCancelStatusProxyRequestDto
     {
         [JsonPropertyName("ChangeRequestId")]
-        [JsonConverter(typeof(SafeLongConverter))]
-        public long ChangeRequestId { get; set; }
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string ChangeRequestId { get; set; } = string.Empty;
     }
 
     public class FlightGetCancellationChargesProxyRequestDto

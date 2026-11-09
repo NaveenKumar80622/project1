@@ -78,12 +78,12 @@ namespace PickNBook.Api.Services
 
         public async Task<string> SearchFlightsRawAsync(AirSearchRequestDto request)
         {
-            var seg = request.Segments?.FirstOrDefault();
-            var origin = seg?.Origin?.Trim().ToUpperInvariant() ?? "NA";
-            var dest = seg?.Destination?.Trim().ToUpperInvariant() ?? "NA";
-            var deptTime = seg?.PreferredDepartureTime.ToString("yyyyMMdd") ?? "NA";
-            var cabin = seg?.FlightCabinClass ?? "1";
-            var cacheKey = $"srdv:flight:search:{origin}:{dest}:{deptTime}:{request.AdultCount}:{request.ChildCount}:{request.InfantCount}:{cabin}:{request.DirectFlight}";
+            var jType = string.IsNullOrWhiteSpace(request.JourneyType) ? "1" : request.JourneyType.Trim();
+            var curr = string.IsNullOrWhiteSpace(request.CurrencyCode) ? "INR" : request.CurrencyCode.Trim().ToUpperInvariant();
+            var segsKey = request.Segments != null && request.Segments.Any()
+                ? string.Join("|", request.Segments.Select(s => $"{s.Origin?.Trim().ToUpperInvariant()}_{s.Destination?.Trim().ToUpperInvariant()}_{s.PreferredDepartureTime:yyyyMMdd}_{s.FlightCabinClass}"))
+                : "NA";
+            var cacheKey = $"srdv:flight:search:{jType}:{curr}:{request.AdultCount}:{request.ChildCount}:{request.InfantCount}:{request.DirectFlight}:{segsKey}";
 
             if (_cache.TryGetValue(cacheKey, out string? cachedResult) && !string.IsNullOrWhiteSpace(cachedResult))
             {

@@ -55,5 +55,10 @@ namespace PickNBook.Api.Models.Payments
         /// If provided, the backend validates that 0 <= WalletAmount <= AvailableBalance and WalletAmount <= BookingTotal.
         /// </summary>
         public decimal? WalletAmount { get; set; }
+
+        /// <summary>
+        /// Optional client request ID / idempotency key to prevent duplicate payments on mobile network retries.
+        /// </summary>
+        public string? IdempotencyKey { get; set; }
     }
 }

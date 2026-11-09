@@ -19,6 +19,7 @@ using PickNBook.Api.Models.Entities;
 using PickNBook.Api.Services.Interfaces;
 using PickNBook.Api.Services.Implementations;
 using PickNBook.Api.Extensions;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace PickNBook.Api.Controllers.Public
 {
@@ -455,18 +456,37 @@ namespace PickNBook.Api.Controllers.Public
                         if (primaryRoot == null)
                         {
                             primaryRoot = node;
+                            var primTrace = primaryRoot["TraceId"]?.ToString();
                             var resultsArr = primaryRoot["Results"]?.AsArray();
-                            if (resultsArr != null && resultsArr.Count > 0 && resultsArr[0] is JsonArray firstLegFlights)
+                            if (resultsArr != null)
                             {
-                                foreach (var f in firstLegFlights)
+                                foreach (var legNode in resultsArr)
                                 {
-                                    var rIndex = f?["ResultIndex"]?.ToString();
-                                    if (!string.IsNullOrEmpty(rIndex)) seenResultIndexes.Add(rIndex);
+                                    if (legNode is JsonArray legFlights)
+                                    {
+                                        foreach (var f in legFlights)
+                                        {
+                                            if (f is JsonObject fObj && !string.IsNullOrEmpty(primTrace))
+                                            {
+                                                fObj["TraceId"] = primTrace;
+                                                if (fObj["FareDataMultiple"] is JsonArray fdm)
+                                                {
+                                                    foreach (var fareItem in fdm)
+                                                    {
+                                                        if (fareItem is JsonObject fItemObj) fItemObj["TraceId"] = primTrace;
+                                                    }
+                                                }
+                                            }
+                                            var rIndex = f?["ResultIndex"]?.ToString();
+                                            if (!string.IsNullOrEmpty(rIndex)) seenResultIndexes.Add(rIndex);
+                                        }
+                                    }
                                 }
                             }
                         }
                         else
                         {
+                            var otherTrace = node["TraceId"]?.ToString();
                             var primaryResults = primaryRoot["Results"]?.AsArray();
                             var otherResults = node["Results"]?.AsArray();
                             if (primaryResults != null && otherResults != null)
@@ -481,7 +501,19 @@ namespace PickNBook.Api.Controllers.Public
                                             var rIndex = flight["ResultIndex"]?.ToString();
                                             if (string.IsNullOrEmpty(rIndex) || seenResultIndexes.Add(rIndex))
                                             {
-                                                primaryLeg.Add(JsonNode.Parse(flight.ToJsonString())!);
+                                                var cloned = JsonNode.Parse(flight.ToJsonString());
+                                                if (cloned is JsonObject clonedObj && !string.IsNullOrEmpty(otherTrace))
+                                                {
+                                                    clonedObj["TraceId"] = otherTrace;
+                                                    if (clonedObj["FareDataMultiple"] is JsonArray fdm)
+                                                    {
+                                                        foreach (var fareItem in fdm)
+                                                        {
+                                                            if (fareItem is JsonObject fItemObj) fItemObj["TraceId"] = otherTrace;
+                                                        }
+                                                    }
+                                                }
+                                                primaryLeg.Add(cloned!);
                                             }
                                         }
                                     }
@@ -688,6 +720,7 @@ namespace PickNBook.Api.Controllers.Public
                         var fareObj = result["Fare"];
                         var baseFare = fareObj?["BaseFare"]?.GetValue<decimal>() ?? 0m;
                         var tax = fareObj?["Tax"]?.GetValue<decimal>() ?? 0m;
+                        var offeredFare = fareObj?["OfferedFare"]?.GetValue<decimal>() ?? (baseFare + tax);
                         
                         var pricingBreakdown = await _pricingService.CalculatePricingAsync(
                             supplierBaseFare: baseFare,
@@ -877,6 +910,7 @@ namespace PickNBook.Api.Controllers.Public
                         var fareObj = result["Fare"];
                         var baseFare = fareObj?["BaseFare"]?.GetValue<decimal>() ?? 0m;
                         var tax = fareObj?["Tax"]?.GetValue<decimal>() ?? 0m;
+                        var offeredFare = fareObj?["OfferedFare"]?.GetValue<decimal>() ?? (baseFare + tax);
                         
                         var segmentsArr = result["Segments"]?[0]?.AsArray();
                         if (segmentsArr != null && segmentsArr.Count > 0)
@@ -927,6 +961,20 @@ namespace PickNBook.Api.Controllers.Public
                             result["PickNBookDiscount"] = pricingBreakdown.PromotionDiscount + pricingBreakdown.CouponDiscount;
 
                             result["PickNBookAvailableOffers"] = JsonSerializer.SerializeToNode(Array.Empty<object>());
+
+                            var memoryCache = HttpContext.RequestServices.GetService<Microsoft.Extensions.Caching.Memory.IMemoryCache>();
+                            if (memoryCache != null && !string.IsNullOrWhiteSpace(proxyRequest.ResultIndex))
+                            {
+                                var quoteKey = $"srdv:flight:quote:{proxyRequest.TraceId}:{proxyRequest.ResultIndex.Trim()}";
+                                memoryCache.Set(quoteKey, new PickNBook.Api.Models.DTOs.FlightQuoteCacheItem
+                                {
+                                    SupplierBaseFare = baseFare,
+                                    SupplierTaxAmount = tax,
+                                    OfferedFare = offeredFare,
+                                    FinalPayableAmount = pricingBreakdown.FinalAmount,
+                                    QuotedAtUtc = DateTime.UtcNow
+                                }, TimeSpan.FromMinutes(25));
+                            }
                         }
                     }
                 }
@@ -958,13 +1006,23 @@ namespace PickNBook.Api.Controllers.Public
 
             try
             {
+                var targetResultIndex = proxyRequest.ResultIndex.Trim();
+                if (targetResultIndex.Contains(','))
+                {
+                    var firstIdx = targetResultIndex.Split(',').Select(p => p.Trim()).FirstOrDefault(p => !string.IsNullOrEmpty(p));
+                    if (!string.IsNullOrEmpty(firstIdx))
+                    {
+                        targetResultIndex = firstIdx;
+                    }
+                }
+
                 var request = new AirFareRuleRequestDto
                 {
                     EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                     SrdvType = proxyRequest.SrdvType ?? string.Empty,
                     SrdvIndex = proxyRequest.SrdvIndex ?? string.Empty,
                     TraceId = proxyRequest.TraceId,
-                    ResultIndex = proxyRequest.ResultIndex
+                    ResultIndex = targetResultIndex
                 };
                 var responseRaw = await _srdvFlightService.GetSSRRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
@@ -989,13 +1047,23 @@ namespace PickNBook.Api.Controllers.Public
 
             try
             {
+                var targetResultIndex = proxyRequest.ResultIndex.Trim();
+                if (targetResultIndex.Contains(','))
+                {
+                    var firstIdx = targetResultIndex.Split(',').Select(p => p.Trim()).FirstOrDefault(p => !string.IsNullOrEmpty(p));
+                    if (!string.IsNullOrEmpty(firstIdx))
+                    {
+                        targetResultIndex = firstIdx;
+                    }
+                }
+
                 var request = new AirFareRuleRequestDto
                 {
                     EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                     SrdvType = proxyRequest.SrdvType ?? string.Empty,
                     SrdvIndex = proxyRequest.SrdvIndex ?? string.Empty,
                     TraceId = proxyRequest.TraceId,
-                    ResultIndex = proxyRequest.ResultIndex
+                    ResultIndex = targetResultIndex
                 };
                 var responseRaw = await _srdvFlightService.GetSeatMapRawAsync(request);
                 var outNode = JsonNode.Parse(responseRaw);
@@ -3447,17 +3515,17 @@ namespace PickNBook.Api.Controllers.Public
             var (isAllowed, authError, currentUserId, isPartnerApi) = await ValidateV8AuthAndWhitelistAsync();
             if (!isAllowed) return authError!;
 
-            if (proxyRequest == null || proxyRequest.ChangeRequestId <= 0)
+            if (proxyRequest == null || string.IsNullOrWhiteSpace(proxyRequest.ChangeRequestId))
             {
                 return BadRequest(new SrdvV8ErrorResponseDto
                 {
-                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "A valid positive ChangeRequestId is required." }
+                    Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "A valid ChangeRequestId is required." }
                 });
             }
 
             try
             {
-                var crIdStr = proxyRequest.ChangeRequestId.ToString();
+                var crIdStr = proxyRequest.ChangeRequestId.Trim();
                 var cancelReq = await _dbContext.FlightCancellationRequests
                     .Include(c => c.FlightReservation)
                     .FirstOrDefaultAsync(c => c.SrdvChangeRequestId == crIdStr);
@@ -3491,9 +3559,17 @@ namespace PickNBook.Api.Controllers.Public
                     });
                 }
 
+                if (!long.TryParse(crIdStr, out var numericCrId) || numericCrId <= 0)
+                {
+                    return BadRequest(new SrdvV8ErrorResponseDto
+                    {
+                        Error = new SrdvV8ErrorDto { ErrorCode = 1, ErrorMessage = "A valid positive numeric ChangeRequestId is required for live supplier polling." }
+                    });
+                }
+
                 var request = new GetCancelStatusRequestDto
                 {
-                    ChangeRequestId = proxyRequest.ChangeRequestId
+                    ChangeRequestId = numericCrId
                 };
                 var responseRaw = await _srdvFlightService.GetCancelStatusRawAsync(request);
                 using var doc = JsonDocument.Parse(responseRaw);
@@ -3542,13 +3618,16 @@ namespace PickNBook.Api.Controllers.Public
                         if (string.Equals(cStatus, "CANCELLED", StringComparison.OrdinalIgnoreCase) ||
                             string.Equals(cStatus, "Cancelled", StringComparison.OrdinalIgnoreCase) ||
                             string.Equals(cStatus, "Completed", StringComparison.OrdinalIgnoreCase) ||
-                            cStatus == "3" || cStatus == "4")
+                            cStatus == "3")
                         {
                             cancelReq.FlightReservation.Status = cancelReq.IsPartialCancellation ? "Partially Cancelled" : "Cancelled";
                             cancelReq.FlightReservation.CancelledAtUtc ??= DateTime.UtcNow;
                         }
-                        else if (cStatus == "FAILED")
+                        else if (string.Equals(cStatus, "FAILED", StringComparison.OrdinalIgnoreCase) || cStatus == "4")
                         {
+                            cancelReq.CancellationStatus = "Rejected";
+                            cancelReq.CustomerRefundStatus = "Rejected";
+                            cancelReq.AdminRefundStatus = "Rejected";
                             cancelReq.FlightReservation.Status = "Booked";
                         }
                     }

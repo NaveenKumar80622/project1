@@ -15,4 +15,13 @@ namespace PickNBook.Api.Models.DTOs
         public int? CouponId { get; set; }
         public string? CouponCode { get; set; }
     }
+
+    public class FlightQuoteCacheItem
+    {
+        public decimal SupplierBaseFare { get; set; }
+        public decimal SupplierTaxAmount { get; set; }
+        public decimal OfferedFare { get; set; }
+        public decimal FinalPayableAmount { get; set; }
+        public DateTime QuotedAtUtc { get; set; } = DateTime.UtcNow;
+    }
 }

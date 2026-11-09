@@ -17,5 +17,7 @@ namespace PickNBook.Api.Models.Payments
         public string? FailureReason { get; set; }
         public string? FulfillmentStatus { get; set; }
         public int? BookingReferenceId { get; set; }
+        public int? ReservationId { get; set; }
+        public string? BookingReference { get; set; }
     }
 }
