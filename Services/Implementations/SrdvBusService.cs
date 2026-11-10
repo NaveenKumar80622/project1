@@ -161,6 +161,21 @@ namespace PickNBook.Api.Services
                 return Task.FromResult(new List<BusCityDto>());
             }
 
+            if (_cityCache != null)
+            {
+                var places = _cityCache.SearchBusCities(query, limit: 20);
+                if (places != null && places.Count > 0)
+                {
+                    var dtos = places.Select(p => new BusCityDto
+                    {
+                        CityId = !string.IsNullOrEmpty(p.SearchCityId) ? p.SearchCityId : (p.CityId ?? p.CityCode ?? string.Empty),
+                        CityName = p.DisplayName ?? p.CityName,
+                        StateName = p.StateName ?? string.Empty
+                    }).ToList();
+                    return Task.FromResult(dtos);
+                }
+            }
+
             EnsureCityMappingLoaded();
 
             if (_busCitiesList == null)
@@ -173,6 +188,7 @@ namespace PickNBook.Api.Services
                 .Where(c => c.CityName.Contains(trimmedQuery, StringComparison.OrdinalIgnoreCase))
                 .OrderByDescending(c => c.CityName.Equals(trimmedQuery, StringComparison.OrdinalIgnoreCase))
                 .ThenByDescending(c => c.CityName.StartsWith(trimmedQuery, StringComparison.OrdinalIgnoreCase))
+                .ThenBy(c => System.Text.RegularExpressions.Regex.IsMatch(c.CityName, @"\b(bypass|by pass|toll|cross|ring road)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? 1 : 0)
                 .ThenBy(c => c.CityName.Length)
                 .ThenBy(c => c.CityName)
                 .Take(20)

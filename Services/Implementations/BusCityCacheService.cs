@@ -51,9 +51,10 @@ namespace PickNBook.Api.Services
             { 26130, new List<long> { 9, 6216 } },
             { 6216, new List<long> { 9, 26130 } },
 
-            // Anantapur (7) <-> Ananthapur (Sagara) (22064)
-            { 7, new List<long> { 22064 } },
-            { 22064, new List<long> { 7 } },
+            // Anantapur (7) <-> Ananthapur (Sagara) (22064) <-> Anantapur Bypass (3726)
+            { 7, new List<long> { 22064, 3726 } },
+            { 22064, new List<long> { 7, 3726 } },
+            { 3726, new List<long> { 7, 22064 } },
 
             // Bangalore (4) <-> Hosur (1625)
             { 4, new List<long> { 1625 } },
@@ -270,6 +271,11 @@ namespace PickNBook.Api.Services
                         {
                             list.Add(c.ParentCityId.Value);
                         }
+
+                        if (!canonicalMap.ContainsKey(c.CityId))
+                        {
+                            canonicalMap[c.CityId] = c.ParentCityId.Value;
+                        }
                     }
                 }
 
@@ -287,6 +293,33 @@ namespace PickNBook.Api.Services
                         {
                             list.Add(target);
                         }
+                    }
+
+                    // Reciprocal twin aliases for static clusters
+                    if (!twinAliases.TryGetValue(kvp.Key, out var tList))
+                    {
+                        tList = new List<long> { kvp.Key };
+                        twinAliases[kvp.Key] = tList;
+                    }
+                    foreach (var target in kvp.Value)
+                    {
+                        if (validIds.Contains(target) && !tList.Contains(target))
+                        {
+                            tList.Add(target);
+                        }
+                    }
+
+                    // Map static cluster member to primary hub (highest child stop count or lowest id)
+                    var allCluster = new HashSet<long>(kvp.Value) { kvp.Key };
+                    var primaryHub = allCluster
+                        .Where(id => validIds.Contains(id))
+                        .OrderByDescending(id => childCounts.GetValueOrDefault(id, 0))
+                        .ThenBy(id => id)
+                        .FirstOrDefault();
+
+                    if (primaryHub > 0 && !canonicalMap.ContainsKey(kvp.Key))
+                    {
+                        canonicalMap[kvp.Key] = primaryHub;
                     }
                 }
 
