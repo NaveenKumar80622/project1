@@ -762,8 +762,28 @@ namespace PickNBook.Api.Controllers.Public
         {
             try
             {
+                if (proxyRequest == null)
+                {
+                    return BadRequest(new { Error = new { ErrorCode = 1003, ErrorMessage = "Invalid Request" } });
+                }
+
+                var origin = (!string.IsNullOrWhiteSpace(proxyRequest.Origin)
+                    ? proxyRequest.Origin
+                    : proxyRequest.Segments?.FirstOrDefault()?.Origin ?? "").Trim().ToUpperInvariant();
+
+                var destination = (!string.IsNullOrWhiteSpace(proxyRequest.Destination)
+                    ? proxyRequest.Destination
+                    : proxyRequest.Segments?.FirstOrDefault()?.Destination ?? "").Trim().ToUpperInvariant();
+
+                var month = (!string.IsNullOrWhiteSpace(proxyRequest.Month)
+                    ? proxyRequest.Month
+                    : proxyRequest.Segments?.FirstOrDefault()?.PreferredDepartureTime.ToString("yyyy-MM") ?? DateTime.Now.ToString("yyyy-MM")).Trim();
+
                 var request = new CalendarFareRequestDto
                 {
+                    Origin = origin,
+                    Destination = destination,
+                    Month = month,
                     EndUserIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1",
                     JourneyType = proxyRequest.JourneyType,
                     Sources = proxyRequest.Sources,

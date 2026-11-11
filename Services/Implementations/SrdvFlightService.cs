@@ -914,19 +914,31 @@ namespace PickNBook.Api.Services
                 ? _settings.ApiToken
                 : request.ApiToken.Trim();
 
+            var origin = !string.IsNullOrWhiteSpace(request.Origin)
+                ? request.Origin.Trim().ToUpperInvariant()
+                : (request.Segments?.FirstOrDefault()?.Origin?.Trim().ToUpperInvariant() ?? "");
+
+            var destination = !string.IsNullOrWhiteSpace(request.Destination)
+                ? request.Destination.Trim().ToUpperInvariant()
+                : (request.Segments?.FirstOrDefault()?.Destination?.Trim().ToUpperInvariant() ?? "");
+
+            var month = !string.IsNullOrWhiteSpace(request.Month)
+                ? request.Month.Trim()
+                : (request.Segments?.FirstOrDefault()?.PreferredDepartureTime.ToString("yyyy-MM") ?? DateTime.Now.ToString("yyyy-MM"));
+
             var requestBody = new
             {
+                Origin = origin,
+                Destination = destination,
+                Month = month,
                 EndUserIp = endUserIp,
                 ClientId = clientId,
                 UserName = userName,
-                Password = password,
-                JourneyType = request.JourneyType,
-                Sources = request.Sources,
-                FareType = request.FareType,
-                Segments = request.Segments
+                Password = password
             };
 
-            var requestMessage = new HttpRequestMessage(HttpMethod.Post, $"{_settings.FlightBaseUrl}/GetCalendarFare")
+            var url = $"{_settings.FlightBaseUrl.TrimEnd('/')}/GetCalendarFare";
+            var requestMessage = new HttpRequestMessage(HttpMethod.Post, url)
             {
                 Content = JsonContent.Create(requestBody, options: _jsonOptions)
             };
@@ -937,9 +949,13 @@ namespace PickNBook.Api.Services
             }
 
             var response = await _httpClient.SendAsync(requestMessage);
-            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("SRDV GetCalendarFare responded with {StatusCode}: {Content}", response.StatusCode, content);
+            }
 
-            return await response.Content.ReadAsStringAsync();
+            return content;
         }
 
         public async Task<string> SendChangeRequestRawAsync(SendChangeRequestDto request)

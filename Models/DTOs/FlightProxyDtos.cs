@@ -269,6 +269,14 @@ namespace PickNBook.Api.Models.DTOs
 
     public class FlightCalendarFareProxyRequestDto
     {
+        [JsonPropertyName("Origin")]
+        public string? Origin { get; set; }
+
+        [JsonPropertyName("Destination")]
+        public string? Destination { get; set; }
+
+        [JsonPropertyName("Month")]
+        public string? Month { get; set; }
 
         [JsonPropertyName("JourneyType")]
         public int JourneyType { get; set; }

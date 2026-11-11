@@ -568,6 +568,15 @@ namespace PickNBook.Api.Models.DTOs
 
     public class CalendarFareRequestDto
     {
+        [JsonPropertyName("Origin")]
+        public string Origin { get; set; } = string.Empty;
+
+        [JsonPropertyName("Destination")]
+        public string Destination { get; set; } = string.Empty;
+
+        [JsonPropertyName("Month")]
+        public string Month { get; set; } = string.Empty;
+
         [JsonPropertyName("EndUserIp")]
         public string EndUserIp { get; set; } = string.Empty;
 
