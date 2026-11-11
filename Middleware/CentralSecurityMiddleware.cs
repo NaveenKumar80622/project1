@@ -34,7 +34,7 @@ namespace PickNBook.Api.Middleware
 
             // 2. Identify Scope
             string scope = "USER";
-            if (path.StartsWith("/api/v1/admin")) scope = "ADMIN";
+            if (path.StartsWith("/api/v1/admin") || path.StartsWith("/api/securityadmin")) scope = "ADMIN";
             else if (path.StartsWith("/api/v1/b2b")) scope = "B2B";
 
             // 3. Identify Account from User context (Assumes JWT auth has populated User.Identity)

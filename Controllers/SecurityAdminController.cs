@@ -16,6 +16,8 @@ using System.Threading.Tasks;
 namespace PickNBook.Api.Controllers
 {
     [Route("api/v1/admin/security")]
+    [Route("api/SecurityAdmin")]
+    [Route("api/[controller]")]
     [ApiController]
     [Authorize(Roles = "Admin,SuperAdmin")]
     public class SecurityAdminController : ControllerBase
@@ -360,7 +362,10 @@ namespace PickNBook.Api.Controllers
         }
 
         [HttpGet("locked-accounts")]
-        public async Task<IActionResult> GetLockedAccounts([FromQuery] string? search = null)
+        public async Task<IActionResult> GetLockedAccounts(
+            [FromQuery] string? search = null,
+            [FromQuery] string? status = null,
+            [FromQuery] bool includeExpired = false)
         {
             var now = DateTime.UtcNow;
 
@@ -384,44 +389,88 @@ namespace PickNBook.Api.Controllers
                 }
             }
 
-            // 2. Query active locks
-            var query = _context.UserLockouts
-                .AsNoTracking()
-                .Where(x => x.Status == "Locked" && x.UnlockAt > now);
+            // 2. Query locks
+            var query = _context.UserLockouts.AsNoTracking();
+
+            bool showAllOrExpired = includeExpired || string.Equals(status, "all", StringComparison.OrdinalIgnoreCase) || !string.IsNullOrWhiteSpace(search);
+            if (string.Equals(status, "unlocked", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(x => x.Status == "Unlocked");
+            }
+            else if (!showAllOrExpired)
+            {
+                // Default: active locks only
+                query = query.Where(x => x.Status == "Locked" && x.UnlockAt > now);
+            }
+            else if (string.IsNullOrWhiteSpace(search) && includeExpired)
+            {
+                // includeExpired without search: active or recent expired within 7 days
+                query = query.Where(x => (x.Status == "Locked" && x.UnlockAt > now) || x.LockedOn >= now.AddDays(-7));
+            }
 
             if (!string.IsNullOrWhiteSpace(search))
             {
                 var term = search.Trim().ToLower();
+
+                // Match user IDs by Phone Number, Email, Name, or Id in Users table
+                var matchedUserIds = await _context.Users
+                    .AsNoTracking()
+                    .Where(u =>
+                        (u.PhoneNumber != null && u.PhoneNumber.Contains(term)) ||
+                        (u.Email != null && u.Email.ToLower().Contains(term)) ||
+                        ((u.FirstName != null ? u.FirstName : "") + " " + (u.LastName != null ? u.LastName : "")).ToLower().Contains(term) ||
+                        u.Id.ToString().Contains(term))
+                    .Select(u => u.Id.ToString())
+                    .ToListAsync();
+
                 query = query.Where(x =>
                     (x.Email != null && x.Email.ToLower().Contains(term)) ||
                     (x.UserName != null && x.UserName.ToLower().Contains(term)) ||
-                    (x.UserId != null && x.UserId.Contains(term)));
+                    (x.UserId != null && (x.UserId.Contains(term) || matchedUserIds.Contains(x.UserId))));
             }
 
             var activeLocks = await query
                 .OrderByDescending(x => x.LockedOn)
                 .ToListAsync();
 
-            var result = activeLocks.Select(x => new
+            // Enrich with Phone Number from Users table
+            var userIds = activeLocks
+                .Select(x => int.TryParse(x.UserId, out var uid) ? uid : 0)
+                .Where(x => x > 0)
+                .Distinct()
+                .ToList();
+
+            var userMap = await _context.Users
+                .AsNoTracking()
+                .Where(u => userIds.Contains(u.Id))
+                .ToDictionaryAsync(u => u.Id.ToString(), u => u);
+
+            var result = activeLocks.Select(x =>
             {
-                x.Id,
-                x.UserId,
-                x.UserName,
-                x.Email,
-                x.FailedAttempts,
-                x.MaxAllowedAttempts,
-                x.LockedOn,
-                x.UnlockAt,
-                RemainingMinutes = Math.Max(0, (int)Math.Ceiling((x.UnlockAt - now).TotalMinutes)),
-                LockType = (x.UnlockAt - x.LockedOn).TotalMinutes > 30 ? "24 Hours" : "15 Minutes",
-                x.Reason,
-                x.Status
+                userMap.TryGetValue(x.UserId, out var u);
+                var isCurrentlyLocked = x.Status == "Locked" && x.UnlockAt > now;
+                return new
+                {
+                    x.Id,
+                    x.UserId,
+                    UserName = !string.IsNullOrWhiteSpace(x.UserName) ? x.UserName : (u != null ? $"{u.FirstName} {u.LastName}".Trim() : ""),
+                    Email = !string.IsNullOrWhiteSpace(x.Email) ? x.Email : (u?.Email ?? ""),
+                    PhoneNumber = u?.PhoneNumber ?? "",
+                    x.FailedAttempts,
+                    x.MaxAllowedAttempts,
+                    x.LockedOn,
+                    x.UnlockAt,
+                    RemainingMinutes = isCurrentlyLocked ? Math.Max(0, (int)Math.Ceiling((x.UnlockAt - now).TotalMinutes)) : 0,
+                    LockType = (x.UnlockAt - x.LockedOn).TotalMinutes > 30 ? "24 Hours" : "15 Minutes",
+                    x.Reason,
+                    Status = isCurrentlyLocked ? "Locked" : "Unlocked"
+                };
             }).ToList();
 
             return Ok(new
             {
                 success = true,
-                count = activeLocks.Count,
+                count = result.Count,
                 data = result
             });
         }
@@ -492,39 +541,48 @@ namespace PickNBook.Api.Controllers
         {
             if (string.IsNullOrWhiteSpace(id))
             {
-                return BadRequest(new { success = false, message = "Lockout ID or User ID is required." });
+                return BadRequest(new { success = false, message = "Lockout ID, User ID, Mobile Number, or Email is required." });
             }
 
             var cleanId = id.Trim();
-            var acc = await _context.UserLockouts
-                .Where(x => x.Id == cleanId || x.UserId == cleanId)
-                .OrderByDescending(x => x.LockedOn)
-                .FirstOrDefaultAsync();
 
-            if (acc == null)
+            // 1. Try to find user by ID, Phone Number, or Email
+            var user = await _context.Users
+                .FirstOrDefaultAsync(u => u.Id.ToString() == cleanId || u.PhoneNumber == cleanId || (u.Email != null && u.Email.ToLower() == cleanId.ToLower()));
+
+            string targetUserId = user != null ? user.Id.ToString() : cleanId;
+
+            // 2. Fetch all lockout records matching either the record ID or the target User ID
+            var recordsToUnlock = await _context.UserLockouts
+                .Where(x => x.Id == cleanId || x.UserId == targetUserId || x.UserId == cleanId)
+                .ToListAsync();
+
+            if (!recordsToUnlock.Any())
             {
-                return NotFound(new { success = false, message = "No lockout record found for the specified ID or User ID." });
+                return NotFound(new { success = false, message = "No lockout record found for the specified ID, User ID, Mobile number, or Email." });
             }
 
-            acc.Status = "Unlocked";
-            acc.FailedAttempts = 0;
-            acc.UnlockAt = DateTime.UtcNow;
+            var now = DateTime.UtcNow;
+            foreach (var acc in recordsToUnlock)
+            {
+                acc.Status = "Unlocked";
+                acc.FailedAttempts = 0;
+                acc.UnlockAt = now;
+            }
 
             await _context.SaveChangesAsync();
-            
-            await _securityService.LogAuditAsync("ACCOUNT_UNLOCKED", "Unlock Account", "Success", "", userId: acc.UserId, reason: $"Unlocked by admin for {acc.Email ?? acc.UserName}");
+
+            var primaryAcc = recordsToUnlock.OrderByDescending(x => x.LockedOn).First();
+            var displayName = !string.IsNullOrWhiteSpace(primaryAcc.UserName) ? primaryAcc.UserName : (user != null ? $"{user.FirstName} {user.LastName}".Trim() : primaryAcc.UserId);
+            var notifyEmail = !string.IsNullOrWhiteSpace(primaryAcc.Email) ? primaryAcc.Email : user?.Email;
+
+            await _securityService.LogAuditAsync("ACCOUNT_UNLOCKED", "Unlock Account", "Success", "", userId: primaryAcc.UserId, reason: $"Unlocked by admin for {notifyEmail ?? displayName}");
 
             // Send Email to User
-            User? user = null;
-            if (int.TryParse(acc.UserId, out int uIdInt))
+            if (user == null && int.TryParse(primaryAcc.UserId, out int uIdInt))
             {
                 user = await _context.Users.FindAsync(uIdInt);
             }
-            if (user == null && !string.IsNullOrWhiteSpace(acc.Email))
-            {
-                user = await _context.Users.FirstOrDefaultAsync(u => u.Email == acc.Email);
-            }
-
             if (user != null && !string.IsNullOrWhiteSpace(user.Email))
             {
                 try
@@ -538,7 +596,7 @@ namespace PickNBook.Api.Controllers
             }
 
             // Send Notification Email to Security Admin
-            var adminSubject = $"[Security Notice] Account Unlocked: {acc.Email ?? acc.UserName ?? acc.UserId}";
+            var adminSubject = $"[Security Notice] Account Unlocked: {notifyEmail ?? displayName ?? primaryAcc.UserId}";
             var adminBody = $@"
 <!DOCTYPE html>
 <html>
@@ -547,9 +605,9 @@ namespace PickNBook.Api.Controllers
         <h2 style='color: #16a34a; margin-top: 0;'>🔓 Account Unlocked</h2>
         <p>A locked user account has been successfully unlocked by the administrator.</p>
         <table style='width: 100%; border-collapse: collapse; margin: 16px 0;'>
-            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User ID</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{acc.UserId}</td></tr>
-            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Email</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{acc.Email}</td></tr>
-            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User Name</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{acc.UserName}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User ID</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{primaryAcc.UserId}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Email</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{notifyEmail ?? "N/A"}</td></tr>
+            <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>User Name</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{displayName}</td></tr>
             <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Unlocked At (UTC)</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC</td></tr>
             <tr><td style='padding: 8px; border-bottom: 1px solid #edf2f7; font-weight: bold;'>Status</td><td style='padding: 8px; border-bottom: 1px solid #edf2f7;'>Unlocked</td></tr>
         </table>
@@ -562,14 +620,15 @@ namespace PickNBook.Api.Controllers
             return Ok(new
             {
                 success = true,
-                message = $"Account for {acc.Email ?? acc.UserName} has been unlocked successfully.",
+                message = $"Account for {notifyEmail ?? displayName} has been unlocked successfully.",
                 data = new
                 {
-                    acc.Id,
-                    acc.UserId,
-                    acc.UserName,
-                    acc.Email,
-                    acc.Status
+                    primaryAcc.Id,
+                    primaryAcc.UserId,
+                    UserName = displayName,
+                    Email = notifyEmail,
+                    PhoneNumber = user?.PhoneNumber ?? "",
+                    Status = "Unlocked"
                 }
             });
         }

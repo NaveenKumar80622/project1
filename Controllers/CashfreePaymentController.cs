@@ -543,6 +543,23 @@ namespace PickNBook.Api.Controllers
                             }
                         }
 
+                        // Frontend reconciles hotel fares at whole-rupee integer scale (Math.round).
+                        // If calculated final amount and customer order/payload amount match within whole-rupee rounding (<= ₹1.00),
+                        // align calculatedFinalAmount to the rounded rupee amount agreed upon by the customer.
+                        decimal roundedHotelAmount = Math.Round(calculatedFinalAmount, 0, MidpointRounding.AwayFromZero);
+                        if (payload.Price > 0m && Math.Abs(payload.Price - calculatedFinalAmount) <= 1.00m)
+                        {
+                            calculatedFinalAmount = payload.Price;
+                        }
+                        else if (Math.Abs(request.OrderAmount - calculatedFinalAmount) <= 1.00m)
+                        {
+                            calculatedFinalAmount = request.OrderAmount;
+                        }
+                        else
+                        {
+                            calculatedFinalAmount = roundedHotelAmount;
+                        }
+
                         // Pre-payment Strict Sufficient Funds Gate for Hotel (SRDV /v8/Balance)
                         // Verifies supplier AvailableBalance before creating Cashfree order / redirecting to gateway
                         var hotelService = HttpContext.RequestServices.GetService<PickNBook.Api.Services.IHotelService>();
@@ -930,10 +947,19 @@ namespace PickNBook.Api.Controllers
                     // Strict Price Parity Check (Rounded) when customer is paying full Cashfree
                     if (!isWalletPaymentRequested)
                     {
-                        if (Math.Round(totalFare, 2) != Math.Round(request.OrderAmount, 2))
+                        decimal parityDifference = Math.Abs(Math.Round(totalFare, 2) - Math.Round(request.OrderAmount, 2));
+                        decimal allowedParityTolerance = (request.BookingType == BookingType.Hotel) ? 1.00m : 0.05m;
+
+                        if (parityDifference > allowedParityTolerance)
                         {
                             _logger.LogWarning("Price mismatch detected. Frontend sent {FrontendAmount}, Backend calculated {BackendAmount}", request.OrderAmount, totalFare);
                             return BadRequest(new { message = $"Price mismatch. The calculated final amount is {Math.Round(totalFare, 2)}, but the request specified {Math.Round(request.OrderAmount, 2)}. Please refresh the pricing." });
+                        }
+                        else if (parityDifference > 0m)
+                        {
+                            // Align totalFare with request.OrderAmount within allowed rounding tolerance
+                            totalFare = request.OrderAmount;
+                            calculatedFinalAmount = request.OrderAmount;
                         }
                     }
 
