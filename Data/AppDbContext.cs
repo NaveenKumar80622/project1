@@ -788,6 +788,7 @@ namespace PickNBook.Api.Data
                 entity.Property(x => x.NetFareInr).HasPrecision(10, 2);
                 entity.Property(x => x.DiscountAmountInr).HasPrecision(10, 2);
                 entity.Property(x => x.ConvenienceFeeInr).HasPrecision(10, 2);
+                entity.Property(x => x.TaxInr).HasPrecision(18, 2);
                 entity.Property(x => x.CouponCode).HasMaxLength(40);
                 entity.Property(x => x.CancellationChargeInr).HasPrecision(10, 2);
                 entity.Property(x => x.RefundAmountInr).HasPrecision(10, 2);
@@ -1223,6 +1224,9 @@ namespace PickNBook.Api.Data
                 entity.Property(x => x.CancellationCharges).HasPrecision(10, 2);
                 entity.Property(x => x.RefundAmount).HasPrecision(10, 2);
                 entity.Property(x => x.CouponDiscount).HasPrecision(10, 2);
+                entity.Property(x => x.Tax).HasPrecision(18, 2);
+                entity.Property(x => x.TaxableAmount).HasPrecision(18, 2);
+                entity.Property(x => x.TotalGSTAmount).HasPrecision(18, 2);
                 entity.Property(x => x.CouponCode).HasMaxLength(40);
                 entity.Property(x => x.TraceId).HasMaxLength(80);
                 entity.Property(x => x.SrdvBookingId).HasMaxLength(80);

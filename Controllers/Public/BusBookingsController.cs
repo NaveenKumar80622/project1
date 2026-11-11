@@ -1809,6 +1809,11 @@ namespace PickNBook.Api.Controllers
                                     TotalPriceInr = totalBlockedFare,
                                     CustomerFareInr = totalBlockedFare,
                                     NetFareInr = totalBlockedFare,
+                                    BaseFareInr = blockedSeatsInDb.Sum(b => b.BaseFare) > 0 ? blockedSeatsInDb.Sum(b => b.BaseFare) : totalBlockedFare,
+                                    TaxInr = blockedSeatsInDb.Sum(b => b.Tax),
+                                    TaxableFareInr = blockedSeatsInDb.Sum(b => b.GstTaxableAmount > 0 ? b.GstTaxableAmount : b.BaseFare) > 0 ? blockedSeatsInDb.Sum(b => b.GstTaxableAmount > 0 ? b.GstTaxableAmount : b.BaseFare) : totalBlockedFare,
+                                    GstAmountInr = blockedSeatsInDb.Sum(b => b.GstAmount),
+                                    GstPercent = blockedSeatsInDb.Sum(b => b.GstTaxableAmount > 0 ? b.GstTaxableAmount : b.BaseFare) > 0 && blockedSeatsInDb.Sum(b => b.GstAmount) > 0 ? Math.Round((blockedSeatsInDb.Sum(b => b.GstAmount) / blockedSeatsInDb.Sum(b => b.GstTaxableAmount > 0 ? b.GstTaxableAmount : b.BaseFare)) * 100m, 2) : 0m,
                                     Status = BusBookingStatus.Success,
                                     BookedAtUtc = DateTime.UtcNow,
                                     SrdvBookingId = bookingIdStr,
@@ -1837,6 +1842,7 @@ namespace PickNBook.Api.Controllers
                                             BaseFareInr = blockedSeat?.BaseFare ?? 0m,
                                             PublishedFareInr = blockedSeat?.PublishedFare ?? 0m,
                                             OfferedFareInr = blockedSeat?.BaseFare ?? 0m,
+                                            TaxInr = blockedSeat?.Tax ?? 0m,
                                             GstAmountInr = blockedSeat?.GstAmount ?? 0m,
                                             LeadPassenger = pax.LeadPassenger == true
                                         };
@@ -2349,11 +2355,12 @@ namespace PickNBook.Api.Controllers
                             TotalPriceInr = pricing.GrandTotal,
                             CustomerFareInr = pricing.GrandTotal,
                             NetFareInr = pricing.SubtotalBeforeCoupon,
-                            BaseFareInr = pricing.Seats.Sum(x => x.BaseFare),
+                            BaseFareInr = blockedSeats.Any(b => b.BaseFare > 0) ? blockedSeats.Sum(b => b.BaseFare) : pricing.Seats.Sum(x => x.BaseFare),
+                            TaxInr = blockedSeats.Sum(b => b.Tax),
                             MarkupAmountInr = pricing.Seats.Sum(x => x.MarkupAmount),
-                            TaxableFareInr = pricing.TaxableFare,
+                            TaxableFareInr = blockedSeats.Any(b => b.GstTaxableAmount > 0) ? blockedSeats.Sum(b => b.GstTaxableAmount) : pricing.TaxableFare,
                             GstPercent = pricing.GstPercent,
-                            GstAmountInr = pricing.GstAmount,
+                            GstAmountInr = blockedSeats.Any(b => b.GstAmount > 0) ? blockedSeats.Sum(b => b.GstAmount) : pricing.GstAmount,
                             DiscountAmountInr = pricing.TotalDiscount,
                             ConvenienceFeeInr = pricing.ConvenienceFee,
                             CouponCode = pricing.AppliedPromotionCode ?? pricing.AutoPromotionCode,
@@ -2493,7 +2500,7 @@ namespace PickNBook.Api.Controllers
                                 Age = p.Age,
                                 PublishedFareInr = blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare : blockedSeat.BaseFare,
                                 GstAmountInr = blockedSeat.GstAmount,
-                                TaxInr = blockedSeat.GstAmount,
+                                TaxInr = blockedSeat.Tax > 0 ? blockedSeat.Tax : blockedSeat.GstAmount,
                                 OfferedFareInr = blockedSeat.GrandTotal > 0 ? (blockedSeat.GrandTotal - blockedSeat.GstAmount) : (blockedSeat.PublishedFare > 0 ? blockedSeat.PublishedFare - blockedSeat.DiscountAmount : blockedSeat.BaseFare)
                             });
                         }

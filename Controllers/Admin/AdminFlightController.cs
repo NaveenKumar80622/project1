@@ -173,7 +173,46 @@ namespace PickNBook.Api.Controllers
                 var netFare = x.NetFareInr > 0 ? x.NetFareInr : x.TotalPriceInr;
                 var profit = (customerFare - netFare) + convenienceFee;
 
+                decimal resolvedBaseFare = x.SupplierBaseFare;
+                decimal resolvedTax = x.SupplierTaxAmount;
+                if ((resolvedBaseFare == 0m || resolvedTax == 0m) && !string.IsNullOrWhiteSpace(x.SrdvTicketResponseJson) && x.SrdvTicketResponseJson.TrimStart().StartsWith("{"))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(x.SrdvTicketResponseJson);
+                        var root = doc.RootElement;
+                        var resp = root.TryGetProperty("Response", out var rNode) ? rNode : root;
+                        System.Text.Json.JsonElement fareEl = default;
+                        if (resp.TryGetProperty("FlightItinerary", out var fi) && fi.TryGetProperty("Fare", out var itinFare))
+                            fareEl = itinFare;
+                        else if (resp.TryGetProperty("Fare", out var dFare))
+                            fareEl = dFare;
 
+                        if (fareEl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            if (resolvedBaseFare == 0m && fareEl.TryGetProperty("BaseFare", out var bf) && decimal.TryParse(bf.ToString(), out var bVal))
+                                resolvedBaseFare = bVal;
+                            if (resolvedTax == 0m && fareEl.TryGetProperty("Tax", out var tx) && decimal.TryParse(tx.ToString(), out var tVal))
+                                resolvedTax = tVal;
+                        }
+
+                        if (resolvedBaseFare == 0m && resolvedTax == 0m && resp.TryGetProperty("FlightItinerary", out var fi2) &&
+                            fi2.TryGetProperty("Passenger", out var ticketPaxList) && ticketPaxList.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        {
+                            foreach (var pEl in ticketPaxList.EnumerateArray())
+                            {
+                                if (pEl.TryGetProperty("Fare", out var pFare) && pFare.ValueKind == System.Text.Json.JsonValueKind.Object)
+                                {
+                                    if (pFare.TryGetProperty("BaseFare", out var pbf) && decimal.TryParse(pbf.ToString(), out var pbVal))
+                                        resolvedBaseFare += pbVal;
+                                    if (pFare.TryGetProperty("Tax", out var ptx) && decimal.TryParse(ptx.ToString(), out var ptVal))
+                                        resolvedTax += ptVal;
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+                }
 
                 return new AdminFlightBookingResponseDto
                 {
@@ -212,14 +251,14 @@ namespace PickNBook.Api.Controllers
                     Passengers = passengerDtos,
 
                     // Financial breakdown
-                    BaseFareInr = x.SupplierBaseFare,
-                    TaxInr = x.SupplierTaxAmount,
+                    BaseFareInr = resolvedBaseFare,
+                    TaxInr = resolvedTax,
                     MarkupAmountInr = x.MarkupAmount > 0 ? x.MarkupAmount : x.B2CMarkupAmountInr,
                     DiscountAmountInr = x.DiscountAmountInr > 0 ? x.DiscountAmountInr : x.B2CDiscountAmountInr,
                     ConvenienceFeeInr = convenienceFee,
                     SsrAmountInr = x.SsrAmountInr,
                     CustomerFareInr = customerFare,
-                    NetFareInr = netFare,
+                    NetFareInr = 0m,
                     ProfitInr = profit,
 
                     // Source from Payments table

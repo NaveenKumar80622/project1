@@ -546,6 +546,12 @@ namespace PickNBook.Api.Services.Implementations
                         ? resolvedBpName 
                         : (bus.BoardingPoint ?? "Default Point"));
 
+                decimal busTotalBaseFare = authoritativeBlockedSeats.Sum(x => x.BlockedSeat != null ? x.BlockedSeat.BaseFare : x.Passenger.BaseFare);
+                decimal busTotalTax = authoritativeBlockedSeats.Sum(x => x.BlockedSeat != null ? x.BlockedSeat.Tax : 0m);
+                decimal busTotalGstTaxable = authoritativeBlockedSeats.Sum(x => x.BlockedSeat != null ? x.BlockedSeat.GstTaxableAmount : 0m);
+                decimal busTotalGstAmount = authoritativeBlockedSeats.Sum(x => x.BlockedSeat != null ? x.BlockedSeat.GstAmount : 0m);
+                if (busTotalGstTaxable == 0m && busTotalBaseFare > 0m) busTotalGstTaxable = busTotalBaseFare;
+
                 // Extract pricing exactly as calculated in Phase 1.5 from the payment object
                 var reservation = new BusReservation
                 {
@@ -563,11 +569,12 @@ namespace PickNBook.Api.Services.Implementations
                     WalletPaidAmount = payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     NetFareInr = payment.OriginalAmount,
-                    BaseFareInr = payment.OriginalAmount, // Adjust based on DB structure
+                    BaseFareInr = busTotalBaseFare > 0 ? busTotalBaseFare : payment.OriginalAmount,
+                    TaxInr = busTotalTax,
                     MarkupAmountInr = payment.MarkupAmount,
-                    TaxableFareInr = 0,
-                    GstPercent = 0,
-                    GstAmountInr = 0,
+                    TaxableFareInr = busTotalGstTaxable,
+                    GstPercent = busTotalGstTaxable > 0 && busTotalGstAmount > 0 ? Math.Round((busTotalGstAmount / busTotalGstTaxable) * 100m, 2) : 0m,
+                    GstAmountInr = busTotalGstAmount,
                     DiscountAmountInr = payment.DiscountAmount,
                     ConvenienceFeeInr = payment.ConvenienceFee,
                     CouponCode = payment.CouponCode,
@@ -613,6 +620,7 @@ namespace PickNBook.Api.Services.Implementations
                         BaseFareInr = baseFare,
                         PublishedFareInr = publishedFare,
                         OfferedFareInr = offeredFare,
+                        TaxInr = blocked != null ? blocked.Tax : 0m,
                         GstAmountInr = gstAmount,
                         SeatType = seatType,
                         Age = p.Age
@@ -1213,7 +1221,14 @@ namespace PickNBook.Api.Services.Implementations
                     WalletPaidAmount = payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     
-                    SrdvGstAmount = firstRoom?.Price?.TotalGSTAmount ?? blockedPrice?.Tax ?? 0m,
+                    Tax = blockedPrice != null && blockedPrice.Tax > 0 ? blockedPrice.Tax : (firstRoom?.Price?.Tax ?? 0m),
+                    TaxableAmount = blockedPrice != null && blockedPrice.TaxableAmount > 0 
+                        ? blockedPrice.TaxableAmount 
+                        : (firstRoom?.Price?.GST?.TaxableAmount > 0 ? firstRoom.Price.GST.TaxableAmount : (firstRoom?.Price?.RoomPrice > 0 ? firstRoom.Price.RoomPrice : payment.OriginalAmount)),
+                    TotalGSTAmount = blockedPrice != null && blockedPrice.TotalGSTAmount > 0 
+                        ? blockedPrice.TotalGSTAmount 
+                        : (firstRoom?.Price?.TotalGSTAmount > 0 ? firstRoom.Price.TotalGSTAmount : (firstRoom?.Price?.GST != null ? (firstRoom.Price.GST.CGSTAmount + firstRoom.Price.GST.SGSTAmount + firstRoom.Price.GST.IGSTAmount) : 0m)),
+                    SrdvGstAmount = blockedPrice != null && blockedPrice.TotalGSTAmount > 0 ? blockedPrice.TotalGSTAmount : (firstRoom?.Price?.TotalGSTAmount ?? 0m),
                     SrdvCgstAmount = firstRoom?.Price?.GST?.CGSTAmount ?? 0m,
                     SrdvSgstAmount = firstRoom?.Price?.GST?.SGSTAmount ?? 0m,
                     SrdvIgstAmount = firstRoom?.Price?.GST?.IGSTAmount ?? 0m,
@@ -1924,6 +1939,55 @@ namespace PickNBook.Api.Services.Implementations
 
             FlightReservation? reservation = null;
 
+            decimal ticketBaseFare = 0m;
+            decimal ticketTax = 0m;
+            decimal ticketTotalFare = 0m;
+
+            JsonElement fareElement = default;
+            if (resp.TryGetProperty("FlightItinerary", out var fiNode) && fiNode.TryGetProperty("Fare", out var itinFare))
+            {
+                fareElement = itinFare;
+            }
+            else if (resp.TryGetProperty("Fare", out var directFare))
+            {
+                fareElement = directFare;
+            }
+            else if (resp.TryGetProperty("Price", out var directPrice))
+            {
+                fareElement = directPrice;
+            }
+
+            if (fareElement.ValueKind == JsonValueKind.Object)
+            {
+                if (fareElement.TryGetProperty("BaseFare", out var bfNode) && decimal.TryParse(bfNode.ToString(), out var parsedBf))
+                    ticketBaseFare = parsedBf;
+                if (fareElement.TryGetProperty("Tax", out var txNode) && decimal.TryParse(txNode.ToString(), out var parsedTx))
+                    ticketTax = parsedTx;
+                if (fareElement.TryGetProperty("TotalFare", out var tfNode) && decimal.TryParse(tfNode.ToString(), out var parsedTf))
+                    ticketTotalFare = parsedTf;
+                else if (fareElement.TryGetProperty("PublishedFare", out var pfNode) && decimal.TryParse(pfNode.ToString(), out var parsedPf))
+                    ticketTotalFare = parsedPf;
+                else if (fareElement.TryGetProperty("OfferedFare", out var ofNode) && decimal.TryParse(ofNode.ToString(), out var parsedOf))
+                    ticketTotalFare = parsedOf;
+            }
+
+            if (ticketBaseFare == 0m && ticketTax == 0m && resp.TryGetProperty("FlightItinerary", out var fiNode2) &&
+                fiNode2.TryGetProperty("Passenger", out var fiPaxList) && fiPaxList.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var paxElem in fiPaxList.EnumerateArray())
+                {
+                    if (paxElem.TryGetProperty("Fare", out var paxFare) && paxFare.ValueKind == JsonValueKind.Object)
+                    {
+                        if (paxFare.TryGetProperty("BaseFare", out var pbf) && decimal.TryParse(pbf.ToString(), out var parsedPbf))
+                            ticketBaseFare += parsedPbf;
+                        if (paxFare.TryGetProperty("Tax", out var ptx) && decimal.TryParse(ptx.ToString(), out var parsedPtx))
+                            ticketTax += parsedPtx;
+                        if (paxFare.TryGetProperty("TotalFare", out var ptf) && decimal.TryParse(ptf.ToString(), out var parsedPtf))
+                            ticketTotalFare += parsedPtf;
+                    }
+                }
+            }
+
             if (!isLcc)
             {
                 // GDS: Reservation was created during HoldGDS
@@ -1936,6 +2000,9 @@ namespace PickNBook.Api.Services.Implementations
                     if (!string.IsNullOrEmpty(returnPnr)) reservation.ReturnPnr = returnPnr;
                     reservation.TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount;
                     reservation.CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount;
+                    if (ticketBaseFare > 0) reservation.SupplierBaseFare = ticketBaseFare;
+                    if (ticketTax > 0) reservation.SupplierTaxAmount = ticketTax;
+                    if (ticketTotalFare > 0) reservation.SupplierTotalFare = ticketTotalFare;
                     reservation.PaymentMethod = payment.PaymentMethod ?? "Cashfree";
                     reservation.WalletPaidAmount = payment.WalletUsedAmount;
                     reservation.GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount;
@@ -2098,6 +2165,9 @@ namespace PickNBook.Api.Services.Implementations
                     WalletPaidAmount = payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     NetFareInr = payment.OriginalAmount,
+                    SupplierBaseFare = ticketBaseFare,
+                    SupplierTaxAmount = ticketTax,
+                    SupplierTotalFare = ticketTotalFare > 0 ? ticketTotalFare : (ticketBaseFare + ticketTax),
                     MarkupAmount = payment.MarkupAmount,
                     CouponDiscount = payment.DiscountAmount,
                     SrdvTicketResponseJson = responseRaw,

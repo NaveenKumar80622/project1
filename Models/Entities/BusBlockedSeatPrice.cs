@@ -21,6 +21,12 @@ namespace PickNBook.Api.Models.Entities
         public decimal BaseFare { get; set; }
 
         [Column(TypeName = "decimal(18,2)")]
+        public decimal Tax { get; set; }
+
+        [Column(TypeName = "decimal(18,2)")]
+        public decimal GstTaxableAmount { get; set; }
+
+        [Column(TypeName = "decimal(18,2)")]
         public decimal GstAmount { get; set; }
 
         [Column(TypeName = "decimal(18,2)")]

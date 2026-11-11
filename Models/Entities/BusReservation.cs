@@ -25,6 +25,7 @@ namespace PickNBook.Api.Models
         public decimal? CancellationChargeInr { get; set; }
         public decimal? RefundAmountInr { get; set; }
         public decimal BaseFareInr { get; set; }
+        public decimal TaxInr { get; set; }
 
         public decimal MarkupAmountInr { get; set; }
 

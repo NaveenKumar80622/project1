@@ -622,28 +622,51 @@ namespace PickNBook.Api.Services
                             decimal publishedFare = 0;
                             decimal gstAmount = 0;
                             decimal baseFare = 0;
+                            decimal tax = 0;
+                            decimal gstTaxableAmount = 0;
 
                             if (priceElement.TryGetProperty("PublishedFare", out var pubFareEl))
                                 _ = decimal.TryParse(pubFareEl.ToString(), out publishedFare);
                             
-                            if (priceElement.TryGetProperty("GstAmount", out var gstEl) || 
-                                priceElement.TryGetProperty("GSTAmount", out gstEl) || 
-                                priceElement.TryGetProperty("gstAmount", out gstEl) ||
-                                priceElement.TryGetProperty("Tax", out gstEl))
-                            {
-                                _ = decimal.TryParse(gstEl.ToString(), out gstAmount);
-                            }
-                                
                             if (priceElement.TryGetProperty("BaseFare", out var baseFareEl))
                                 _ = decimal.TryParse(baseFareEl.ToString(), out baseFare);
 
+                            if (priceElement.TryGetProperty("Tax", out var taxEl))
+                                _ = decimal.TryParse(taxEl.ToString(), out tax);
+
+                            if (priceElement.TryGetProperty("GstTaxableAmount", out var gstTaxableEl) ||
+                                priceElement.TryGetProperty("GSTTaxableAmount", out gstTaxableEl) ||
+                                priceElement.TryGetProperty("gstTaxableAmount", out gstTaxableEl) ||
+                                priceElement.TryGetProperty("TaxableAmount", out gstTaxableEl))
+                            {
+                                _ = decimal.TryParse(gstTaxableEl.ToString(), out gstTaxableAmount);
+                            }
+
+                            if (priceElement.TryGetProperty("GSTAmount", out var gstEl) || 
+                                priceElement.TryGetProperty("GstAmount", out gstEl) || 
+                                priceElement.TryGetProperty("gstAmount", out gstEl))
+                            {
+                                _ = decimal.TryParse(gstEl.ToString(), out gstAmount);
+                            }
+                            else if (gstAmount == 0 && tax > 0)
+                            {
+                                gstAmount = tax;
+                            }
+
+                            if (gstTaxableAmount == 0 && baseFare > 0)
+                            {
+                                gstTaxableAmount = baseFare;
+                            }
+
                             // The pricing engine now correctly uses baseFare to compute markups.
-                            // We save the pure SRDV PublishedFare and BaseFare without overrides.
+                            // We save the pure SRDV PublishedFare, BaseFare, Tax, GstTaxableAmount, and GSTAmount.
                             var record = new BusBlockedSeatPrice
                             {
                                 TraceId = request.TraceId,
                                 SeatName = seatName,
                                 BaseFare = baseFare,
+                                Tax = tax,
+                                GstTaxableAmount = gstTaxableAmount,
                                 GstAmount = gstAmount,
                                 PublishedFare = publishedFare,
                                 CreatedAtUtc = DateTime.UtcNow

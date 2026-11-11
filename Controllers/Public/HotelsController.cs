@@ -936,7 +936,10 @@ namespace PickNBook.Api.Controllers
                             BasePrice = Math.Max(0m, quotedPrice - (blockedPrice?.Tax ?? 0m)),
                             
                             // Tax Breakdown
-                            SrdvGstAmount = blockedPrice?.Tax ?? 0m,
+                            Tax = blockedPrice?.Tax ?? 0m,
+                            TaxableAmount = blockedPrice != null && blockedPrice.TaxableAmount > 0 ? blockedPrice.TaxableAmount : Math.Max(0m, quotedPrice - (blockedPrice?.Tax ?? 0m)),
+                            TotalGSTAmount = blockedPrice?.TotalGSTAmount ?? 0m,
+                            SrdvGstAmount = blockedPrice?.TotalGSTAmount > 0 ? blockedPrice.TotalGSTAmount : (blockedPrice?.Tax ?? 0m),
 
                             // Cancellation Policy & Dates
                             CancellationPolicyJson = blockedPrice?.CancellationPolicyJson,
@@ -1635,7 +1638,14 @@ namespace PickNBook.Api.Controllers
                         TotalPrice = totalPrice,
 
                         // SRDV Supplier GST Breakdown
-                        SrdvGstAmount = firstRoom?.Price?.TotalGSTAmount ?? lockedBlockedPrice?.Tax ?? 0m,
+                        Tax = lockedBlockedPrice != null && lockedBlockedPrice.Tax > 0 ? lockedBlockedPrice.Tax : (firstRoom?.Price?.Tax ?? 0m),
+                        TaxableAmount = lockedBlockedPrice != null && lockedBlockedPrice.TaxableAmount > 0 
+                            ? lockedBlockedPrice.TaxableAmount 
+                            : (firstRoom?.Price?.GST?.TaxableAmount > 0 ? firstRoom.Price.GST.TaxableAmount : (firstRoom?.Price?.RoomPrice > 0 ? firstRoom.Price.RoomPrice : basePrice)),
+                        TotalGSTAmount = lockedBlockedPrice != null && lockedBlockedPrice.TotalGSTAmount > 0 
+                            ? lockedBlockedPrice.TotalGSTAmount 
+                            : (firstRoom?.Price?.TotalGSTAmount > 0 ? firstRoom.Price.TotalGSTAmount : (firstRoom?.Price?.GST != null ? (firstRoom.Price.GST.CGSTAmount + firstRoom.Price.GST.SGSTAmount + firstRoom.Price.GST.IGSTAmount) : 0m)),
+                        SrdvGstAmount = lockedBlockedPrice != null && lockedBlockedPrice.TotalGSTAmount > 0 ? lockedBlockedPrice.TotalGSTAmount : (firstRoom?.Price?.TotalGSTAmount ?? (lockedBlockedPrice?.Tax ?? 0m)),
                         SrdvCgstAmount = firstRoom?.Price?.GST?.CGSTAmount ?? 0m,
                         SrdvSgstAmount = firstRoom?.Price?.GST?.SGSTAmount ?? 0m,
                         SrdvIgstAmount = firstRoom?.Price?.GST?.IGSTAmount ?? 0m,

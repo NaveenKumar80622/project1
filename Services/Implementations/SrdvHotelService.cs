@@ -2165,7 +2165,9 @@ namespace PickNBook.Api.Services
                                 HotelCode = resolvedHotelCode,
                                 TraceId = request.TraceId.ToString(),
                                 OfferedPrice = rm.Price.OfferedPrice,
-                                Tax = rm.Price.Tax + rm.Price.TotalGSTAmount, // Combined tax
+                                Tax = rm.Price.Tax,
+                                TaxableAmount = (rm.Price.GST != null && rm.Price.GST.TaxableAmount > 0) ? rm.Price.GST.TaxableAmount : (rm.Price.RoomPrice > 0 ? rm.Price.RoomPrice : rm.Price.OfferedPrice),
+                                TotalGSTAmount = rm.Price.TotalGSTAmount > 0 ? rm.Price.TotalGSTAmount : (rm.Price.GST != null ? (rm.Price.GST.CGSTAmount + rm.Price.GST.SGSTAmount + rm.Price.GST.IGSTAmount) : 0m),
                                 MarkupAmount = rm.Price.AgentMarkUp,
                                 DiscountAmount = rm.Price.Discount,
                                 GrandTotal = rm.Price.B2CTotalPrice,

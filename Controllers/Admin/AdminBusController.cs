@@ -2155,6 +2155,12 @@ namespace PickNBook.Api.Controllers
                         calculatedProfit = Math.Round(directProfit, 2);
                     }
 
+                    decimal resolvedBaseFare = x.BaseFareInr > 0 ? x.BaseFareInr : passengerRows.Sum(p => p.BaseFareInr);
+                    decimal resolvedTax = x.TaxInr > 0 ? x.TaxInr : passengerRows.Sum(p => p.TaxInr ?? 0m);
+                    decimal resolvedTaxableFare = x.TaxableFareInr > 0 ? x.TaxableFareInr : (resolvedBaseFare > 0 ? resolvedBaseFare : (x.NetFareInr > 0 ? x.NetFareInr : x.CustomerFareInr));
+                    decimal resolvedGstAmount = x.GstAmountInr > 0 ? x.GstAmountInr : passengerRows.Sum(p => p.GstAmountInr ?? 0m);
+                    if (resolvedGstAmount == 0m && resolvedTax > 0m) resolvedGstAmount = resolvedTax;
+
                     return new
                     {
                         x.Id,
@@ -2182,7 +2188,10 @@ namespace PickNBook.Api.Controllers
                         x.CouponDiscountAmountInr,
 
                         x.ConvenienceFeeInr,
-                        x.BaseFareInr,
+                        BaseFareInr = resolvedBaseFare,
+                        TaxInr = resolvedTax,
+                        TaxableFareInr = resolvedTaxableFare,
+                        GstAmountInr = resolvedGstAmount,
                         x.MarkupAmountInr,
                         x.CancellationChargeInr,
                         x.RefundAmountInr,
@@ -2191,6 +2200,8 @@ namespace PickNBook.Api.Controllers
                         ProfitInr = calculatedProfit,
                         CalculatedProfit = calculatedProfit,
                         SrdvMarginInr = srdvMargin,
+                        CommercialMargin = srdvMargin,
+                        SrdvCommercialMargin = srdvMargin,
 
                         x.CouponCode,
                         x.AutoPromotionCode,

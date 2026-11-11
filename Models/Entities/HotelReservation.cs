@@ -59,6 +59,9 @@ namespace PickNBook.Api.Models
 
         // SRDV Supplier Pricing & GST Breakdown
         public decimal SrdvOfferedPrice { get; set; } = 0m;
+        public decimal Tax { get; set; } = 0m;
+        public decimal TaxableAmount { get; set; } = 0m;
+        public decimal TotalGSTAmount { get; set; } = 0m;
         public decimal SrdvGstAmount { get; set; } = 0m;
         public decimal SrdvCgstAmount { get; set; } = 0m;
         public decimal SrdvSgstAmount { get; set; } = 0m;
