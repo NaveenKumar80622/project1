@@ -95,6 +95,8 @@ public class TicketEmailService : ITicketEmailService
 
         var body = BuildFlightTicketEmailHtml(request, passengersList, airline, flightNumber);
 
+        AddLogoAttachment(attachments);
+
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
             subject,
@@ -269,7 +271,7 @@ public class TicketEmailService : ITicketEmailService
                "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
                "<td style=\"vertical-align: middle;\">" +
                "<div style=\"background: #ffffff; border-radius: 10px; padding: 5px 10px; display: inline-block; margin-bottom: 10px;\">" +
-               "<img src=\"https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png\" alt=\"Pick&amp;book\" style=\"height: 22px; width: auto; display: block; border: 0;\" />" +
+               "<img src=\"cid:picknbook-logo\" alt=\"Pick&amp;book\" style=\"height: 22px; width: auto; display: block; border: 0;\" />" +
                "</div>" +
                "<div style=\"font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #a7f3d0;\">BOOKING CONFIRMED &bull; E-TICKET ISSUED</div>" +
                "<div style=\"font-size: 17px; font-weight: 900; margin-top: 3px; color: #ffffff; line-height: 1.3;\">Your " + originCity + " - " + destCity + " flight is booked for travel on " + depDateStr + "</div>" +
@@ -360,7 +362,7 @@ public class TicketEmailService : ITicketEmailService
                "<td style=\"text-align: right; vertical-align: middle;\">" +
                "<div style=\"font-size: 10px; color: #94a3b8;\">Issued by</div>" +
                "<div style=\"background: #ffffff; border-radius: 6px; padding: 3px 8px; display: inline-block; margin-top: 2px;\">" +
-               "<img src=\"https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png\" alt=\"Pick&amp;book\" style=\"height: 16px; display: block; border: 0;\" />" +
+               "<img src=\"cid:picknbook-logo\" alt=\"Pick&amp;book\" style=\"height: 16px; display: block; border: 0;\" />" +
                "</div>" +
                "<div style=\"font-size: 9px; color: #94a3b8; margin-top: 4px;\">Ref: <b style=\"color: #ffffff; font-family: monospace;\">" + req.BookingReference + "</b></div></td>" +
                "</tr></table></div></div></body></html>";
@@ -531,6 +533,14 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         var boardingTime = request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime;
         var droppingTime = request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime;
+        if (boardingTime != default && droppingTime != default && droppingTime <= boardingTime)
+        {
+            droppingTime = droppingTime.AddDays(1);
+            while (droppingTime <= boardingTime)
+            {
+                droppingTime = droppingTime.AddDays(1);
+            }
+        }
         var departureTime = request.DepartureTime != default ? request.DepartureTime : boardingTime;
         var boardingTimeStr = boardingTime != default ? boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var droppingTimeStr = droppingTime != default ? droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
@@ -541,7 +551,8 @@ public class TicketEmailService : ITicketEmailService
             : $"{request.PassengerName} (Seat {request.SeatNumber})";
 
         var effectiveBookedDate = request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow;
-        var bookingDateStr = effectiveBookedDate.ToString("dd MMM yyyy, hh:mm tt");
+        var effectiveBookedIst = IndiaTimeHelper.ToIst(effectiveBookedDate);
+        var bookingDateStr = effectiveBookedIst.ToString("dd MMM yyyy, hh:mm tt");
         var grossFare = request.TotalFareBeforeDiscount > 0
             ? request.TotalFareBeforeDiscount
             : (request.Price + totalDiscount);
@@ -600,7 +611,7 @@ public class TicketEmailService : ITicketEmailService
     <table style=""width: 100%; border-collapse: collapse; background-color: #ffffff; border-top: 4px solid #dc2626; border-bottom: 1px solid #e2e8f0;"">
       <tr>
         <td class=""stack-col"" style=""padding: 18px 20px; vertical-align: middle;"">
-          <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
+          <img src=""cid:picknbook-logo"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
           <div style=""font-weight: 800; font-size: 16px; letter-spacing: 0.5px; color: #dc2626; text-transform: uppercase; margin-top: 6px;"">Bus Ticket</div>
           <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Booked on <b style=""color: #1e293b;"">{bookingDateStr}</b></div>
         </td>
@@ -743,6 +754,7 @@ public class TicketEmailService : ITicketEmailService
 </html>";
 
         var emailAttachments = new List<EmailAttachment> { attachment };
+        AddLogoAttachment(emailAttachments);
 
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
@@ -808,6 +820,14 @@ public class TicketEmailService : ITicketEmailService
         // =========================================
         var boardingTime = request.BoardingPointTime != default ? request.BoardingPointTime : request.DepartureTime;
         var droppingTime = request.ArrivalPointTime != default ? request.ArrivalPointTime : request.ArrivalTime;
+        if (boardingTime != default && droppingTime != default && droppingTime <= boardingTime)
+        {
+            droppingTime = droppingTime.AddDays(1);
+            while (droppingTime <= boardingTime)
+            {
+                droppingTime = droppingTime.AddDays(1);
+            }
+        }
         var departureTime = request.DepartureTime != default ? request.DepartureTime : boardingTime;
         var boardingTimeStr = boardingTime != default ? boardingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         var droppingTimeStr = droppingTime != default ? droppingTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
@@ -815,7 +835,8 @@ public class TicketEmailService : ITicketEmailService
         var effectiveCancelDate = request.CancelledAtUtc.HasValue 
             ? request.CancelledAtUtc.Value 
             : (request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow);
-        var cancellationDateStr = effectiveCancelDate.ToString("dd MMM yyyy, hh:mm tt");
+        var effectiveCancelIst = IndiaTimeHelper.ToIst(effectiveCancelDate);
+        var cancellationDateStr = effectiveCancelIst.ToString("dd MMM yyyy, hh:mm tt");
 
         // =========================================
         // DYNAMIC CANCELLATION POLICY ROWS
@@ -970,7 +991,7 @@ public class TicketEmailService : ITicketEmailService
     <table style=""width: 100%; border-collapse: collapse; background-color: #ffffff; border-top: 4px solid #dc2626; border-bottom: 1px solid #e2e8f0;"">
       <tr>
         <td class=""stack-col"" style=""padding: 18px 20px; vertical-align: middle;"">
-          <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
+          <img src=""cid:picknbook-logo"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
           <div style=""font-weight: 800; font-size: 16px; letter-spacing: 0.5px; color: #dc2626; text-transform: uppercase; margin-top: 6px;"">Bus Ticket Cancellation</div>
           <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Cancelled on <b style=""color: #1e293b;"">{cancellationDateStr}</b></div>
         </td>
@@ -1147,6 +1168,7 @@ public class TicketEmailService : ITicketEmailService
         };
 
         var cancelAttachments = new List<EmailAttachment> { attachment };
+        AddLogoAttachment(cancelAttachments);
 
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
@@ -1203,7 +1225,7 @@ public class TicketEmailService : ITicketEmailService
             "<table style=\"width: 100%; border-collapse: collapse;\"><tr>" +
             "<td style=\"vertical-align: middle;\">" +
             "<div style=\"background: #ffffff; border-radius: 10px; padding: 5px 10px; display: inline-block; margin-bottom: 10px;\">" +
-            "<img src=\"https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png\" alt=\"Pick&amp;book\" style=\"height: 22px; width: auto; display: block; border: 0;\" />" +
+            "<img src=\"cid:picknbook-logo\" alt=\"Pick&amp;book\" style=\"height: 22px; width: auto; display: block; border: 0;\" />" +
             "</div>" +
             "<div style=\"font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #fecaca;\">BOOKING CANCELLED &bull; REFUND INITIATED</div>" +
             "<div style=\"font-size: 17px; font-weight: 900; margin-top: 3px; color: #ffffff; line-height: 1.3;\">Flight Booking Cancelled &mdash; " + request.BookingReference + "</div>" +
@@ -1266,6 +1288,8 @@ public class TicketEmailService : ITicketEmailService
             "<td style=\"text-align: right; vertical-align: middle;\">" +
             "<div style=\"font-size: 10px; color: #94a3b8;\">Booking ID: <b style=\"color: #ffffff; font-family: monospace;\">" + request.BookingReference + "</b></div></td>" +
             "</tr></table></div></div></body></html>";
+
+        AddLogoAttachment(attachments);
 
         await _emailService.SendEmailWithAttachmentsAsync(
             request.ToEmail,
@@ -1458,7 +1482,7 @@ public class TicketEmailService : ITicketEmailService
     <table style=""width: 100%; border-collapse: collapse; background-color: #ffffff; border-top: 4px solid #dc2626; border-bottom: 1px solid #e2e8f0;"">
       <tr>
         <td class=""stack-col"" style=""padding: 18px 20px; vertical-align: middle;"">
-          <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
+          <img src=""cid:picknbook-logo"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
           <div style=""font-weight: 800; font-size: 15px; letter-spacing: 0.5px; color: #dc2626; text-transform: uppercase; margin-top: 6px;"">HOTEL CONFIRMATION VOUCHER</div>
           <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Booked on <b style=""color: #1e293b;"">{bookingDateStr}</b></div>
         </td>
@@ -1591,11 +1615,14 @@ public class TicketEmailService : ITicketEmailService
 </body>
 </html>";
 
+        var attachments = new List<EmailAttachment> { attachment };
+        AddLogoAttachment(attachments);
+
         await _emailService.SendEmailWithAttachmentsAsync(
             reservation.GuestEmail,
             subject,
             body,
-            new List<EmailAttachment> { attachment });
+            attachments);
     }
 
     public async Task SendHotelCancellationAsync(HotelReservation reservation)
@@ -1674,7 +1701,7 @@ public class TicketEmailService : ITicketEmailService
     <table style=""width: 100%; border-collapse: collapse; background-color: #ffffff; border-top: 4px solid #dc2626; border-bottom: 1px solid #e2e8f0;"">
       <tr>
         <td class=""stack-col"" style=""padding: 18px 20px; vertical-align: middle;"">
-          <img src=""https://www.picknbook.in/assets/picknbook-login-q5fv1iRs.png"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
+          <img src=""cid:picknbook-logo"" alt=""Pick&amp;book"" height=""34"" style=""height: 34px; max-width: 140px; display: block; border: 0;"" />
           <div style=""font-weight: 800; font-size: 15px; letter-spacing: 0.5px; color: #dc2626; text-transform: uppercase; margin-top: 6px;"">HOTEL BOOKING CANCELLATION</div>
           <div style=""color: #64748b; font-size: 11px; margin-top: 3px;"">Cancelled on <b style=""color: #1e293b;"">{cancelDateStr}</b></div>
         </td>
@@ -1807,11 +1834,14 @@ public class TicketEmailService : ITicketEmailService
 </body>
 </html>";
 
+        var attachments = new List<EmailAttachment> { attachment };
+        AddLogoAttachment(attachments);
+
         await _emailService.SendEmailWithAttachmentsAsync(
             reservation.GuestEmail,
             subject,
             body,
-            new List<EmailAttachment> { attachment });
+            attachments);
     }
 
     private static string GetRoomCategory(string offerId)
@@ -1952,6 +1982,48 @@ public class TicketEmailService : ITicketEmailService
         }
         sb.Append("</svg>");
         return sb.ToString();
+    }
+
+    private static readonly Lazy<byte[]?> s_logoBytes = new(() =>
+    {
+        string[] candidateLogoPaths = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "pick-n-book-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo-live.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo-live.png"),
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\pick-n-book-logo.png",
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\picknbook-logo.png",
+            @"C:\Users\ADMIN\Desktop\Cloud\PicknBook\backend\PickNBook.Api\wwwroot\pick-n-book-logo.png"
+        };
+        string? found = candidateLogoPaths.FirstOrDefault(File.Exists);
+        if (found != null)
+        {
+            try { return File.ReadAllBytes(found); } catch { }
+        }
+        return null;
+    });
+
+    private static byte[]? LoadLogoBytes() => s_logoBytes.Value;
+
+    private static void AddLogoAttachment(List<EmailAttachment> attachments)
+    {
+        var logoBytes = LoadLogoBytes();
+        if (logoBytes != null && logoBytes.Length > 0)
+        {
+            attachments.Add(new EmailAttachment
+            {
+                FileName = "pick-n-book-logo.png",
+                ContentType = "image/png",
+                Content = logoBytes,
+                ContentId = "picknbook-logo",
+                IsInline = true
+            });
+        }
     }
 }
 

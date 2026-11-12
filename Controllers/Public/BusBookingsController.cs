@@ -2333,6 +2333,16 @@ namespace PickNBook.Api.Controllers
                             }
                         }
 
+                        // Overnight safeguard: dropping time must not be before or equal to boarding time
+                        if (resolvedDroppingTime <= resolvedBoardingTime)
+                        {
+                            resolvedDroppingTime = resolvedDroppingTime.AddDays(1);
+                            while (resolvedDroppingTime <= resolvedBoardingTime)
+                            {
+                                resolvedDroppingTime = resolvedDroppingTime.AddDays(1);
+                            }
+                        }
+
                         var bpName = !string.IsNullOrWhiteSpace(request.BoardingPointName) 
                             ? request.BoardingPointName 
                             : ((_cache.TryGetValue($"bus_bp_{request.TraceId}_{request.ResultIndex}", out BusBoardingPointsWorkflowContext? bpNameCtx) ||
@@ -2857,6 +2867,17 @@ namespace PickNBook.Api.Controllers
                             if (string.IsNullOrWhiteSpace(seatNumbers))
                                 seatNumbers = "N/A";
 
+                            var emailBoardingPointTime = res.BoardingPointTime ?? b.DepartureTime;
+                            var emailArrivalPointTime = res.DroppingPointTime ?? (b.ArrivalTime > b.DepartureTime ? b.ArrivalTime : b.ArrivalTime.AddDays(1));
+                            if (emailArrivalPointTime <= emailBoardingPointTime)
+                            {
+                                emailArrivalPointTime = emailArrivalPointTime.AddDays(1);
+                                while (emailArrivalPointTime <= emailBoardingPointTime)
+                                {
+                                    emailArrivalPointTime = emailArrivalPointTime.AddDays(1);
+                                }
+                            }
+
                             // Email notification
                             if (!string.IsNullOrWhiteSpace(res.PassengerEmail))
                             {
@@ -2875,12 +2896,13 @@ namespace PickNBook.Api.Controllers
                                         Destination = scopedSrdvBusService.MapCityCodeToName(b.ToCity),
                                         DepartureTime = b.DepartureTime,
                                         ArrivalTime = b.ArrivalTime,
-                                        IsOvernightArrival = b.ArrivalTime.Date > b.DepartureTime.Date || b.ArrivalTime <= b.DepartureTime,
-                                        DurationMinutes = b.ArrivalTime > b.DepartureTime ? (int)(b.ArrivalTime - b.DepartureTime).TotalMinutes : Math.Max(60, (int)(b.ArrivalTime.AddDays(1) - b.DepartureTime).TotalMinutes),
+                                        IsOvernightArrival = emailArrivalPointTime.Date > emailBoardingPointTime.Date || emailArrivalPointTime <= emailBoardingPointTime,
+                                        DurationMinutes = emailArrivalPointTime > emailBoardingPointTime ? (int)(emailArrivalPointTime - emailBoardingPointTime).TotalMinutes : Math.Max(60, (int)(emailArrivalPointTime.AddDays(1) - emailBoardingPointTime).TotalMinutes),
                                         BoardingPoint = !string.IsNullOrWhiteSpace(res.BoardingPointName) ? res.BoardingPointName : b.BoardingPoint,
-                                        BoardingPointTime = res.BoardingPointTime ?? b.DepartureTime,
+                                        BoardingPointTime = emailBoardingPointTime,
                                         ArrivalPoint = !string.IsNullOrWhiteSpace(res.DroppingPointName) ? res.DroppingPointName : b.ToCity,
-                                        ArrivalPointTime = res.DroppingPointTime ?? (b.ArrivalTime > b.DepartureTime ? b.ArrivalTime : b.ArrivalTime.AddDays(1)),
+                                        ArrivalPointTime = emailArrivalPointTime,
+                                        BookedAtUtc = res.BookedAtUtc != default ? res.BookedAtUtc : DateTime.UtcNow,
                                         Price = res.TotalPriceInr,
                                         BaseFare = res.BaseFareInr,
                                         Currency = "INR",
@@ -5342,6 +5364,17 @@ Refund: ₹{currentRefundAmount}
                     //        .FirstOrDefaultAsync(x => x.CouponCode == reservation.CouponCode);
                     //}
 
+                    var nBTime = reservation.BoardingPointTime ?? bus.DepartureTime;
+                    var nATime = reservation.DroppingPointTime ?? bus.ArrivalTime;
+                    if (nATime <= nBTime)
+                    {
+                        nATime = nATime.AddDays(1);
+                        while (nATime <= nBTime)
+                        {
+                            nATime = nATime.AddDays(1);
+                        }
+                    }
+
                     await _ticketEmailService.SendBusTicketAsync(new SendBusTicketEmailRequest
                     {
                         ToEmail = reservation.PassengerEmail,
@@ -5355,13 +5388,13 @@ Refund: ₹{currentRefundAmount}
                         Destination = _srdvBusService.MapCityCodeToName(bus.ToCity),
                         DepartureTime = bus.DepartureTime,
                         ArrivalTime = bus.ArrivalTime,
-                        IsOvernightArrival = bus.ArrivalTime.Date > bus.DepartureTime.Date,
-                        DurationMinutes = (int)(bus.ArrivalTime - bus.DepartureTime).TotalMinutes,
+                        IsOvernightArrival = nATime.Date > nBTime.Date,
+                        DurationMinutes = (int)(nATime - nBTime).TotalMinutes,
                         BoardingPoint = !string.IsNullOrWhiteSpace(reservation.BoardingPointName) ? reservation.BoardingPointName : bus.BoardingPoint,
-                        BoardingPointTime = reservation.BoardingPointTime ?? bus.DepartureTime,
+                        BoardingPointTime = nBTime,
                         ArrivalPoint = !string.IsNullOrWhiteSpace(reservation.DroppingPointName) ? reservation.DroppingPointName : bus.ToCity,
-                        ArrivalPointTime = reservation.DroppingPointTime ?? bus.ArrivalTime,
-                        BookedAtUtc = reservation.BookedAtUtc,
+                        ArrivalPointTime = nATime,
+                        BookedAtUtc = reservation.BookedAtUtc != default ? reservation.BookedAtUtc : DateTime.UtcNow,
 
                         // Fare breakdown
                         Price = reservation.TotalPriceInr,

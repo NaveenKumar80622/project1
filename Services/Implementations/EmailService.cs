@@ -43,8 +43,6 @@ namespace PickNBook.Api.Services
             {
                 From = new MailAddress(_settings.SenderEmail, _settings.SenderName),
                 Subject = subject,
-                Body = body,
-                IsBodyHtml = true,
                 BodyEncoding = System.Text.Encoding.UTF8,
                 SubjectEncoding = System.Text.Encoding.UTF8,
                 HeadersEncoding = System.Text.Encoding.UTF8
@@ -60,18 +58,43 @@ namespace PickNBook.Api.Services
             var attachmentStreams = new List<MemoryStream>();
             try
             {
-                foreach (var item in attachments)
+                var attachmentsList = attachments?.ToList() ?? new List<EmailAttachment>();
+                var inlineList = attachmentsList.Where(a => a.IsInline || !string.IsNullOrWhiteSpace(a.ContentId)).ToList();
+                var regularList = attachmentsList.Where(a => !a.IsInline && string.IsNullOrWhiteSpace(a.ContentId)).ToList();
+
+                if (inlineList.Count > 0)
+                {
+                    var htmlView = AlternateView.CreateAlternateViewFromString(body, System.Text.Encoding.UTF8, "text/html");
+                    foreach (var item in inlineList)
+                    {
+                        var stream = new MemoryStream(item.Content);
+                        attachmentStreams.Add(stream);
+
+                        var lr = new LinkedResource(stream, item.ContentType)
+                        {
+                            ContentId = item.ContentId?.Trim('<', '>'),
+                            TransferEncoding = System.Net.Mime.TransferEncoding.Base64
+                        };
+                        if (!string.IsNullOrWhiteSpace(item.FileName))
+                        {
+                            lr.ContentType.Name = item.FileName;
+                        }
+                        htmlView.LinkedResources.Add(lr);
+                    }
+                    message.AlternateViews.Add(htmlView);
+                }
+                else
+                {
+                    message.Body = body;
+                    message.IsBodyHtml = true;
+                }
+
+                foreach (var item in regularList)
                 {
                     var stream = new MemoryStream(item.Content);
                     attachmentStreams.Add(stream);
 
                     var attachment = new Attachment(stream, item.FileName, item.ContentType);
-                    if (!string.IsNullOrWhiteSpace(item.ContentId))
-                    {
-                        attachment.ContentId = item.ContentId;
-                        attachment.ContentDisposition.Inline = true;
-                        attachment.ContentDisposition.DispositionType = System.Net.Mime.DispositionTypeNames.Inline;
-                    }
                     message.Attachments.Add(attachment);
                 }
 

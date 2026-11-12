@@ -910,6 +910,17 @@ namespace PickNBook.Api.Services.Implementations
                         var seatNumbers = string.Join(", ", dbPassengers.Select(p => p.SeatNumber).Where(s => !string.IsNullOrWhiteSpace(s)));
                         if (string.IsNullOrWhiteSpace(seatNumbers)) seatNumbers = "N/A";
 
+                        var emailBoardingPointTime = reservation.BoardingPointTime ?? bus.DepartureTime;
+                        var emailArrivalPointTime = reservation.DroppingPointTime ?? bus.ArrivalTime;
+                        if (emailArrivalPointTime <= emailBoardingPointTime)
+                        {
+                            emailArrivalPointTime = emailArrivalPointTime.AddDays(1);
+                            while (emailArrivalPointTime <= emailBoardingPointTime)
+                            {
+                                emailArrivalPointTime = emailArrivalPointTime.AddDays(1);
+                            }
+                        }
+
                         var emailRequest = new SendBusTicketEmailRequest
                         {
                             ToEmail = reservation.PassengerEmail,
@@ -923,12 +934,12 @@ namespace PickNBook.Api.Services.Implementations
                             Destination = srdvBusService.MapCityCodeToName(bus.ToCity),
                             DepartureTime = bus.DepartureTime,
                             ArrivalTime = bus.ArrivalTime,
-                            IsOvernightArrival = bus.ArrivalTime.Date > bus.DepartureTime.Date,
-                            DurationMinutes = (int)(bus.ArrivalTime - bus.DepartureTime).TotalMinutes,
+                            IsOvernightArrival = emailArrivalPointTime.Date > emailBoardingPointTime.Date,
+                            DurationMinutes = (int)(emailArrivalPointTime - emailBoardingPointTime).TotalMinutes,
                             BoardingPoint = !string.IsNullOrWhiteSpace(reservation.BoardingPointName) ? reservation.BoardingPointName : bus.BoardingPoint,
-                            BoardingPointTime = reservation.BoardingPointTime ?? bus.DepartureTime,
+                            BoardingPointTime = emailBoardingPointTime,
                             ArrivalPoint = !string.IsNullOrWhiteSpace(reservation.DroppingPointName) ? reservation.DroppingPointName : bus.ToCity,
-                            ArrivalPointTime = reservation.DroppingPointTime ?? bus.ArrivalTime,
+                            ArrivalPointTime = emailArrivalPointTime,
                             Price = reservation.TotalPriceInr,
                             TotalFareBeforeDiscount = reservation.TotalPriceInr + reservation.DiscountAmountInr,
                             BaseFare = reservation.BaseFareInr,

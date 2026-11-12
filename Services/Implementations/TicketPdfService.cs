@@ -70,11 +70,17 @@ public class TicketPdfService : ITicketPdfService
         // Pick&book Brand Logo
         string[] candidateLogoPaths = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "pick-n-book-logo.png"),
             Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo.png"),
             Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo.png"),
             Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo-live.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo-live.png"),
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\pick-n-book-logo.png",
             @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\picknbook-logo.png",
-            @"C:\Users\ADMIN\.gemini\antigravity\brain\9c45650d-a19c-4a49-a537-6fbae5822546\picknbook-logo.png"
+            @"C:\Users\ADMIN\Desktop\Cloud\PicknBook\backend\PickNBook.Api\wwwroot\pick-n-book-logo.png"
         };
         string? foundLogo = candidateLogoPaths.FirstOrDefault(File.Exists);
         if (foundLogo != null)
@@ -82,7 +88,7 @@ public class TicketPdfService : ITicketPdfService
             try
             {
                 using var logoImg = XImage.FromFile(foundLogo);
-                gfx.DrawImage(logoImg, left + 14, y + 8, 112, 22);
+                gfx.DrawImage(logoImg, left + 14, y + 8, 110, 26);
             }
             catch { }
         }
@@ -372,9 +378,17 @@ public class TicketPdfService : ITicketPdfService
         // Logo
         string[] candidateLogoPaths = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "pick-n-book-logo.png"),
             Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo.png"),
             Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo.png"),
-            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png")
+            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo-live.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo-live.png"),
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\pick-n-book-logo.png",
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\picknbook-logo.png",
+            @"C:\Users\ADMIN\Desktop\Cloud\PicknBook\backend\PickNBook.Api\wwwroot\pick-n-book-logo.png"
         };
         string? foundLogo = candidateLogoPaths.FirstOrDefault(File.Exists);
         if (foundLogo != null)
@@ -382,7 +396,7 @@ public class TicketPdfService : ITicketPdfService
             try
             {
                 using var logoImg = XImage.FromFile(foundLogo);
-                gfx.DrawImage(logoImg, left + 14, y + 8, 112, 22);
+                gfx.DrawImage(logoImg, left + 14, y + 8, 110, 26);
             }
             catch { }
         }
@@ -391,11 +405,12 @@ public class TicketPdfService : ITicketPdfService
         string ticketTitle = isCancelled ? "BUS TICKET CANCELLATION" : "BUS TICKET";
         gfx.DrawString(ticketTitle, new XFont("Arial", 11, XFontStyle.Bold), redBrush, left + 14, y + 46);
 
-        // Booking Date
+        // Booking Date in IST
         var datePrefix = isCancelled ? "Cancelled on " : "Booked on ";
-        var effectiveDate = isCancelled && req.CancelledAtUtc.HasValue 
+        var effectiveUtc = isCancelled && req.CancelledAtUtc.HasValue 
             ? req.CancelledAtUtc.Value 
             : (req.BookedAtUtc != default ? req.BookedAtUtc : DateTime.UtcNow);
+        var effectiveDate = IndiaTimeHelper.ToIst(effectiveUtc);
         var bookingDateStr = req.DepartureTime != default 
             ? $"{datePrefix}{effectiveDate:dd MMM yyyy, hh:mm tt}" 
             : "";
@@ -469,6 +484,14 @@ public class TicketPdfService : ITicketPdfService
         gfx.DrawString("ARRIVAL", new XFont("Arial", 7.5, XFontStyle.Bold), grayBrush, left + 205, y + 14);
         gfx.DrawString(req.Destination, new XFont("Arial", 13, XFontStyle.Bold), darkBrush, left + 205, y + 32);
         var dTime = req.ArrivalPointTime != default ? req.ArrivalPointTime : req.ArrivalTime;
+        if (bTime != default && dTime != default && dTime <= bTime)
+        {
+            dTime = dTime.AddDays(1);
+            while (dTime <= bTime)
+            {
+                dTime = dTime.AddDays(1);
+            }
+        }
         var dTimeStr = dTime != default ? dTime.ToString("ddd, dd MMM yyyy hh:mm tt") : "-";
         gfx.DrawString(dTimeStr, new XFont("Arial", 8.5, XFontStyle.Bold), slateBrush, left + 205, y + 46);
         gfx.DrawString("Dropping Point:", new XFont("Arial", 7.5, XFontStyle.Bold), slateBrush, left + 205, y + 59);
@@ -838,9 +861,17 @@ public class TicketPdfService : ITicketPdfService
         // Logo
         string[] candidateLogoPaths = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "pick-n-book-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "pick-n-book-logo.png"),
             Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo.png"),
             Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo.png"),
-            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png")
+            Path.Combine(AppContext.BaseDirectory, "picknbook-logo.png"),
+            Path.Combine(AppContext.BaseDirectory, "wwwroot", "picknbook-logo-live.png"),
+            Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "picknbook-logo-live.png"),
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\pick-n-book-logo.png",
+            @"C:\Users\ADMIN\Desktop\Local\PickNBook.Api\wwwroot\picknbook-logo.png",
+            @"C:\Users\ADMIN\Desktop\Cloud\PicknBook\backend\PickNBook.Api\wwwroot\pick-n-book-logo.png"
         };
         string? foundLogo = candidateLogoPaths.FirstOrDefault(File.Exists);
         if (foundLogo != null)
@@ -848,7 +879,7 @@ public class TicketPdfService : ITicketPdfService
             try
             {
                 using var logoImg = XImage.FromFile(foundLogo);
-                gfx.DrawImage(logoImg, left + 14, y + 8, 112, 22);
+                gfx.DrawImage(logoImg, left + 14, y + 8, 110, 26);
             }
             catch { }
         }
