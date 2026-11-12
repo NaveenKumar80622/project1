@@ -868,20 +868,20 @@ namespace PickNBook.Api.Controllers
                             {
                                 foreach (var p in ssrPaxArray.EnumerateArray())
                                 {
-                                    if (p.TryGetProperty("Baggage", out var bArr) && bArr.ValueKind == JsonValueKind.Array)
+                                    if ((p.TryGetProperty("Baggage", out var bArr) || p.TryGetProperty("baggage", out bArr)) && bArr.ValueKind == JsonValueKind.Array)
                                     {
                                         foreach (var b in bArr.EnumerateArray())
-                                            if (b.TryGetProperty("Price", out var bp) && decimal.TryParse(bp.ToString(), out var bVal)) computedSsrFromPax += bVal;
+                                            if ((b.TryGetProperty("Price", out var bp) || b.TryGetProperty("price", out bp)) && decimal.TryParse(bp.ToString(), out var bVal)) computedSsrFromPax += bVal;
                                     }
-                                    if (p.TryGetProperty("MealDynamic", out var mArr) && mArr.ValueKind == JsonValueKind.Array)
+                                    if ((p.TryGetProperty("MealDynamic", out var mArr) || p.TryGetProperty("mealDynamic", out mArr) || p.TryGetProperty("Meal", out mArr) || p.TryGetProperty("meal", out mArr)) && mArr.ValueKind == JsonValueKind.Array)
                                     {
                                         foreach (var m in mArr.EnumerateArray())
-                                            if (m.TryGetProperty("Price", out var mp) && decimal.TryParse(mp.ToString(), out var mVal)) computedSsrFromPax += mVal;
+                                            if ((m.TryGetProperty("Price", out var mp) || m.TryGetProperty("price", out mp)) && decimal.TryParse(mp.ToString(), out var mVal)) computedSsrFromPax += mVal;
                                     }
-                                    if (p.TryGetProperty("Seat", out var sArr) && sArr.ValueKind == JsonValueKind.Array)
+                                    if ((p.TryGetProperty("Seat", out var sArr) || p.TryGetProperty("seat", out sArr) || p.TryGetProperty("SeatDynamic", out sArr) || p.TryGetProperty("seatDynamic", out sArr)) && sArr.ValueKind == JsonValueKind.Array)
                                     {
                                         foreach (var s in sArr.EnumerateArray())
-                                            if ((s.TryGetProperty("Amount", out var sp) || s.TryGetProperty("Price", out sp)) && decimal.TryParse(sp.ToString(), out var sVal)) computedSsrFromPax += sVal;
+                                            if ((s.TryGetProperty("Amount", out var sp) || s.TryGetProperty("amount", out sp) || s.TryGetProperty("Price", out sp) || s.TryGetProperty("price", out sp)) && decimal.TryParse(sp.ToString(), out var sVal)) computedSsrFromPax += sVal;
                                     }
                                 }
                             }
