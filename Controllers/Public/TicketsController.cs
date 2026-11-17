@@ -39,6 +39,24 @@ public class TicketsController : BaseApiController
         });
     }
 
+    [HttpPost("send-bus-email")]
+    public async Task<IActionResult> SendBusTicketEmail([FromBody] SendBusTicketEmailRequest request)
+    {
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
+
+        await _ticketEmailService.SendBusTicketAsync(request);
+
+        return Ok(new
+        {
+            message = "Bus ticket email sent successfully.",
+            request.ToEmail,
+            request.BookingReference
+        });
+    }
+
     // ================= FETCH ALL TICKETS =================
     [HttpPost("fetch")]
     public async Task<IActionResult> FetchTicket([FromBody] FetchTicketRequest request)

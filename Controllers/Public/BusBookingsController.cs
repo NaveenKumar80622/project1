@@ -3032,6 +3032,8 @@ namespace PickNBook.Api.Controllers
             if (!string.IsNullOrWhiteSpace(status))
             {
                 var normalizedStatus = status.Trim().ToLowerInvariant();
+                var nowIst = IndiaTimeHelper.NowIst;
+                var nowUtc = DateTime.UtcNow;
 
                 if (normalizedStatus == "all")
                 {
@@ -3039,11 +3041,11 @@ namespace PickNBook.Api.Controllers
                 }
                 else if (normalizedStatus == "upcoming")
                 {
-                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && (x.BusBooking == null || x.BusBooking.DepartureTime > DateTime.UtcNow));
+                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && (x.BusBooking == null || x.BusBooking.DepartureTime > nowIst));
                 }
                 else if (normalizedStatus == "completed" || normalizedStatus == "past")
                 {
-                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && x.BusBooking != null && x.BusBooking.DepartureTime <= DateTime.UtcNow);
+                    queryable = queryable.Where(x => (x.Status == "Booked" || x.Status == "Confirmed" || x.Status == "SUCCESS" || x.Status == "Success") && x.BusBooking != null && x.BusBooking.DepartureTime <= nowIst);
                 }
                 else if (normalizedStatus == "cancelled")
                 {
@@ -3051,7 +3053,7 @@ namespace PickNBook.Api.Controllers
                 }
                 else if (normalizedStatus == "payment failed" || normalizedStatus == "payment_failed" || normalizedStatus == "failed")
                 {
-                    queryable = queryable.Where(x => x.Status == "Failed" || x.Status == "FAILED" || ((x.Status == "Pending" || x.Status == "Initiated" || x.Status == BusBookingStatus.BookingInProgress) && (x.BusBooking.DepartureTime <= DateTime.UtcNow || x.BookedAtUtc.AddMinutes(30) <= DateTime.UtcNow)));
+                    queryable = queryable.Where(x => x.Status == "Failed" || x.Status == "FAILED" || ((x.Status == "Pending" || x.Status == "Initiated" || x.Status == BusBookingStatus.BookingInProgress) && (x.BusBooking.DepartureTime <= nowIst || x.BookedAtUtc.AddMinutes(30) <= nowUtc)));
                 }
                 else
                 {
@@ -3383,6 +3385,115 @@ namespace PickNBook.Api.Controllers
             {
                 logger.LogError(ex, "Failed to generate bus ticket PDF for booking {Id}", booking.Id);
                 return StatusCode(500, new { message = "Failed to generate voucher PDF: " + ex.Message });
+            }
+        }
+
+        [HttpPost("/api/bus/bookings/{bookingId}/resend-confirmation-email")]
+        [HttpPost("bookings/{bookingId}/resend-confirmation-email")]
+        public async Task<IActionResult> ResendConfirmationEmail(string bookingId, [FromQuery] string? email = null)
+        {
+            if (!currentUserService.IsAuthenticated())
+            {
+                return Unauthorized("Please login to continue.");
+            }
+            var userId = currentUserService.GetUserOrGuestId();
+            var (userEmail, phoneCandidates) = await GetCurrentUserContactCandidatesAsync(userId);
+            bool isAdmin = User.IsInRole("Admin") || User.IsInRole("SuperAdmin");
+            int? parsedId = int.TryParse(bookingId, out int bid) ? bid : null;
+
+            var booking = await dbContext.BusReservations
+                .AsNoTracking()
+                .Include(x => x.BusBooking)
+                .FirstOrDefaultAsync(x => (parsedId.HasValue && x.Id == parsedId.Value || x.BookingReference == bookingId || x.Pnr == bookingId) &&
+                    (isAdmin || x.UserId == userId ||
+                     (!string.IsNullOrEmpty(userEmail) && x.PassengerEmail != null && x.PassengerEmail.ToLower() == userEmail.ToLower()) ||
+                     (phoneCandidates.Count > 0 && phoneCandidates.Contains(x.PassengerPhone))));
+
+            if (booking is null)
+            {
+                return NotFound(new { message = "Bus booking not found." });
+            }
+
+            var bus = booking.BusBooking ?? new BusBooking
+            {
+                FromCity = "Unknown",
+                ToCity = "Unknown",
+                OperatorName = "Bus Operator",
+                BusType = "Bus",
+                DepartureTime = booking.BookedAtUtc,
+                ArrivalTime = booking.BookedAtUtc.AddHours(4),
+                BusNumber = "N/A"
+            };
+
+            if (booking.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) || booking.Status.Equals("Payment Failed", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Ticket is not available for an unconfirmed or failed booking." });
+            }
+
+            try
+            {
+                var passengers = await dbContext.BusReservationPassengers
+                    .AsNoTracking()
+                    .Where(x => x.BusReservationId == booking.Id)
+                    .OrderBy(x => x.Id)
+                    .ToListAsync();
+
+                var targetEmail = !string.IsNullOrWhiteSpace(email) ? email.Trim() : (booking.PassengerEmail ?? "");
+                if (string.IsNullOrWhiteSpace(targetEmail))
+                {
+                    return BadRequest(new { message = "Passenger email is not available to dispatch ticket." });
+                }
+
+                var emailReq = new SendBusTicketEmailRequest
+                {
+                    ToEmail = targetEmail,
+                    PassengerName = booking.PassengerName,
+                    BookingReference = booking.BookingReference,
+                    Pnr = booking.Pnr,
+                    TicketNo = booking.SrdvTicketNo,
+                    OperatorName = bus.OperatorName,
+                    BusType = bus.BusType,
+                    Origin = srdvBusService.MapCityCodeToName(bus.FromCity),
+                    Destination = srdvBusService.MapCityCodeToName(bus.ToCity),
+                    DepartureTime = bus.DepartureTime,
+                    BoardingPointTime = booking.BoardingPointTime ?? bus.DepartureTime,
+                    ArrivalPointTime = booking.DroppingPointTime ?? bus.ArrivalTime,
+                    IsOvernightArrival = bus.ArrivalTime.Date > bus.DepartureTime.Date,
+                    BoardingPoint = !string.IsNullOrWhiteSpace(booking.BoardingPointName) ? booking.BoardingPointName : bus.BoardingPoint,
+                    ArrivalPoint = !string.IsNullOrWhiteSpace(booking.DroppingPointName) ? booking.DroppingPointName : (!string.IsNullOrWhiteSpace(bus.DroppingPoint) ? bus.DroppingPoint : bus.ToCity),
+                    BookedAtUtc = booking.BookedAtUtc,
+                    CancelledAtUtc = booking.CancelledAtUtc ?? DateTime.UtcNow,
+
+                    Price = booking.TotalPriceInr,
+                    BaseFare = booking.BaseFareInr,
+                    Currency = "INR",
+                    TotalFareBeforeDiscount = booking.TotalPriceInr + booking.DiscountAmountInr,
+                    CancellationPoliciesJson = booking.BusBooking?.CancellationPoliciesJson ?? booking.CancellationPolicyJson,
+
+                    NetFare = booking.NetFareInr,
+                    GstPercent = booking.GstPercent,
+                    GstAmount = booking.GstAmountInr,
+
+                    AppliedPromotionCode = booking.AppliedPromotionCode,
+                    AppliedPromotionType = booking.AppliedPromotionType,
+                    DiscountSource = booking.DiscountSource,
+                    DiscountAmount = booking.DiscountAmountInr > 0 ? booking.DiscountAmountInr : null,
+
+                    Passengers = passengers.Select(p => new BusPassengerSeatDto
+                    {
+                        FullName = p.FullName,
+                        SeatNumber = p.SeatNumber,
+                        Gender = p.Gender
+                    }).ToList()
+                };
+
+                await _ticketEmailService.SendBusTicketAsync(emailReq);
+                return Ok(new { success = true, message = $"Bus ticket confirmation sent successfully to {targetEmail}." });
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to send bus ticket confirmation email for booking {Id}", booking.Id);
+                return StatusCode(500, new { message = "Failed to send bus ticket email: " + ex.Message });
             }
         }
 
@@ -5808,7 +5919,7 @@ Refund: ₹{currentRefundAmount}
                 });
             }
 
-            if (booking.BusBooking.DepartureTime <= DateTime.UtcNow)
+            if (booking.BusBooking.DepartureTime <= IndiaTimeHelper.NowIst)
             {
                 return BadRequest(new
                 {
