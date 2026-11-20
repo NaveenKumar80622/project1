@@ -1097,6 +1097,32 @@ namespace PickNBook.Api.Services
             return await response.Content.ReadAsStringAsync();
         }
 
+        public async Task<string> GetBusImagesProxyAsync(BusImagesProxyRequestDto request)
+        {
+            var compositeResultIndex = BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex);
+            var parsedTraceId = long.TryParse(request.TraceId, out var tid) ? (object)tid : request.TraceId;
+
+            var deviceType = string.IsNullOrWhiteSpace(request.DeviceType)
+                ? "DESKTOP"
+                : request.DeviceType.Trim().ToUpperInvariant();
+
+            var requestBody = new
+            {
+                TraceId = parsedTraceId,
+                ResultIndex = compositeResultIndex,
+                DeviceType = deviceType
+            };
+
+            if (!_httpClient.DefaultRequestHeaders.Contains("Api-Token") && !string.IsNullOrEmpty(ApiToken))
+            {
+                _httpClient.DefaultRequestHeaders.Add("Api-Token", ApiToken);
+            }
+
+            var url = $"{_settings.BusBaseUrl.TrimEnd('/')}/GetBusImages";
+            var response = await _httpClient.PostAsJsonAsync(url, requestBody, _jsonOptions);
+            return await response.Content.ReadAsStringAsync();
+        }
+
         public async Task<SrdvBusCancelResponseDto> CancelTicketV9Async(long traceId, List<string> seatNames, string remarks)
         {
             // 1. Validation

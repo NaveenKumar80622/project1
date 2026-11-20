@@ -20,6 +20,7 @@ namespace PickNBook.Api.Services
         Task<string> SearchBusesProxyAsync(BusSearchProxyRequestDto request);
         Task<string> GetSeatLayoutProxyAsync(BusSeatLayoutProxyRequestDto request);
         Task<string> GetBoardingPointDetailsProxyAsync(BusBoardingPointsProxyRequestDto request);
+        Task<string> GetBusImagesProxyAsync(BusImagesProxyRequestDto request);
         Task<string> BlockBusProxyAsync(SrdvBusBookingRequestDto request);
         Task<string> BookBusProxyAsync(long traceId, string resultIndex);
         Task<SrdvMasterWalletBalanceResponseDto> GetSrdvMasterWalletBalanceAsync(string? endUserIp = null);

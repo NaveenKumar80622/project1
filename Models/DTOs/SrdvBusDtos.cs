@@ -64,6 +64,33 @@ namespace PickNBook.Api.Models.DTOs
         public string? SrdvIndex { get; set; } = string.Empty;
         public string ResultIndex { get; set; } = string.Empty;
     }
+
+    public class BusImagesProxyRequestDto
+    {
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string TraceId { get; set; } = string.Empty;
+        public string? SrdvIndex { get; set; } = string.Empty;
+        public string ResultIndex { get; set; } = string.Empty;
+        public string? DeviceType { get; set; } = "DESKTOP";
+    }
+
+    public class SrdvBusImagesResponseDto
+    {
+        public SrdvBusBookingDetailsErrorDto? Error { get; set; }
+        public long TraceId { get; set; }
+        public long SrdvIndex { get; set; }
+        public string ResultIndex { get; set; } = string.Empty;
+        public bool IsImageSupported { get; set; }
+        public bool IsVehicleImage { get; set; }
+        public int ImageCount { get; set; }
+        public List<SrdvBusImageItemDto> BusImages { get; set; } = new();
+    }
+
+    public class SrdvBusImageItemDto
+    {
+        public string ImageType { get; set; } = string.Empty;
+        public string ImageUrl { get; set; } = string.Empty;
+    }
     public class SrdvBusBookingRequestDto
     {
         [JsonConverter(typeof(SafeStringConverter))]

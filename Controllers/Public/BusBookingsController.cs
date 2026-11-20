@@ -705,6 +705,95 @@ namespace PickNBook.Api.Controllers
             }
         }
 
+        [HttpPost("bus-images")]
+        [HttpPost("images")]
+        [HttpPost("v9/GetBusImages")]
+        [AllowAnonymous]
+        public async Task<IActionResult> GetBusImagesProxy([FromBody] BusImagesProxyRequestDto request)
+        {
+            if (request == null)
+            {
+                return BadRequest("Request body cannot be null.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.TraceId) || !long.TryParse(request.TraceId, out var traceIdNum) || traceIdNum <= 0)
+            {
+                return BadRequest("TraceId must be present, numeric, and greater than 0.");
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ResultIndex))
+            {
+                return BadRequest("ResultIndex is required.");
+            }
+
+            var incomingTraceId = request.TraceId;
+            var compositeResultIndex = SrdvBusService.BuildCompositeResultIndex(request.ResultIndex, request.SrdvIndex);
+
+            bool foundInCache = _cache.TryGetValue($"bus_ctx_{request.TraceId}_{request.ResultIndex}", out BusSearchItemContext? busCtx)
+                || _cache.TryGetValue($"bus_ctx_{request.TraceId}_{compositeResultIndex}", out busCtx);
+
+            if (foundInCache && busCtx != null)
+            {
+                if (string.IsNullOrWhiteSpace(request.SrdvIndex) && busCtx.SrdvIndex > 0)
+                {
+                    request.SrdvIndex = busCtx.SrdvIndex.ToString();
+                }
+
+                if (!string.IsNullOrWhiteSpace(busCtx.TraceId) && !string.Equals(request.TraceId, busCtx.TraceId, StringComparison.OrdinalIgnoreCase))
+                {
+                    request.TraceId = busCtx.TraceId;
+                }
+            }
+
+            var deviceType = string.IsNullOrWhiteSpace(request.DeviceType) ? "DESKTOP" : request.DeviceType.Trim().ToUpperInvariant();
+            var cacheKey = $"bus_images_{request.TraceId}_{compositeResultIndex}_{deviceType}";
+
+            if (_cache.TryGetValue(cacheKey, out System.Text.Json.Nodes.JsonNode? cachedNode) && cachedNode != null)
+            {
+                return Ok(cachedNode);
+            }
+
+            try
+            {
+                var rawJson = await _srdvBusService.GetBusImagesProxyAsync(request);
+                var jsonNode = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
+
+                if (jsonNode is System.Text.Json.Nodes.JsonObject jsonObj)
+                {
+                    int errorCode = 0;
+                    if (jsonObj["Error"] is System.Text.Json.Nodes.JsonObject errObj && errObj["ErrorCode"] != null)
+                    {
+                        int.TryParse(errObj["ErrorCode"]?.ToString(), out errorCode);
+                    }
+
+                    if (errorCode == 0)
+                    {
+                        _cache.Set(cacheKey, jsonNode, TimeSpan.FromMinutes(30));
+                    }
+                    else if (errorCode == 7004)
+                    {
+                        _cache.Set(cacheKey, jsonNode, TimeSpan.FromMinutes(10));
+                    }
+                }
+
+                return Ok(jsonNode);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to fetch bus images from SRDV proxy.");
+                return Ok(new
+                {
+                    Error = new { ErrorCode = 7004, ErrorMessage = "Supplier service is temporarily unavailable." },
+                    TraceId = traceIdNum,
+                    ResultIndex = request.ResultIndex,
+                    IsImageSupported = false,
+                    IsVehicleImage = false,
+                    ImageCount = 0,
+                    BusImages = Array.Empty<object>()
+                });
+            }
+        }
+
         [HttpGet("srdv-wallet/balance")]
         [AllowAnonymous]
         public async Task<IActionResult> GetPublicSrdvMasterWalletBalance([FromQuery] decimal? requiredAmount = null)
