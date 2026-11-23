@@ -1005,13 +1005,11 @@ namespace PickNBook.Api.Services.Implementations
                     payload: new
                     {
                         Reference = reservation.BookingReference,
-                        Pnr = reservation.Pnr,
                         Boarding = boardingPoint,
                         Time = formattedTime,
                         Var1 = reservation.BookingReference,
-                        Var2 = reservation.Pnr,
-                        Var3 = boardingPoint,
-                        Var4 = formattedTime
+                        Var2 = boardingPoint,
+                        Var3 = formattedTime
                     },
                     bookingId: reservation.BookingReference,
                     userId: payment.UserId

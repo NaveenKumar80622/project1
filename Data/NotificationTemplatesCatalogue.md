@@ -281,14 +281,14 @@ This document defines all the notification templates (Email, SMS, and WhatsApp) 
 
 **SMS Template**
 *TemplateKey*: `BUS_BOOKING_CONFIRMED` (Alias: `BUS_BOOKING_CONFIRMED_SMS`)
-*DLT Template ID*: `1777178997159302603`
-*Provider Label*: `newBUS_BOOKING_CONFIRMED`
-*Provider Template ID*: `1563352`
+*DLT Template ID*: `1777179542722640556`
+*Provider Label*: `NBusBooking`
+*Provider Template ID*: `1579975`
 *Sender Header*: `PICNBK`
-*Variables*: `{Reference}` / `${var1}`, `{Pnr}` / `${var2}`, `{Boarding}` / `${var3}`, `{Time}` / `${var4}`
-*Body*: `Pick&Book: Bus booking confirmed. Ref {Reference}, Pnr {Pnr}. Boarding: {Boarding} at {Time}.`
-*(Provider format: `Pick&Book: Bus booking confirmed. Ref ${var1}, Pnr ${var2}. Boarding: ${var3} at ${var4}.`)*
-*Sample Content*: `Pick&Book: Bus booking confirmed. Ref PNB26091000125, Pnr PNR-B784192. Boarding: MGBS Hyderabad at 21/09/2026 06:30 AM.`
+*Variables*: `{Reference}` / `${var1}`, `{Boarding}` / `${var2}`, `{Time}` / `${var3}`
+*Body*: `Pick&Book: Bus booking confirmed. Ref ${var1}. Boarding: ${var2} at ${var3}.`
+*(Template format: `Pick&Book: Bus booking confirmed. Ref {Reference}. Boarding: {Boarding} at {Time}.`)*
+*Sample Content*: `Pick&Book: Bus booking confirmed. Ref BS-20261121212221-577. Boarding: Kondapur at 25/11/2026 10:55 PM.`
 
 ---
 
