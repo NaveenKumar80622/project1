@@ -468,8 +468,28 @@ namespace PickNBook.Api.Services.Implementations
                 payment.UpdatedAt = DateTime.UtcNow;
 
                 if (cashfreePaymentId != null) payment.CashfreePaymentId = cashfreePaymentId;
-                if (paymentMethod != null) payment.GatewayPaymentMethod = paymentMethod;
-                if (string.IsNullOrEmpty(payment.PaymentMethod)) payment.PaymentMethod = "Cashfree";
+                if (!string.IsNullOrWhiteSpace(paymentMethod))
+                {
+                    var normalizedInstrument = PickNBook.Api.Helpers.PaymentMethodHelper.Normalize(paymentMethod);
+                    payment.GatewayPaymentMethod = normalizedInstrument;
+
+                    if (payment.WalletUsedAmount > 0 && payment.GatewayPaidAmount > 0)
+                    {
+                        payment.PaymentMethod = $"Hybrid (Wallet + {normalizedInstrument})";
+                    }
+                    else if (payment.WalletUsedAmount > 0 && payment.GatewayPaidAmount == 0)
+                    {
+                        payment.PaymentMethod = "Wallet";
+                    }
+                    else
+                    {
+                        payment.PaymentMethod = normalizedInstrument;
+                    }
+                }
+                else if (string.IsNullOrEmpty(payment.PaymentMethod) || string.Equals(payment.PaymentMethod, "Cashfree", StringComparison.OrdinalIgnoreCase))
+                {
+                    payment.PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount);
+                }
                 if (failureReason != null) payment.FailureReason = failureReason;
                 if (webhookReceivedAt != null) payment.WebhookReceivedAt = webhookReceivedAt;
 
@@ -479,6 +499,45 @@ namespace PickNBook.Api.Services.Implementations
                     if (payment.FulfillmentStatus == null || payment.FulfillmentStatus == "None") 
                     {
                         payment.FulfillmentStatus = "Pending";
+                    }
+                }
+
+                if (status == PaymentStatus.Success)
+                {
+                    var targetResId = payment.BookingReferenceId ?? payment.BookingId;
+                    if (targetResId.HasValue && targetResId.Value > 0)
+                    {
+                        try
+                        {
+                            if (string.Equals(payment.BookingType, "Bus", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var busRes = await _dbContext.BusReservations.FirstOrDefaultAsync(r => r.Id == targetResId.Value);
+                                if (busRes != null && !string.IsNullOrWhiteSpace(payment.PaymentMethod))
+                                {
+                                    busRes.PaymentMethod = payment.PaymentMethod;
+                                }
+                            }
+                            else if (string.Equals(payment.BookingType, "Flight", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var flightRes = await _dbContext.FlightReservations.FirstOrDefaultAsync(r => r.Id == targetResId.Value);
+                                if (flightRes != null && !string.IsNullOrWhiteSpace(payment.PaymentMethod))
+                                {
+                                    flightRes.PaymentMethod = payment.PaymentMethod;
+                                }
+                            }
+                            else if (string.Equals(payment.BookingType, "Hotel", StringComparison.OrdinalIgnoreCase))
+                            {
+                                var hotelRes = await _dbContext.HotelReservations.FirstOrDefaultAsync(r => r.Id == targetResId.Value);
+                                if (hotelRes != null && !string.IsNullOrWhiteSpace(payment.PaymentMethod))
+                                {
+                                    hotelRes.PaymentMethod = payment.PaymentMethod;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to update reservation PaymentMethod for {BookingType} {ResId}", payment.BookingType, targetResId);
+                        }
                     }
                 }
 
@@ -761,7 +820,7 @@ namespace PickNBook.Api.Services.Implementations
                     BookingType = payment.BookingType,
                     Amount = payment.FinalPayableAmount,
                     Currency = payment.Currency,
-                    PaymentMethod = payment.PaymentMethod,
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
                     PaidAt = payment.PaidAt,
                     FailureReason = payment.FailureReason,
                     FulfillmentStatus = payment.FulfillmentStatus,
@@ -786,7 +845,7 @@ namespace PickNBook.Api.Services.Implementations
                     BookingType = payment.BookingType,
                     Amount = payment.FinalPayableAmount,
                     Currency = payment.Currency,
-                    PaymentMethod = payment.PaymentMethod,
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
                     PaidAt = payment.PaidAt,
                     FailureReason = payment.FailureReason,
                     FulfillmentStatus = payment.FulfillmentStatus,
@@ -829,11 +888,7 @@ namespace PickNBook.Api.Services.Implementations
                                     
                                     if (cfPayment.TryGetProperty("payment_method", out var methodEl))
                                     {
-                                        var methodDict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(methodEl.GetRawText());
-                                        if (methodDict != null && methodDict.Count > 0)
-                                        {
-                                            paymentMethod = methodDict.Keys.First();
-                                        }
+                                        paymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ParseCashfreePaymentMethod(methodEl);
                                     }
                                     break;
                                 }
@@ -896,7 +951,7 @@ namespace PickNBook.Api.Services.Implementations
                 BookingType = payment.BookingType,
                 Amount = payment.FinalPayableAmount,
                 Currency = payment.Currency,
-                PaymentMethod = payment.PaymentMethod,
+                PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
                 PaidAt = payment.PaidAt,
                 FailureReason = payment.FailureReason,
                 FulfillmentStatus = payment.FulfillmentStatus,

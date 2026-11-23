@@ -312,7 +312,9 @@ namespace PickNBook.Api.Controllers.Admin
                     TotalAmount = p.TotalAmount > 0 ? p.TotalAmount : p.FinalPayableAmount,
                     p.WalletUsedAmount,
                     GatewayPaidAmount = p.GatewayPaidAmount > 0 ? p.GatewayPaidAmount : (p.FinalPayableAmount - p.WalletUsedAmount),
-                    PaymentMethod = p.PaymentMethod ?? (p.WalletUsedAmount > 0 && p.GatewayPaidAmount > 0 ? "Hybrid" : p.WalletUsedAmount > 0 ? "Wallet" : "Cashfree"),
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(p.PaymentMethod, p.GatewayPaymentMethod, p.WalletUsedAmount, p.GatewayPaidAmount),
+                    Method = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(p.PaymentMethod, p.GatewayPaymentMethod, p.WalletUsedAmount, p.GatewayPaidAmount),
+                    GatewayPaymentMethod = p.GatewayPaymentMethod,
                     p.Currency,
                     p.Status,
                     p.FulfillmentStatus,
@@ -576,7 +578,9 @@ namespace PickNBook.Api.Controllers.Admin
                     TotalAmount = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
                     payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 ? payment.GatewayPaidAmount : (payment.FinalPayableAmount - payment.WalletUsedAmount),
-                    PaymentMethod = payment.PaymentMethod ?? (payment.WalletUsedAmount > 0 && payment.GatewayPaidAmount > 0 ? "Hybrid" : payment.WalletUsedAmount > 0 ? "Wallet" : "Cashfree"),
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
+                    Method = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
+                    GatewayPaymentMethod = payment.GatewayPaymentMethod,
                     payment.Currency,
                     payment.Status,
                     payment.FulfillmentStatus,
@@ -933,8 +937,14 @@ namespace PickNBook.Api.Controllers.Admin
 
             string stage1Status = isPaymentSuccess ? "COMPLETED" : (isPaymentFailed ? "FAILED" : "PENDING");
             DateTime? stage1Time = isPaymentSuccess ? (p.PaidAt ?? p.UpdatedAt) : (isPaymentFailed ? p.UpdatedAt : p.CreatedAt);
+            string resolvedMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(
+                p.PaymentMethod,
+                p.GatewayPaymentMethod,
+                p.WalletUsedAmount,
+                gwPaid);
+
             string stage1Summary = isPaymentSuccess
-                ? $"₹{p.FinalPayableAmount:F2} captured via {p.PaymentMethod ?? "Cashfree"} (Gateway: ₹{gwPaid:F2}, Wallet: ₹{p.WalletUsedAmount:F2})."
+                ? $"₹{p.FinalPayableAmount:F2} captured via {resolvedMethod} (Gateway: ₹{gwPaid:F2}, Wallet: ₹{p.WalletUsedAmount:F2})."
                 : (isPaymentFailed
                     ? (p.FailureReason ?? p.LastError ?? "Payment dropped or declined by customer bank.")
                     : $"Cashfree Order #{p.CashfreeOrderId} created for ₹{p.FinalPayableAmount:F2}. Awaiting customer payment.");
@@ -955,7 +965,9 @@ namespace PickNBook.Api.Controllers.Admin
                     { "gatewayPaid", gwPaid },
                     { "walletUsed", p.WalletUsedAmount },
                     { "currency", p.Currency },
-                    { "method", p.PaymentMethod ?? "Cashfree" },
+                    { "method", resolvedMethod },
+                    { "paymentMethod", resolvedMethod },
+                    { "gatewayPaymentMethod", p.GatewayPaymentMethod },
                     { "isPaid", isPaymentSuccess }
                 }
             });

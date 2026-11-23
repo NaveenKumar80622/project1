@@ -120,6 +120,57 @@ namespace PickNBook.Api.Models.Payments
             }
             return "unknown";
         }
+
+        /// <summary>
+        /// Extracts a normalized, detailed customer-facing payment method (e.g. UPI, Debit Card, Credit Card, Net Banking).
+        /// </summary>
+        public string GetDetailedMethodName()
+        {
+            if (AdditionalData != null && AdditionalData.Count > 0)
+            {
+                foreach (var kvp in AdditionalData)
+                {
+                    var instrument = kvp.Key.ToLowerInvariant();
+                    if (instrument == "upi") return "UPI";
+                    if (instrument == "card")
+                    {
+                        if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                            kvp.Value.TryGetProperty("card_type", out var typeEl))
+                        {
+                            var typeStr = typeEl.GetString()?.ToLowerInvariant() ?? "";
+                            if (typeStr.Contains("debit")) return "Debit Card";
+                            if (typeStr.Contains("credit")) return "Credit Card";
+                        }
+                        return "Card Payment";
+                    }
+                    if (instrument == "netbanking")
+                    {
+                        if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                            kvp.Value.TryGetProperty("netbanking_bank_name", out var bankEl))
+                        {
+                            var bankName = bankEl.GetString();
+                            if (!string.IsNullOrWhiteSpace(bankName)) return $"Net Banking ({bankName.Trim()})";
+                        }
+                        return "Net Banking";
+                    }
+                    if (instrument == "app")
+                    {
+                        if (kvp.Value.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                            kvp.Value.TryGetProperty("provider", out var provEl))
+                        {
+                            var prov = provEl.GetString();
+                            if (!string.IsNullOrWhiteSpace(prov)) return $"Wallet ({char.ToUpperInvariant(prov[0]) + prov[1..]})";
+                        }
+                        return "Wallet";
+                    }
+                    if (instrument == "paylater") return "Pay Later";
+                    if (instrument == "emi" || instrument == "cardlessemi") return "EMI";
+
+                    return char.ToUpperInvariant(kvp.Key[0]) + (kvp.Key.Length > 1 ? kvp.Key[1..] : "");
+                }
+            }
+            return "Cashfree";
+        }
     }
     public class CashfreeWebhookRefund
     {

@@ -2121,6 +2121,11 @@ namespace PickNBook.Api.Controllers
                     }
 
                     paymentsByBooking.TryGetValue(x.Id, out var payment);
+                    var resolvedPaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(
+                        payment?.PaymentMethod ?? x.PaymentMethod,
+                        payment?.GatewayPaymentMethod,
+                        payment?.WalletUsedAmount ?? x.WalletPaidAmount,
+                        payment?.GatewayPaidAmount ?? x.GatewayPaidAmount);
 
                     var (cleanPnr, opPnr) = ResolvePnrAndOperatorPnr(x.Pnr, x.SrdvBookingId, x.SrdvBookingResponseJson);
 
@@ -2202,6 +2207,10 @@ namespace PickNBook.Api.Controllers
                         SrdvMarginInr = srdvMargin,
                         CommercialMargin = srdvMargin,
                         SrdvCommercialMargin = srdvMargin,
+
+                        PaymentMethod = resolvedPaymentMethod,
+                        Method = resolvedPaymentMethod,
+                        GatewayPaymentMethod = payment?.GatewayPaymentMethod,
 
                         x.CouponCode,
                         x.AutoPromotionCode,

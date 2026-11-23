@@ -565,7 +565,7 @@ namespace PickNBook.Api.Services.Implementations
                     SeatsBooked = seatsRequired,
                     TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
                     CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
-                    PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
                     WalletPaidAmount = payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     NetFareInr = payment.OriginalAmount,
@@ -854,6 +854,7 @@ namespace PickNBook.Api.Services.Implementations
                 reservation.SrdvBookingId = supplierBookingId ?? (operatorPnr ?? reservation.SrdvBookingId);
                 reservation.SrdvTicketNo = srdvTicketNo;
                 reservation.Status = "Booked";
+                reservation.PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount);
                 reservation.SrdvBookingResponseJson = srdvResponseJson;
                 
                 if (!string.IsNullOrEmpty(srdvResponseJson))
@@ -1228,7 +1229,7 @@ namespace PickNBook.Api.Services.Implementations
                     BasePrice = payment.OriginalAmount,
                     ConvenienceFee = payment.ConvenienceFee,
                     TotalPrice = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
-                    PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
                     WalletPaidAmount = payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     
@@ -2014,7 +2015,7 @@ namespace PickNBook.Api.Services.Implementations
                     if (ticketBaseFare > 0) reservation.SupplierBaseFare = ticketBaseFare;
                     if (ticketTax > 0) reservation.SupplierTaxAmount = ticketTax;
                     if (ticketTotalFare > 0) reservation.SupplierTotalFare = ticketTotalFare;
-                    reservation.PaymentMethod = payment.PaymentMethod ?? "Cashfree";
+                    reservation.PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount);
                     reservation.WalletPaidAmount = payment.WalletUsedAmount;
                     reservation.GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount;
 
@@ -2172,7 +2173,7 @@ namespace PickNBook.Api.Services.Implementations
                     CancellationPolicyJson = cancellationPolicyJson,
                     TotalPriceInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
                     CustomerFareInr = payment.TotalAmount > 0 ? payment.TotalAmount : payment.FinalPayableAmount,
-                    PaymentMethod = payment.PaymentMethod ?? "Cashfree",
+                    PaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(payment.PaymentMethod, payment.GatewayPaymentMethod, payment.WalletUsedAmount, payment.GatewayPaidAmount),
                     WalletPaidAmount = payment.WalletUsedAmount,
                     GatewayPaidAmount = payment.GatewayPaidAmount > 0 || payment.WalletUsedAmount > 0 ? payment.GatewayPaidAmount : payment.FinalPayableAmount,
                     NetFareInr = payment.OriginalAmount,

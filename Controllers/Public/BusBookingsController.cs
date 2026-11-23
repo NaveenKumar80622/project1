@@ -4730,6 +4730,11 @@ namespace PickNBook.Api.Controllers
             }
 
             long? effectivePaymentId = payment?.Id != null && payment.Id > 0 ? payment.Id : fallbackPaymentId;
+            var resolvedPaymentMethod = PickNBook.Api.Helpers.PaymentMethodHelper.ResolvePaymentMethod(
+                payment?.PaymentMethod ?? reservation.PaymentMethod,
+                payment?.GatewayPaymentMethod,
+                payment?.WalletUsedAmount ?? reservation.WalletPaidAmount,
+                payment?.GatewayPaidAmount ?? reservation.GatewayPaidAmount);
 
             return new
             {
@@ -4830,6 +4835,9 @@ namespace PickNBook.Api.Controllers
 
                 // Payment & Contact Identifiers
                 PaymentId = effectivePaymentId,
+                PaymentMethod = resolvedPaymentMethod,
+                Method = resolvedPaymentMethod,
+                GatewayPaymentMethod = payment?.GatewayPaymentMethod,
                 CashfreePaymentId = payment?.CashfreePaymentId,
                 CashfreeOrderId = payment?.CashfreeOrderId,
                 RefundId = payment?.RefundId ?? (lifecycle?.Hierarchy?.Stages?.FirstOrDefault(s => s.Key == "REFUND_SETTLEMENT")?.Meta?.TryGetValue("refundId", out var rVal) == true ? rVal?.ToString() : null),

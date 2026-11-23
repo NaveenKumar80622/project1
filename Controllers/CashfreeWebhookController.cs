@@ -98,7 +98,9 @@ namespace PickNBook.Api.Controllers
                 string paymentStatus = payload.Data.Payment.PaymentStatus;
                 decimal amount = payload.Data.Payment.PaymentAmount;
                 string paymentId = payload.Data.Payment.CfPaymentId;
-                string paymentMethod = payload.Data.Payment.PaymentMethod?.GetMethodName();
+                string paymentMethod = payload.Data.Payment.PaymentMethod?.GetDetailedMethodName() 
+                    ?? payload.Data.Payment.PaymentMethod?.GetMethodName() 
+                    ?? "Cashfree";
                 string? paymentMessage = payload.Data.Payment.PaymentMessage;
 
                 bool processed = await _paymentService.ProcessWebhookAsync(orderId, payload.Type, paymentStatus, amount, paymentId, paymentMethod, paymentMessage);

@@ -143,8 +143,14 @@ namespace PickNBook.Api.Helpers
                 ? (payment?.PaidAt ?? payment?.UpdatedAt ?? bookingDate)
                 : (isPaymentFailed ? (payment?.UpdatedAt ?? (payment?.CreatedAt.AddMinutes(30) ?? bookingDate)) : (payment?.CreatedAt ?? bookingDate));
 
+            string resolvedMethod = PaymentMethodHelper.ResolvePaymentMethod(
+                payment?.PaymentMethod,
+                payment?.GatewayPaymentMethod,
+                walletUsed,
+                gwPaid);
+
             string stage0Summary = isPaymentSuccess
-                ? $"₹{totalPaid:F2} paid via {payment?.PaymentMethod ?? "Cashfree"} (Gateway: ₹{gwPaid:F2}, Wallet: ₹{walletUsed:F2})."
+                ? $"₹{totalPaid:F2} paid via {resolvedMethod} (Gateway: ₹{gwPaid:F2}, Wallet: ₹{walletUsed:F2})."
                 : (isPaymentFailed
                     ? (isPaymentExpiredOrTimedOut
                         ? (travelDepartureTime.HasValue && travelDepartureTime.Value <= nowUtc
@@ -168,7 +174,9 @@ namespace PickNBook.Api.Helpers
                     { "amount", totalPaid },
                     { "gatewayPaid", gwPaid },
                     { "walletUsed", walletUsed },
-                    { "method", payment?.PaymentMethod ?? "Cashfree" },
+                    { "method", resolvedMethod },
+                    { "paymentMethod", resolvedMethod },
+                    { "gatewayPaymentMethod", payment?.GatewayPaymentMethod },
                     { "isPaid", isPaymentSuccess },
                     { "pendingDays", pendingDays },
                     { "isTimedOut", isPaymentExpiredOrTimedOut }
@@ -192,7 +200,7 @@ namespace PickNBook.Api.Helpers
                 {
                     Timestamp = payment?.PaidAt ?? payment?.UpdatedAt ?? bookingDate ?? DateTime.UtcNow,
                     Stage = "PAYMENT_CAPTURED",
-                    Title = $"Payment Verified ({payment?.PaymentMethod ?? "Cashfree"})",
+                    Title = $"Payment Verified ({resolvedMethod})",
                     Status = "COMPLETED",
                     Description = $"Payment of ₹{totalPaid:F2} confirmed. (Gateway: ₹{gwPaid:F2}, Wallet: ₹{walletUsed:F2})."
                 });
@@ -677,7 +685,9 @@ namespace PickNBook.Api.Helpers
                 TotalAmount = totalPaid,
                 GatewayPaidAmount = gwPaid,
                 WalletUsedAmount = walletUsed,
-                PaymentMethod = payment?.PaymentMethod ?? "Cashfree",
+                PaymentMethod = resolvedMethod,
+                Method = resolvedMethod,
+                GatewayPaymentMethod = payment?.GatewayPaymentMethod,
                 PaymentReference = payment?.PaymentReference ?? bookingRef,
                 CashfreeOrderId = payment?.CashfreeOrderId,
                 CashfreePaymentId = payment?.CashfreePaymentId,
