@@ -1821,6 +1821,12 @@ namespace PickNBook.Api.Services
                         {
                             if (rm.Price != null)
                             {
+                                if (rm.SupplierPricing != null)
+                                {
+                                    if (rm.Price.Tax == 0m && rm.SupplierPricing.Taxes > 0m) rm.Price.Tax = rm.SupplierPricing.Taxes + rm.SupplierPricing.ManagementFeeTax;
+                                    if (rm.Price.TotalGSTAmount == 0m && rm.Price.Tax > 0m) rm.Price.TotalGSTAmount = rm.Price.Tax;
+                                    if (rm.Price.RoomPrice == 0m && rm.SupplierPricing.BasePrice > 0m) rm.Price.RoomPrice = rm.SupplierPricing.BasePrice;
+                                }
                                 await ApplyMarkupAndGstAsync(markupService, rm.Price, null, hotelCode, "B2C");
                                 rm.OfferedPrice = rm.Price.OfferedPrice;
                                 rm.B2CBasePrice = rm.Price.B2CBasePrice;
@@ -1980,6 +1986,7 @@ namespace PickNBook.Api.Services
 
                     if (psProp.TryGetProperty("Difference", out var diffProp) && diffProp.ValueKind == JsonValueKind.Number) ps.Difference = diffProp.GetDecimal();
                     else if (psProp.TryGetProperty("PriceDifference", out var pdProp) && pdProp.ValueKind == JsonValueKind.Number) ps.Difference = pdProp.GetDecimal();
+                    else if (ps.BlockedPrice > 0 && ps.ServedPrice > 0) ps.Difference = ps.BlockedPrice - ps.ServedPrice;
 
                     if (psProp.TryGetProperty("Currency", out var curProp)) ps.Currency = curProp.GetString() ?? "INR";
 
@@ -2153,6 +2160,12 @@ namespace PickNBook.Api.Services
                     {
                         if (rm.Price != null)
                         {
+                            if (rm.SupplierPricing != null)
+                            {
+                                if (rm.Price.Tax == 0m && rm.SupplierPricing.Taxes > 0m) rm.Price.Tax = rm.SupplierPricing.Taxes + rm.SupplierPricing.ManagementFeeTax;
+                                if (rm.Price.TotalGSTAmount == 0m && rm.Price.Tax > 0m) rm.Price.TotalGSTAmount = rm.Price.Tax;
+                                if (rm.Price.RoomPrice == 0m && rm.SupplierPricing.BasePrice > 0m) rm.Price.RoomPrice = rm.SupplierPricing.BasePrice;
+                            }
                             await ApplyMarkupAndGstAsync(markupService, rm.Price, null, resolvedHotelCode, "B2C");
                             rm.OfferedPrice = rm.Price.OfferedPrice;
                             rm.B2CBasePrice = rm.Price.B2CBasePrice;
@@ -2864,8 +2877,15 @@ namespace PickNBook.Api.Services
                 price.AgentMarkUp = markup;
                 
                 price.B2CTotalPrice = price.OfferedPrice + markup;
-                price.B2CBasePrice = Math.Max(0m, price.B2CTotalPrice - price.TotalGSTAmount);
+                decimal totalTax = price.TotalGSTAmount > 0m ? price.TotalGSTAmount : (price.Tax > 0m ? price.Tax : (price.GST != null ? (price.GST.CGSTAmount + price.GST.SGSTAmount + price.GST.IGSTAmount) : 0m));
+                if (price.TotalGSTAmount == 0m && totalTax > 0m)
+                {
+                    price.TotalGSTAmount = totalTax;
+                }
+                price.B2CBasePrice = Math.Max(0m, price.B2CTotalPrice - totalTax);
                 price.B2CFinalFare = price.B2CTotalPrice;
+                price.OfferedPriceRoundedOff = decimal.Round(price.B2CTotalPrice, 0, MidpointRounding.AwayFromZero);
+                price.PublishedPriceRoundedOff = decimal.Round(price.B2CTotalPrice, 0, MidpointRounding.AwayFromZero);
             }
         }
 
@@ -2883,8 +2903,15 @@ namespace PickNBook.Api.Services
                 price.AgentMarkUp = markup;
                 
                 price.B2CTotalPrice = price.OfferedPrice + markup;
-                price.B2CBasePrice = Math.Max(0m, price.B2CTotalPrice - price.TotalGSTAmount);
+                decimal totalTax = price.TotalGSTAmount > 0m ? price.TotalGSTAmount : (price.Tax > 0m ? price.Tax : (price.GST != null ? (price.GST.CGSTAmount + price.GST.SGSTAmount + price.GST.IGSTAmount) : 0m));
+                if (price.TotalGSTAmount == 0m && totalTax > 0m)
+                {
+                    price.TotalGSTAmount = totalTax;
+                }
+                price.B2CBasePrice = Math.Max(0m, price.B2CTotalPrice - totalTax);
                 price.B2CFinalFare = price.B2CTotalPrice;
+                price.OfferedPriceRoundedOff = decimal.Round(price.B2CTotalPrice, 0, MidpointRounding.AwayFromZero);
+                price.PublishedPriceRoundedOff = decimal.Round(price.B2CTotalPrice, 0, MidpointRounding.AwayFromZero);
             }
         }
         public Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(HotelBookingDetailsRequestDto request)
