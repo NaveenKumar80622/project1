@@ -2381,22 +2381,102 @@ namespace PickNBook.Api.Services.Implementations
                 }
 
                 await ProcessCouponConsumptionAsync(payment.CouponCode, payment.UserId, reservation.Id, payment.FinalPayableAmount, payment.DiscountAmount, "Flight");
-                
-                await _notificationService.EnqueueAsync(
-                    eventType: "FlightBookingSuccess",
-                    channel: "Email",
-                    recipient: reservation.PassengerEmail ?? payment.UserId,
-                    templateKey: "FLIGHT_BOOKING_CONFIRMED",
-                    payload: new { Pnr = reservation.Pnr, Name = reservation.PassengerName, Amount = payment.FinalPayableAmount }
-                );
+
+                // Dispatch formatted e-ticket email with attached PDF ticket (matching BusBooking pattern)
+                var recipientEmail = !string.IsNullOrWhiteSpace(reservation.PassengerEmail)
+                    ? reservation.PassengerEmail
+                    : (!string.IsNullOrWhiteSpace(payment.CustomerEmail) ? payment.CustomerEmail : payment.UserId);
+
+                if (!string.IsNullOrWhiteSpace(recipientEmail) && recipientEmail.Contains("@"))
+                {
+                    try
+                    {
+                        var emailReq = new SendFlightTicketEmailRequest
+                        {
+                            ToEmail = recipientEmail,
+                            PassengerName = !string.IsNullOrWhiteSpace(reservation.PassengerName) ? reservation.PassengerName : "Passenger",
+                            BookingReference = reservation.BookingReference,
+                            Airline = !string.IsNullOrWhiteSpace(reservation.Airline) ? reservation.Airline : "Flight Service",
+                            Origin = reservation.FromCity,
+                            Destination = reservation.ToCity,
+                            DepartureTime = reservation.DepartureTime,
+                            ArrivalTime = reservation.ArrivalTime,
+                            Pnr = reservation.Pnr,
+                            Price = payment.FinalPayableAmount > 0 ? payment.FinalPayableAmount : reservation.TotalPriceInr,
+                            Currency = "INR",
+                            NonRefundable = reservation.NonRefundable,
+                            CancellationCharges = reservation.CancellationCharges,
+                            PartialSegmentCancellation = reservation.PartialSegmentCancellation,
+                            Passengers = _dbContext.FlightReservationPassengers.Local
+                                .Where(p => p.FlightReservationId == reservation.Id || p.FlightReservation == reservation)
+                                .Select(p => new FlightPassengerTicketDto
+                                {
+                                    FullName = p.FullName,
+                                    PassengerType = p.PassengerType,
+                                    Gender = p.Gender,
+                                    SeatNumber = p.SeatNumber,
+                                    TicketNumber = p.TicketNumber,
+                                    Status = p.Status ?? "Booked"
+                                }).ToList(),
+                            Segments = reservation.Segments.Select(s => new FlightTicketSegmentDto
+                            {
+                                Airline = s.Airline,
+                                FlightNumber = s.FlightNumber,
+                                FromCity = s.FromCity,
+                                ToCity = s.ToCity,
+                                DepartureTime = s.DepartureTime,
+                                ArrivalTime = s.ArrivalTime,
+                                Pnr = s.Pnr,
+                                Status = s.Status ?? "Booked"
+                            }).ToList()
+                        };
+
+                        var backgroundJobQueue = _serviceProvider.GetService<PickNBook.Api.Services.IBackgroundJobQueue>();
+                        if (backgroundJobQueue != null)
+                        {
+                            backgroundJobQueue.QueueBackgroundWorkItem(async (sp, ct) =>
+                            {
+                                try
+                                {
+                                    var scopedEmail = sp.GetRequiredService<ITicketEmailService>();
+                                    await scopedEmail.SendFlightTicketAsync(emailReq);
+                                }
+                                catch (Exception bgEx)
+                                {
+                                    _logger.LogError(bgEx, "Failed to send background flight ticket email for {BookingReference}", reservation.BookingReference);
+                                }
+                            });
+                        }
+                        else
+                        {
+                            var ticketEmailService = _serviceProvider.GetRequiredService<ITicketEmailService>();
+                            _ = Task.Run(async () =>
+                            {
+                                try
+                                {
+                                    await ticketEmailService.SendFlightTicketAsync(emailReq);
+                                }
+                                catch (Exception runEx)
+                                {
+                                    _logger.LogError(runEx, "Failed to send async flight ticket email for {BookingReference}", reservation.BookingReference);
+                                }
+                            });
+                        }
+                    }
+                    catch (Exception prepEx)
+                    {
+                        _logger.LogError(prepEx, "Error preparing flight ticket email request for booking {BookingReference}", reservation.BookingReference);
+                    }
+                }
 
                 var flightNum = !string.IsNullOrWhiteSpace(reservation.FlightNumber) ? reservation.FlightNumber : "Flight";
                 var route = !string.IsNullOrWhiteSpace(reservation.FromCity) && !string.IsNullOrWhiteSpace(reservation.ToCity)
                     ? $"{reservation.FromCity}-{reservation.ToCity}"
                     : "Trip";
-                var travelDate = reservation.DepartureTime != default
-                    ? reservation.DepartureTime.ToString("dd/MM/yyyy hh:mm tt")
-                    : DateTime.UtcNow.ToString("dd/MM/yyyy hh:mm tt");
+                var depIst = reservation.DepartureTime != default
+                    ? PickNBook.Api.Helpers.IndiaTimeHelper.ToIst(reservation.DepartureTime)
+                    : PickNBook.Api.Helpers.IndiaTimeHelper.NowIst;
+                var travelDate = depIst.ToString("dd/MM/yyyy hh:mm tt");
 
                 await _notificationService.EnqueueAsync(
                     eventType: "FlightBookingSuccess",

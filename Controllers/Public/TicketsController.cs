@@ -39,6 +39,89 @@ public class TicketsController : BaseApiController
         });
     }
 
+    // ================= RESEND FLIGHT TICKET BY BOOKING REFERENCE =================
+    [HttpPost("resend-flight/{bookingReference}")]
+    public async Task<IActionResult> ResendFlightTicketEmail(string bookingReference)
+    {
+        if (string.IsNullOrWhiteSpace(bookingReference))
+        {
+            return BadRequest(new { message = "Booking reference is required." });
+        }
+
+        var booking = await _context.FlightReservations
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.BookingReference == bookingReference);
+
+        if (booking == null)
+        {
+            return NotFound(new { message = $"Flight booking '{bookingReference}' not found." });
+        }
+
+        var passengers = await _context.FlightReservationPassengers
+            .AsNoTracking()
+            .Where(p => p.FlightReservationId == booking.Id)
+            .Select(p => new FlightPassengerTicketDto
+            {
+                FullName = p.FullName,
+                PassengerType = p.PassengerType,
+                Gender = p.Gender,
+                SeatNumber = p.SeatNumber,
+                TicketNumber = p.TicketNumber,
+                Status = p.Status ?? "Booked"
+            }).ToListAsync();
+
+        var segments = await _context.FlightReservationSegments
+            .AsNoTracking()
+            .Where(s => s.FlightReservationId == booking.Id)
+            .Select(s => new FlightTicketSegmentDto
+            {
+                Airline = s.Airline,
+                FlightNumber = s.FlightNumber,
+                FromCity = s.FromCity,
+                ToCity = s.ToCity,
+                DepartureTime = s.DepartureTime,
+                ArrivalTime = s.ArrivalTime,
+                Pnr = s.Pnr,
+                Status = s.Status ?? "Booked"
+            }).ToListAsync();
+
+        var toEmail = !string.IsNullOrWhiteSpace(booking.PassengerEmail) ? booking.PassengerEmail : "";
+        if (string.IsNullOrWhiteSpace(toEmail) || !toEmail.Contains("@"))
+        {
+            return BadRequest(new { message = "No valid customer email found on booking." });
+        }
+
+        var emailReq = new SendFlightTicketEmailRequest
+        {
+            ToEmail = toEmail,
+            PassengerName = !string.IsNullOrWhiteSpace(booking.PassengerName) ? booking.PassengerName : "Passenger",
+            BookingReference = booking.BookingReference,
+            Airline = !string.IsNullOrWhiteSpace(booking.Airline) ? booking.Airline : "Flight Service",
+            Origin = booking.FromCity,
+            Destination = booking.ToCity,
+            DepartureTime = booking.DepartureTime,
+            ArrivalTime = booking.ArrivalTime,
+            Pnr = booking.Pnr,
+            Price = booking.TotalPriceInr,
+            Currency = "INR",
+            NonRefundable = booking.NonRefundable,
+            CancellationCharges = booking.CancellationCharges,
+            PartialSegmentCancellation = booking.PartialSegmentCancellation,
+            Passengers = passengers,
+            Segments = segments
+        };
+
+        await _ticketEmailService.SendFlightTicketAsync(emailReq);
+
+        return Ok(new
+        {
+            message = "Flight ticket email with PDF dispatched successfully.",
+            bookingReference = booking.BookingReference,
+            toEmail = emailReq.ToEmail,
+            pnr = booking.Pnr
+        });
+    }
+
     [HttpPost("send-bus-email")]
     public async Task<IActionResult> SendBusTicketEmail([FromBody] SendBusTicketEmailRequest request)
     {
