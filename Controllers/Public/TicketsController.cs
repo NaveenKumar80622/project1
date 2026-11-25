@@ -101,6 +101,8 @@ public class TicketsController : BaseApiController
             Destination = booking.ToCity,
             DepartureTime = booking.DepartureTime,
             ArrivalTime = booking.ArrivalTime,
+            BookedAtUtc = booking.BookedAtUtc,
+            CancelledAtUtc = booking.CancelledAtUtc,
             Pnr = booking.Pnr,
             Price = booking.TotalPriceInr,
             Currency = "INR",

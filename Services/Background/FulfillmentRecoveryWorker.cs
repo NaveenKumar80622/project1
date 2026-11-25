@@ -712,6 +712,8 @@ namespace PickNBook.Api.Services.Background
                                     Destination = res.ToCity,
                                     DepartureTime = res.DepartureTime,
                                     ArrivalTime = res.ArrivalTime,
+                                    BookedAtUtc = res.BookedAtUtc,
+                                    CancelledAtUtc = res.CancelledAtUtc ?? DateTime.UtcNow,
                                     Pnr = res.Pnr,
                                     Price = cancelRecord.OriginalCustomerPaid,
                                     Currency = "INR",

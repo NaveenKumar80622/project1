@@ -17,5 +17,6 @@ public class TicketEmailRequestDto
     public string Currency { get; set; } = "INR";
     public int StopsCount { get; set; }
     public int DurationMinutes { get; set; }
+    public DateTime BookedAtUtc { get; set; }
     public List<FlightTicketSegmentDto> Segments { get; set; } = new();
 }

@@ -1975,6 +1975,7 @@ namespace PickNBook.Api.Controllers.Public
                             Destination = reservation.ToCity,
                             DepartureTime = reservation.DepartureTime,
                             ArrivalTime = reservation.ArrivalTime,
+                            BookedAtUtc = reservation.BookedAtUtc,
                             Pnr = reservation.Pnr,
                             Price = reservation.TotalPriceInr,
                             Currency = "INR",
@@ -2744,6 +2745,7 @@ namespace PickNBook.Api.Controllers.Public
                                 Destination = reservation.ToCity,
                                 DepartureTime = reservation.DepartureTime,
                                 ArrivalTime = reservation.ArrivalTime,
+                                BookedAtUtc = reservation.BookedAtUtc,
                                 Pnr = reservation.Pnr,
                                 Price = reservation.TotalPriceInr,
                                 Currency = "INR",
@@ -4131,6 +4133,7 @@ namespace PickNBook.Api.Controllers.Public
                                         Destination = reservation.ToCity,
                                         DepartureTime = reservation.DepartureTime,
                                         ArrivalTime = reservation.ArrivalTime,
+                                        BookedAtUtc = reservation.BookedAtUtc,
                                         Pnr = reservation.Pnr,
                                         Price = reservation.TotalPriceInr,
                                         Currency = "INR",
@@ -4770,6 +4773,8 @@ namespace PickNBook.Api.Controllers.Public
                     Destination = booking.ToCity,
                     DepartureTime = booking.DepartureTime,
                     ArrivalTime = booking.ArrivalTime,
+                    BookedAtUtc = booking.BookedAtUtc,
+                    CancelledAtUtc = booking.CancelledAtUtc,
                     Pnr = booking.Pnr,
                     Price = booking.TotalPriceInr,
                     Currency = "INR",
@@ -4783,7 +4788,8 @@ namespace PickNBook.Api.Controllers.Public
                 };
 
                 var ticketPdfService = HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.ITicketPdfService>();
-                var pdfs = ticketPdfService.GenerateFlightTicketPdf(emailReq);
+                bool isCancelledVoucher = !string.IsNullOrWhiteSpace(booking.Status) && booking.Status.Contains("Cancel", StringComparison.OrdinalIgnoreCase);
+                var pdfs = ticketPdfService.GenerateFlightTicketPdf(emailReq, isCancelled: isCancelledVoucher, refundAmount: booking.RefundAmountInr ?? 0m);
 
                 if (pdfs == null || pdfs.Count == 0)
                 {

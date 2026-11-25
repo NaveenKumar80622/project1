@@ -30,6 +30,7 @@ public class BookingNotificationService(
                 Currency = request.Currency,
                 StopsCount = request.StopsCount,
                 DurationMinutes = request.DurationMinutes,
+                BookedAtUtc = request.BookedAtUtc,
                 Segments = request.Segments
             };
 

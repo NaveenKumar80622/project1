@@ -58,6 +58,10 @@ public class SendFlightTicketEmailRequest
     public bool IsPartialCancellation { get; set; }
     public List<FlightPassengerTicketDto> CancelledPassengers { get; set; } = new();
     public List<FlightTicketSegmentDto> CancelledSegments { get; set; } = new();
+
+    // Chronology & Timestamps (UTC)
+    public DateTime BookedAtUtc { get; set; }
+    public DateTime? CancelledAtUtc { get; set; }
 }
 
 public class FlightPassengerTicketDto

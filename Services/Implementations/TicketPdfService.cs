@@ -99,7 +99,12 @@ public class TicketPdfService : ITicketPdfService
 
         string subTitle = isCancelled ? "FLIGHT TICKET CANCELLATION & REFUND ADVICE" : "OFFICIAL FLIGHT E-TICKET";
         gfx.DrawString(subTitle, new XFont("Arial", 9.5, XFontStyle.Bold), midnightBrush, left + 14, y + 44);
-        gfx.DrawString($"Booking Date: {req.DepartureTime:dd MMM yyyy}", new XFont("Arial", 8, XFontStyle.Regular), grayBrush, left + 14, y + 54);
+        var effectiveBookedUtc = req.BookedAtUtc != default ? req.BookedAtUtc : DateTime.UtcNow;
+        var effectiveBookedIst = IndiaTimeHelper.ToIst(effectiveBookedUtc);
+        string bookingDateLabel = isCancelled && req.CancelledAtUtc.HasValue
+            ? $"Booking Date: {effectiveBookedIst:dd MMM yyyy, hh:mm tt}  •  Cancelled: {IndiaTimeHelper.ToIst(req.CancelledAtUtc.Value):dd MMM yyyy, hh:mm tt}"
+            : $"Booking Date: {effectiveBookedIst:dd MMM yyyy, hh:mm tt}";
+        gfx.DrawString(bookingDateLabel, new XFont("Arial", 8, XFontStyle.Regular), grayBrush, left + 14, y + 54);
 
         // Header Meta Info
         double metaBoxW = 220;

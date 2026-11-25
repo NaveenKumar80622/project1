@@ -2401,6 +2401,7 @@ namespace PickNBook.Api.Services.Implementations
                             Destination = reservation.ToCity,
                             DepartureTime = reservation.DepartureTime,
                             ArrivalTime = reservation.ArrivalTime,
+                            BookedAtUtc = reservation.BookedAtUtc,
                             Pnr = reservation.Pnr,
                             Price = payment.FinalPayableAmount > 0 ? payment.FinalPayableAmount : reservation.TotalPriceInr,
                             Currency = "INR",

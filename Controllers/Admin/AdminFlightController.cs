@@ -1093,6 +1093,8 @@ namespace PickNBook.Api.Controllers
                                 Destination = reservation.ToCity,
                                 DepartureTime = reservation.DepartureTime,
                                 ArrivalTime = reservation.ArrivalTime,
+                                BookedAtUtc = reservation.BookedAtUtc,
+                                CancelledAtUtc = reservation.CancelledAtUtc ?? DateTime.UtcNow,
                                 Pnr = reservation.Pnr,
                                 Price = reservation.TotalPriceInr,
                                 Currency = "INR",
@@ -1994,6 +1996,8 @@ namespace PickNBook.Api.Controllers
                     Destination = booking.ToCity,
                     DepartureTime = booking.DepartureTime,
                     ArrivalTime = booking.ArrivalTime,
+                    BookedAtUtc = booking.BookedAtUtc,
+                    CancelledAtUtc = booking.CancelledAtUtc,
                     Pnr = booking.Pnr,
                     Price = booking.TotalPriceInr,
                     Currency = "INR",
@@ -2007,7 +2011,8 @@ namespace PickNBook.Api.Controllers
                 };
 
                 var pdfService = ticketPdfService ?? HttpContext.RequestServices.GetRequiredService<PickNBook.Api.Services.ITicketPdfService>();
-                var pdfs = pdfService.GenerateFlightTicketPdf(emailReq);
+                bool isCancelledVoucher = !string.IsNullOrWhiteSpace(booking.Status) && booking.Status.Contains("Cancel", StringComparison.OrdinalIgnoreCase);
+                var pdfs = pdfService.GenerateFlightTicketPdf(emailReq, isCancelled: isCancelledVoucher, refundAmount: booking.RefundAmountInr ?? 0m);
 
                 if (pdfs == null || pdfs.Count == 0)
                 {

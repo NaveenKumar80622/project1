@@ -27,16 +27,26 @@ public class TicketEmailService : ITicketEmailService
     public async Task SendFlightTicketAsync(
         SendFlightTicketEmailRequest request)
     {
-        var agentReservationToCheck = await _context.FlightReservations
-            .FirstOrDefaultAsync(r => r.BookingReference == request.BookingReference);
+        var reservation = !string.IsNullOrWhiteSpace(request.BookingReference)
+            ? await _context.FlightReservations
+                .FirstOrDefaultAsync(r => r.BookingReference == request.BookingReference)
+            : null;
 
-        if (agentReservationToCheck != null && !string.IsNullOrEmpty(agentReservationToCheck.UserId))
+        if (reservation != null)
         {
-            var userObj = await _context.Users.FirstOrDefaultAsync(u => u.Id.ToString() == agentReservationToCheck.UserId);
-            if (userObj != null && userObj.Role == AuthRoles.Agent)
+            if (request.BookedAtUtc == default && reservation.BookedAtUtc != default)
             {
-                request.AgentCompanyName = userObj.CompanyName;
-                request.AgentLogoUrl = userObj.AgentLogoUrl;
+                request.BookedAtUtc = reservation.BookedAtUtc;
+            }
+
+            if (!string.IsNullOrEmpty(reservation.UserId))
+            {
+                var userObj = await _context.Users.FirstOrDefaultAsync(u => u.Id.ToString() == reservation.UserId);
+                if (userObj != null && userObj.Role == AuthRoles.Agent)
+                {
+                    request.AgentCompanyName = userObj.CompanyName;
+                    request.AgentLogoUrl = userObj.AgentLogoUrl;
+                }
             }
         }
 
@@ -50,9 +60,6 @@ public class TicketEmailService : ITicketEmailService
         }).ToList();
 
         var subject = $"Your Pick&book Ticket - {request.BookingReference}";
-
-        var reservation = await _context.FlightReservations
-            .FirstOrDefaultAsync(r => r.BookingReference == request.BookingReference);
 
         var passengersList = new List<FlightPassengerTicketDto>();
         string flightNumber = "N/A";
@@ -129,6 +136,8 @@ public class TicketEmailService : ITicketEmailService
         var depIst = ToIst(req.DepartureTime);
         var arrIst = ToIst(req.ArrivalTime);
         var depDateStr = depIst.ToString("ddd, dd MMMM yyyy");
+        var effectiveBookedUtc = req.BookedAtUtc != default ? req.BookedAtUtc : DateTime.UtcNow;
+        var bookedDateStr = IndiaTimeHelper.FormatIst(effectiveBookedUtc, "dd MMM yyyy, hh:mm tt");
         var originCity = GetCityName(req.Origin);
         var destCity = GetCityName(req.Destination);
 
@@ -275,7 +284,8 @@ public class TicketEmailService : ITicketEmailService
                "</div>" +
                "<div style=\"font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #a7f3d0;\">BOOKING CONFIRMED &bull; E-TICKET ISSUED</div>" +
                "<div style=\"font-size: 17px; font-weight: 900; margin-top: 3px; color: #ffffff; line-height: 1.3;\">Your " + originCity + " - " + destCity + " flight is booked for travel on " + depDateStr + "</div>" +
-               "<div style=\"font-size: 11px; color: #d1fae5; margin-top: 4px;\">Thank you for choosing Pick&amp;book. We wish you a safe and pleasant journey!</div>" +
+               "<div style=\"font-size: 11px; color: #d1fae5; margin-top: 4px;\">Booked on <b style=\"color: #ffffff;\">" + bookedDateStr + " IST</b> &bull; Booking ID: <b style=\"color: #ffffff; font-family: monospace;\">" + req.BookingReference + "</b></div>" +
+               "<div style=\"font-size: 11px; color: #d1fae5; margin-top: 2px;\">Thank you for choosing Pick&amp;book. We wish you a safe and pleasant journey!</div>" +
                "</td></tr></table></div>" +
 
                "<div class=\"content-padding\" style=\"padding: 18px 16px;\">" +
@@ -1181,6 +1191,24 @@ public class TicketEmailService : ITicketEmailService
         SendFlightTicketEmailRequest request,
         decimal refundAmount)
     {
+        if ((request.BookedAtUtc == default || !request.CancelledAtUtc.HasValue) && !string.IsNullOrWhiteSpace(request.BookingReference))
+        {
+            var reservation = await _context.FlightReservations
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.BookingReference == request.BookingReference);
+            if (reservation != null)
+            {
+                if (request.BookedAtUtc == default && reservation.BookedAtUtc != default)
+                {
+                    request.BookedAtUtc = reservation.BookedAtUtc;
+                }
+                if (!request.CancelledAtUtc.HasValue && reservation.CancelledAtUtc.HasValue)
+                {
+                    request.CancelledAtUtc = reservation.CancelledAtUtc;
+                }
+            }
+        }
+
         var subject = $"Flight Ticket Cancelled - {request.BookingReference}";
 
         // Generate CANCELLED PDF voucher and attach
@@ -1194,6 +1222,8 @@ public class TicketEmailService : ITicketEmailService
 
         var depIst = ToIst(request.DepartureTime);
         var depDateStr = depIst.ToString("ddd, dd MMMM yyyy");
+        var bookedDateStr = IndiaTimeHelper.FormatIst(request.BookedAtUtc != default ? request.BookedAtUtc : DateTime.UtcNow, "dd MMM yyyy, hh:mm tt");
+        var cancelledDateStr = IndiaTimeHelper.FormatIst(request.CancelledAtUtc ?? DateTime.UtcNow, "dd MMM yyyy, hh:mm tt");
         var originCity = GetCityName(request.Origin);
         var destCity = GetCityName(request.Destination);
 
@@ -1229,7 +1259,8 @@ public class TicketEmailService : ITicketEmailService
             "</div>" +
             "<div style=\"font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.8px; color: #fecaca;\">BOOKING CANCELLED &bull; REFUND INITIATED</div>" +
             "<div style=\"font-size: 17px; font-weight: 900; margin-top: 3px; color: #ffffff; line-height: 1.3;\">Flight Booking Cancelled &mdash; " + request.BookingReference + "</div>" +
-            "<div style=\"font-size: 11px; color: #fee2e2; margin-top: 4px;\">Your booking for " + originCity + " - " + destCity + " has been successfully cancelled.</div>" +
+            "<div style=\"font-size: 11px; color: #fee2e2; margin-top: 4px;\">Booked on <b style=\"color: #ffffff;\">" + bookedDateStr + " IST</b> &bull; Cancelled on <b style=\"color: #ffffff;\">" + cancelledDateStr + " IST</b></div>" +
+            "<div style=\"font-size: 11px; color: #fee2e2; margin-top: 2px;\">Your booking for " + originCity + " - " + destCity + " has been successfully cancelled.</div>" +
             "</td></tr></table></div>" +
 
             "<div class=\"content-padding\" style=\"padding: 18px 16px;\">" +
