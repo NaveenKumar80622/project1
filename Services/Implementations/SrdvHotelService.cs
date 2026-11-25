@@ -19,7 +19,7 @@ using PickNBook.Api.Helpers;
 
 namespace PickNBook.Api.Services
 {
-    public class SrdvHotelService : IHotelService
+    public partial class SrdvHotelService : IHotelService
     {
         private static readonly Dictionary<long, long> CityMasterCatalogMap = new()
         {
@@ -120,13 +120,16 @@ namespace PickNBook.Api.Services
                 request.CityId = masterCityId;
             }
 
-            string guestDetails = "";
-            if (request.RoomGuests != null)
-            {
-                guestDetails = string.Join("_", request.RoomGuests.Select(rg => $"{rg.NoOfAdults}-{rg.NoOfChild}"));
-            }
-            var hotelCodesKey = request.HotelCodes != null && request.HotelCodes.Count > 0 ? string.Join("-", request.HotelCodes) : "";
-            var cacheKey = $"HotelSearch_{request.CityId}_{hotelCodesKey}_{request.CheckInDate}_{request.CheckOutDate}_{request.NoOfRooms}_{guestDetails}";
+            var cacheKey = BuildHotelSearchCacheKey(
+                request.CityId,
+                request.HotelCodes,
+                request.CheckInDate,
+                request.NoOfNights,
+                request.CheckOutDate,
+                request.GuestNationality,
+                request.RoomGuests,
+                request.MinRating,
+                request.MaxRating);
 
             if (_cache.TryGetValue(cacheKey, out PickNBookHotelSearchResponseDto? cachedResponse))
             {
@@ -146,11 +149,6 @@ namespace PickNBook.Api.Services
 
         private async Task<PickNBookHotelSearchResponseDto> SearchHotelsMultiLevelRawAsync(SrdvHotelSearchRequestDto request)
         {
-            if (!string.IsNullOrEmpty(_settings.ApiToken))
-            {
-                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
-                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
-            }
 
             // Build clean supplier outbound request matching new SRDV v8 specification
             var supplierReq = new SrdvSupplierHotelSearchRequest
@@ -231,7 +229,16 @@ namespace PickNBook.Api.Services
                 supplierReq.MinRating = supplierReq.MaxRating;
             }
 
-            var cacheKey = $"srdv:hotel:search:{supplierReq.CityId}:{supplierReq.CheckInDate}:{supplierReq.NoOfNights}:{supplierReq.RoomGuests.Count}:{supplierReq.MinRating}:{supplierReq.MaxRating}";
+            var cacheKey = BuildHotelSearchCacheKey(
+                supplierReq.CityId,
+                supplierReq.HotelCodes,
+                supplierReq.CheckInDate,
+                supplierReq.NoOfNights,
+                null,
+                supplierReq.GuestNationality,
+                request.RoomGuests,
+                supplierReq.MinRating?.ToString(),
+                supplierReq.MaxRating?.ToString());
             if (_cache.TryGetValue(cacheKey, out PickNBookHotelSearchResponseDto? cachedDto) && cachedDto != null)
             {
                 return cachedDto;
@@ -243,7 +250,7 @@ namespace PickNBook.Api.Services
                 var outboundJson = JsonSerializer.Serialize(supplierReq, new JsonSerializerOptions { WriteIndented = true });
                 _logger?.LogWarning("[SUPPLIER-DEBUG] Outbound request to {Url}:\n{Payload}", searchUrl, outboundJson);
 
-                var response = await _httpClient.PostAsJsonAsync(searchUrl, supplierReq);
+                var response = await SendSrdvHotelPostAsync(searchUrl, supplierReq);
                 response.EnsureSuccessStatusCode();
 
                 // Streaming deserialization
@@ -282,6 +289,15 @@ namespace PickNBook.Api.Services
                     if (srdvResponse.Error.ErrorCode != 0)
                     {
                         _logger?.LogWarning("SRDV Hotel Search API returned supplier error ({ErrorCode}): {ErrorMessage}", srdvResponse.Error.ErrorCode, srdvResponse.Error.ErrorMessage);
+                        if (string.IsNullOrWhiteSpace(responseDto.Error.ErrorMessage))
+                        {
+                            responseDto.Error.ErrorMessage = srdvResponse.Error.ErrorCode switch
+                            {
+                                7201 => "Suggested location/hotel ID has expired (older than 30 days). Please refresh suggestions.",
+                                13000 => "HotelCodes mode is not supported on CityAutoSuggest accounts.",
+                                _ => responseDto.Error.ErrorMessage
+                            };
+                        }
                     }
                 }
 
@@ -318,9 +334,14 @@ namespace PickNBook.Api.Services
 
                 if (srdvResponse.Results != null)
                 {
+                    long? resolvedSearchTraceId = responseDto.TraceId is long tidVal && tidVal > 0
+                        ? tidVal
+                        : (long.TryParse(responseDto.TraceId?.ToString(), out var parsedTrace) && parsedTrace > 0 ? parsedTrace : null);
+
                     foreach (var hotel in srdvResponse.Results)
                     {
                         var item = MapRawHotelToResultItem(hotel);
+                        item.TraceId = resolvedSearchTraceId;
 
                         // Calculate & Apply Hotel Markup synchronously in memory (<5ms for all hotels)
                         try
@@ -404,12 +425,6 @@ namespace PickNBook.Api.Services
                 };
             }
 
-            if (!string.IsNullOrEmpty(_settings.ApiToken))
-            {
-                _httpClient.DefaultRequestHeaders.Remove("Api-Token");
-                _httpClient.DefaultRequestHeaders.Add("Api-Token", _settings.ApiToken);
-            }
-
             var recheckReq = new SrdvHotelRecheckRequestDto { TraceId = traceId };
             var recheckUrl = $"{_settings.HotelBaseUrl.TrimEnd('/')}/RecheckSearch";
 
@@ -418,7 +433,7 @@ namespace PickNBook.Api.Services
                 var outboundJson = JsonSerializer.Serialize(recheckReq);
                 _logger?.LogInformation("[SUPPLIER-DEBUG] Outbound RecheckSearch to {Url}:\n{Payload}", recheckUrl, outboundJson);
 
-                var response = await _httpClient.PostAsJsonAsync(recheckUrl, recheckReq);
+                var response = await SendSrdvHotelPostAsync(recheckUrl, recheckReq);
                 response.EnsureSuccessStatusCode();
 
                 using var stream = await response.Content.ReadAsStreamAsync();
@@ -478,6 +493,7 @@ namespace PickNBook.Api.Services
                     foreach (var hotel in srdvResponse.Results)
                     {
                         var item = MapRawHotelToResultItem(hotel);
+                        item.TraceId = traceId;
 
                         if (markupService != null && item.Price != null)
                         {

@@ -68,10 +68,12 @@ public class SrdvHotelLoggingHandler : DelegatingHandler
         
         stopwatch.Stop();
         
-        bool isLargePayloadEndpoint = request.RequestUri != null && 
-            (request.RequestUri.ToString().Contains("Search", System.StringComparison.OrdinalIgnoreCase) || 
+        bool isLargePayloadEndpoint = request.RequestUri != null &&
+            (request.RequestUri.ToString().Contains("Search", System.StringComparison.OrdinalIgnoreCase) ||
              request.RequestUri.ToString().Contains("GetHotelRoom", System.StringComparison.OrdinalIgnoreCase) ||
-             request.RequestUri.ToString().Contains("GetHotelInfo", System.StringComparison.OrdinalIgnoreCase));
+             request.RequestUri.ToString().Contains("GetHotelInfo", System.StringComparison.OrdinalIgnoreCase) ||
+             request.RequestUri.ToString().Contains("NearbyHotel", System.StringComparison.OrdinalIgnoreCase) ||
+             request.RequestUri.ToString().Contains("CityAutoSuggest", System.StringComparison.OrdinalIgnoreCase));
 
         bool shouldOmit = isLargePayloadEndpoint && options.Mode == PayloadLoggingMode.Omit;
 

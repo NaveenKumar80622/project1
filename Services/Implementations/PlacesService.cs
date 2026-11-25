@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using PickNBook.Api.Data;
 using PickNBook.Api.Models.Config;
 using PickNBook.Api.Models.DTOs;
+using PickNBook.Api.Services;
 using PickNBook.Api.Services.Interfaces;
 using PickNBook.Api.Utils;
 
@@ -32,19 +33,25 @@ namespace PickNBook.Api.Services.Implementations
         private readonly SrdvMasterDataSettings _settings;
         private readonly ILogger<PlacesService> _logger;
         private readonly BusCityCacheService? _busCityCacheService;
+        private readonly IHotelService? _hotelService;
+        private readonly SrdvSettings _srdvSettings;
 
         public PlacesService(
             AppDbContext dbContext,
             IMemoryCache cache,
             IOptions<SrdvMasterDataSettings> settings,
             ILogger<PlacesService> logger,
-            BusCityCacheService? busCityCacheService = null)
+            BusCityCacheService? busCityCacheService = null,
+            IHotelService? hotelService = null,
+            IOptions<SrdvSettings>? srdvSettings = null)
         {
             _dbContext = dbContext;
             _cache = cache;
             _settings = settings.Value;
             _logger = logger;
             _busCityCacheService = busCityCacheService;
+            _hotelService = hotelService;
+            _srdvSettings = srdvSettings?.Value ?? new SrdvSettings();
         }
 
         public async Task<List<PlaceSuggestionDto>> GetPlacesAsync(
@@ -62,9 +69,13 @@ namespace PickNBook.Api.Services.Implementations
             var queryLower = trimmedQuery.ToLowerInvariant();
 
             var isSingleChar = queryLower.Length == 1;
+            var isAutoSuggestHotelMode = normalizedTripType is "hotel" &&
+                (_srdvSettings.EnableCityAutoSuggest || string.Equals(_srdvSettings.HotelLocationMode, "AutoSuggest", StringComparison.OrdinalIgnoreCase)) &&
+                trimmedQuery.Length >= 3;
+
             var cacheKey = isSingleChar
                 ? $"places:alpha:{normalizedTripType}:{requestType?.ToLowerInvariant() ?? "all"}:{normalizedField}:{queryLower}:{limit}"
-                : $"places:{normalizedTripType}:{requestType?.ToLowerInvariant() ?? "all"}:{normalizedField}:{queryLower}:{limit}";
+                : $"places:{normalizedTripType}:{(isAutoSuggestHotelMode ? "autosuggest" : "local")}:{requestType?.ToLowerInvariant() ?? "all"}:{normalizedField}:{queryLower}:{limit}";
 
             if (_cache.TryGetValue(cacheKey, out List<PlaceSuggestionDto>? cachedResult) && cachedResult != null)
             {
@@ -73,6 +84,7 @@ namespace PickNBook.Api.Services.Implementations
 
             var candidateLimit = Math.Max(_settings.CandidateLookupLimit, limit * 3);
             var cityCandidates = new List<PlaceSuggestionDto>();
+            bool usedHotelAutoSuggest = false;
 
             // 1. Bus Popularity Stats
             var busPlacePopularity = await GetBusPopularityAsync(cancellationToken);
@@ -146,61 +158,126 @@ namespace PickNBook.Api.Services.Implementations
                 }
             }
 
-            // 3. Query Hotel Cities from DB
+            // 3. Query Hotel Cities (SRDV CityAutoSuggest when enabled & >= 3 chars, else local HotelCities DB)
             if (normalizedTripType is "hotel")
             {
-                var hotelQuery = _dbContext.HotelCities.AsNoTracking().Where(h => h.IsActive);
-
-                if (!string.IsNullOrWhiteSpace(requestType))
+                if (isAutoSuggestHotelMode && _hotelService != null)
                 {
-                    hotelQuery = hotelQuery.Where(h => h.RequestType == requestType);
-                }
+                    var suggestRes = await _hotelService.CityAutoSuggestAsync(
+                        new SrdvCityAutoSuggestRequestDto
+                        {
+                            Search = trimmedQuery,
+                            Limit = Math.Clamp(limit, 1, 50)
+                        },
+                        forceProbe: false,
+                        cancellationToken: cancellationToken);
 
-                if (!string.IsNullOrWhiteSpace(queryLower))
-                {
-                    if (queryLower.Length < 3)
+                    if (suggestRes.Error.ErrorCode == 0 && suggestRes.Result != null)
                     {
-                        // Single/double character: strict prefix match on CityName
-                        var prefix = $"{queryLower}%";
-                        hotelQuery = hotelQuery.Where(h =>
-                            EF.Functions.Like(h.CityName, prefix) ||
-                            h.CityCode == queryLower);
+                        usedHotelAutoSuggest = true;
+                        int orderTier = 1;
+                        foreach (var s in suggestRes.Result)
+                        {
+                            bool isHotel = string.Equals(s.Kind, "HOTEL", StringComparison.OrdinalIgnoreCase);
+                            string primaryName = isHotel && !string.IsNullOrWhiteSpace(s.HotelName)
+                                ? s.HotelName.Trim()
+                                : s.CityName;
+
+                            cityCandidates.Add(new PlaceSuggestionDto
+                            {
+                                CityName = primaryName,
+                                BaseCityName = s.CityName,
+                                DisplayName = isHotel && !string.IsNullOrWhiteSpace(s.HotelName)
+                                    ? $"{s.HotelName}, {s.CityName}"
+                                    : (!string.IsNullOrWhiteSpace(s.FullName) ? s.FullName : s.CityName),
+                                CityId = s.CityId,
+                                HotelId = s.HotelId,
+                                HotelName = s.HotelName,
+                                FullName = !string.IsNullOrWhiteSpace(s.FullName)
+                                    ? s.FullName
+                                    : (isHotel ? $"{s.HotelName}, {s.CityName}, {s.CountryCode}" : s.CityName),
+                                StateName = s.StateName,
+                                CountryCode = s.CountryCode,
+                                CountryName = s.CountryCode,
+                                Type = s.Type ?? s.Kind,
+                                LocationType = s.Kind,
+                                ParentCityId = s.ParentCityId,
+                                ParentCityName = s.ParentCityName,
+                                SearchCityId = s.SearchTargetId,
+                                HotelCount = s.HotelCount,
+                                ParentOnPage = s.ParentOnPage,
+                                TripType = "hotel",
+                                Source = "SrdvCityAutoSuggest",
+                                MatchTier = orderTier++,
+                                UsageCount = 1
+                            });
+                        }
                     }
                     else
                     {
-                        hotelQuery = hotelQuery.Where(h =>
-                            h.CityCode == queryLower ||
-                            h.CityName.StartsWith(queryLower) ||
-                            h.CityName.Contains(queryLower) ||
-                            h.FullName.Contains(queryLower) ||
-                            (h.StateName != null && h.StateName.StartsWith(queryLower)) ||
-                            (h.DistrictName != null && h.DistrictName.StartsWith(queryLower)));
+                        _logger.LogWarning("Hotel CityAutoSuggest unavailable ({ErrorCode}: {ErrorMessage}); falling back to local HotelCities DB.",
+                            suggestRes.Error.ErrorCode, suggestRes.Error.ErrorMessage);
                     }
                 }
 
-                var hotelCities = await hotelQuery
-                    .OrderByDescending(h => h.CityName.StartsWith(queryLower) ? 1 : 0)
-                    .ThenByDescending(h => h.HotelCount)
-                    .ThenBy(h => h.CityName)
-                    .Take(candidateLimit)
-                    .Select(h => new PlaceSuggestionDto
-                    {
-                        CityName = h.CityName,
-                        CityId = h.CityId > 0 ? h.CityId.ToString() : h.CityCode,
-                        CityCode = h.CityCode,
-                        CountryCode = h.CountryCode ?? "",
-                        CountryName = h.CountryName ?? h.StateName ?? "",
-                        StateName = h.StateName,
-                        DistrictName = h.DistrictName,
-                        FullName = h.FullName,
-                        Type = h.Type,
-                        HotelCount = h.HotelCount,
-                        TripType = "hotel",
-                        UsageCount = h.HotelCount
-                    })
-                    .ToListAsync(cancellationToken);
+                if (!usedHotelAutoSuggest)
+                {
+                    var hotelQuery = _dbContext.HotelCities.AsNoTracking().Where(h => h.IsActive);
 
-                cityCandidates.AddRange(hotelCities);
+                    if (!string.IsNullOrWhiteSpace(requestType))
+                    {
+                        hotelQuery = hotelQuery.Where(h => h.RequestType == requestType);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(queryLower))
+                    {
+                        if (queryLower.Length < 3)
+                        {
+                            // Single/double character: strict prefix match on CityName
+                            var prefix = $"{queryLower}%";
+                            hotelQuery = hotelQuery.Where(h =>
+                                EF.Functions.Like(h.CityName, prefix) ||
+                                h.CityCode == queryLower);
+                        }
+                        else
+                        {
+                            hotelQuery = hotelQuery.Where(h =>
+                                h.CityCode == queryLower ||
+                                h.CityName.StartsWith(queryLower) ||
+                                h.CityName.Contains(queryLower) ||
+                                h.FullName.Contains(queryLower) ||
+                                (h.StateName != null && h.StateName.StartsWith(queryLower)) ||
+                                (h.DistrictName != null && h.DistrictName.StartsWith(queryLower)));
+                        }
+                    }
+
+                    var hotelCities = await hotelQuery
+                        .OrderByDescending(h => h.CityName.StartsWith(queryLower) ? 1 : 0)
+                        .ThenByDescending(h => h.HotelCount)
+                        .ThenBy(h => h.CityName)
+                        .Take(candidateLimit)
+                        .Select(h => new PlaceSuggestionDto
+                        {
+                            CityName = h.CityName,
+                            CityId = h.CityId > 0 ? h.CityId.ToString() : h.CityCode,
+                            CityCode = h.CityCode,
+                            CountryCode = h.CountryCode ?? "",
+                            CountryName = h.CountryName ?? h.StateName ?? "",
+                            StateName = h.StateName,
+                            DistrictName = h.DistrictName,
+                            FullName = h.FullName,
+                            Type = h.Type,
+                            LocationType = string.IsNullOrWhiteSpace(h.Type) ? "CITY" : h.Type.ToUpperInvariant(),
+                            SearchCityId = h.CityId > 0 ? h.CityId.ToString() : h.CityCode,
+                            HotelCount = h.HotelCount,
+                            TripType = "hotel",
+                            Source = "LocalHotelCities",
+                            UsageCount = h.HotelCount
+                        })
+                        .ToListAsync(cancellationToken);
+
+                    cityCandidates.AddRange(hotelCities);
+                }
             }
 
             // 4. Query Bus Cities from In-Memory Cache or DB Fallback
@@ -370,8 +447,8 @@ namespace PickNBook.Api.Services.Implementations
                 }
             }
 
-            // 5. Apply Fuzzy Matching & Ranking on Bounded Candidate Set
-            if (!string.IsNullOrWhiteSpace(queryLower))
+            // 5. Apply Fuzzy Matching & Ranking on Bounded Candidate Set (skip when SRDV CityAutoSuggest already ranked results)
+            if (!usedHotelAutoSuggest && !string.IsNullOrWhiteSpace(queryLower))
             {
                 cityCandidates = RankAndFilterCandidates(cityCandidates, queryLower);
             }
@@ -379,7 +456,17 @@ namespace PickNBook.Api.Services.Implementations
             // 6. Group & Format Results based on Trip Type
             List<PlaceSuggestionDto> response;
 
-            if (normalizedTripType is "hotel")
+            if (normalizedTripType is "hotel" && usedHotelAutoSuggest)
+            {
+                response = cityCandidates
+                    .Where(x => !string.IsNullOrWhiteSpace(x.CityName))
+                    .GroupBy(x => $"{x.LocationType}|{x.HotelId ?? x.CityId}|{x.CityName}", StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.First())
+                    .OrderBy(x => x.MatchTier)
+                    .Take(limit)
+                    .ToList();
+            }
+            else if (normalizedTripType is "hotel")
             {
                 response = cityCandidates
                     .Where(x => !string.IsNullOrWhiteSpace(x.CityName))

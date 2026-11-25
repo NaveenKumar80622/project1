@@ -11,10 +11,14 @@ public class PlaceSuggestionDto
 
     // Hotel-specific
     public string? CityId { get; set; }
+    public string? HotelId { get; set; }
+    public string? HotelName { get; set; }
     public string? FullName { get; set; }
     public string? DistrictName { get; set; }
     public string? Type { get; set; }
     public int? HotelCount { get; set; }
+    public bool? ParentOnPage { get; set; }
+    public string? Source { get; set; }
 
     // Shared: Bus CityCode / Flight CityCode
     public string? CityCode { get; set; }

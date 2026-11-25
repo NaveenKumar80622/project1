@@ -81,69 +81,69 @@ namespace PickNBook.Api.Controllers
 
             bool hasCityId = request.CityId.HasValue && request.CityId.Value > 0;
             bool hasHotelCodes = request.HotelCodes != null && request.HotelCodes.Count > 0;
+            bool hasCoordinates = request.Latitude.HasValue && request.Longitude.HasValue;
 
-            if (!hasCityId && !hasHotelCodes)
+            if (!hasCityId && !hasHotelCodes && !hasCoordinates)
             {
-                return BadRequest(new { message = "Either CityId or HotelCodes must be provided." });
+                return BadRequest(new { message = "Either CityId, HotelCodes, or Latitude/Longitude must be provided." });
             }
 
-            if (string.IsNullOrWhiteSpace(request.CheckInDate) || 
-                !DateOnly.TryParseExact(request.CheckInDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
+            var commonValidationError = ValidateCommonSearchParams(
+                request.CheckInDate,
+                request.NoOfNights,
+                request.GuestNationality,
+                request.RoomGuests,
+                request.MinRating,
+                request.MaxRating);
+            if (commonValidationError != null)
             {
-                return BadRequest(new { message = "CheckInDate is required and must be in YYYY-MM-DD format." });
+                return BadRequest(new { message = commonValidationError });
             }
 
-            if (request.NoOfNights < 1 || request.NoOfNights > 30)
+            if (!hasCityId && !hasHotelCodes && hasCoordinates)
             {
-                return BadRequest(new { message = "NoOfNights must be an integer between 1 and 30." });
-            }
+                var coordValidationError = ValidateCoordinates(request.Latitude!.Value, request.Longitude!.Value, request.RadiusMeters);
+                if (coordValidationError != null)
+                {
+                    return BadRequest(new { message = coordValidationError });
+                }
 
-            if (!string.IsNullOrWhiteSpace(request.GuestNationality) && request.GuestNationality.Trim().Length != 2)
-            {
-                return BadRequest(new { message = "GuestNationality must be a two-letter ISO country code." });
-            }
+                try
+                {
+                    var nearbySearchRequest = new SrdvNearbyHotelSearchRequestDto
+                    {
+                        Latitude = request.Latitude.Value,
+                        Longitude = request.Longitude.Value,
+                        RadiusMeters = request.RadiusMeters ?? 10000,
+                        BatchIndex = request.BatchIndex ?? 1,
+                        BatchSize = request.BatchSize ?? 200,
+                        MaxBatches = request.MaxBatches ?? 1,
+                        DestinationName = request.DestinationName,
+                        CheckInDate = request.CheckInDate,
+                        CheckOutDate = request.CheckOutDate,
+                        NoOfNights = request.NoOfNights,
+                        GuestNationality = request.GuestNationality,
+                        RoomGuests = request.RoomGuests,
+                        MinRating = request.MinRating,
+                        MaxRating = request.MaxRating
+                    };
 
-            if (request.RoomGuests == null || request.RoomGuests.Count < 1 || request.RoomGuests.Count > 9)
-            {
-                return BadRequest(new { message = "RoomGuests is required and must contain between 1 and 9 rooms." });
-            }
+                    var nearbyResponse = await _hotelService.SearchNearbyHotelsAsync(nearbySearchRequest);
+                    LogHotelSearchFireAndForget(
+                        searchQuery: $"NEARBY:{request.Latitude.Value:F4},{request.Longitude.Value:F4}({nearbySearchRequest.RadiusMeters}m)",
+                        cityId: null,
+                        destinationName: request.DestinationName,
+                        checkInDate: request.CheckInDate,
+                        checkOutDate: request.CheckOutDate,
+                        roomGuests: request.RoomGuests,
+                        noOfRooms: request.NoOfRooms);
 
-            for (int i = 0; i < request.RoomGuests.Count; i++)
-            {
-                var room = request.RoomGuests[i];
-                if (room.NoOfAdults < 1 || room.NoOfAdults > 6)
-                {
-                    return BadRequest(new { message = $"Room {i + 1}: NoOfAdults must be between 1 and 6." });
+                    return Ok(nearbyResponse);
                 }
-                if (room.NoOfChild < 0 || room.NoOfChild > 4)
+                catch (Exception ex)
                 {
-                    return BadRequest(new { message = $"Room {i + 1}: NoOfChild must be between 0 and 4." });
-                }
-                int childCount = room.NoOfChild;
-                int ageCount = room.ChildAge?.Count ?? 0;
-                if (childCount > 0 && ageCount != childCount)
-                {
-                    return BadRequest(new { message = $"Room {i + 1}: The number of ChildAge entries ({ageCount}) must equal NoOfChild ({childCount})." });
-                }
-                if (room.ChildAge != null && room.ChildAge.Any(age => age < 0 || age > 17))
-                {
-                    return BadRequest(new { message = $"Room {i + 1}: Each child age must be between 0 and 17." });
-                }
-            }
-
-            if (int.TryParse(request.MinRating, out var minR) && int.TryParse(request.MaxRating, out var maxR))
-            {
-                if (minR < 0 || minR > 7)
-                {
-                    return BadRequest(new { message = "MinRating must be between 0 and 7." });
-                }
-                if (maxR < 0 || maxR > 7)
-                {
-                    return BadRequest(new { message = "MaxRating must be between 0 and 7." });
-                }
-                if (minR > maxR)
-                {
-                    return BadRequest(new { message = "MinRating cannot be greater than MaxRating." });
+                    _logger.LogError(ex, "Provider failure during nearby hotel search ({Lat}, {Lng})", request.Latitude, request.Longitude);
+                    return StatusCode(500, new { message = $"SRDV Provider failure: {ex.Message}" });
                 }
             }
 
@@ -151,85 +151,20 @@ namespace PickNBook.Api.Controllers
             {
                 var response = await _hotelService.SearchHotelsMultiLevelAsync(request);
 
-                // Fire-and-forget logging to the database
-                var userId = _currentUserService.GetUserOrGuestId();
-                var cityId = hasCityId ? request.CityId!.Value.ToString() : (request.HotelCodes != null ? string.Join(",", request.HotelCodes) : "HOTEL_CODES");
-                var reqCityId = request.CityId;
-                var checkInStr = request.CheckInDate;
-                var checkOutStr = request.CheckOutDate;
-                var roomGuests = request.RoomGuests;
-                var noOfRoomsStr = request.NoOfRooms;
-                var scopeFactory = HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>();
+                var searchQuery = hasCityId
+                    ? request.CityId!.Value.ToString()
+                    : (request.HotelCodes != null && request.HotelCodes.Count == 1
+                        ? $"HOTEL:{request.HotelCodes[0]}"
+                        : $"HOTEL_CODES:{request.HotelCodes?.Count ?? 0}");
 
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        using var scope = scopeFactory.CreateScope();
-                        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-                        DateTime parsedCheckIn = DateTime.TryParse(checkInStr, out var cin) ? cin : DateTime.UtcNow.AddDays(10);
-                        DateTime parsedCheckOut = DateTime.TryParse(checkOutStr, out var cout) ? cout : parsedCheckIn.AddDays(1);
-                        int adults = roomGuests?.Sum(rg => rg.NoOfAdults) ?? 1;
-                        int rooms = roomGuests != null && roomGuests.Count > 0 ? roomGuests.Count : (int.TryParse(noOfRoomsStr, out var r) ? r : 1);
-
-                        string? resolvedCityName = null;
-                        long? resolvedCityId = reqCityId;
-
-                        if (hasCityId && reqCityId.HasValue)
-                        {
-                            var city = await dbContext.HotelCities.AsNoTracking()
-                                .FirstOrDefaultAsync(c => c.CityId == reqCityId.Value);
-                            if (city != null)
-                            {
-                                resolvedCityName = city.CityName;
-                            }
-                        }
-
-                        var searchLog = new HotelSearchLog
-                        {
-                            SearchQuery = cityId,
-                            CityName = resolvedCityName,
-                            CityId = resolvedCityId,
-                            CheckInDate = DateOnly.FromDateTime(parsedCheckIn),
-                            CheckOutDate = DateOnly.FromDateTime(parsedCheckOut),
-                            Adults = adults,
-                            Rooms = rooms,
-                            UserId = userId,
-                            SearchedAtUtc = DateTime.UtcNow
-                        };
-                        dbContext.HotelSearchLogs.Add(searchLog);
-
-                        if (!string.IsNullOrWhiteSpace(resolvedCityName))
-                        {
-                            var cleanCity = resolvedCityName.Trim();
-                            var destStat = await dbContext.HotelDestinationStats
-                                .FirstOrDefaultAsync(x => x.CityName == cleanCity);
-
-                            if (destStat is null)
-                            {
-                                dbContext.HotelDestinationStats.Add(new HotelDestinationStat
-                                {
-                                    CityName = cleanCity,
-                                    CityId = resolvedCityId,
-                                    SearchCount = 1,
-                                    BookingCount = 0,
-                                    LastSearchedAtUtc = DateTime.UtcNow
-                                });
-                            }
-                            else
-                            {
-                                destStat.SearchCount += 1;
-                                destStat.LastSearchedAtUtc = DateTime.UtcNow;
-                            }
-                        }
-                        await dbContext.SaveChangesAsync();
-                    }
-                    catch
-                    {
-                        // Background task exceptions intentionally silenced
-                    }
-                });
+                LogHotelSearchFireAndForget(
+                    searchQuery: searchQuery,
+                    cityId: request.CityId,
+                    destinationName: request.DestinationName,
+                    checkInDate: request.CheckInDate,
+                    checkOutDate: request.CheckOutDate,
+                    roomGuests: request.RoomGuests,
+                    noOfRooms: request.NoOfRooms);
 
                 return Ok(response);
             }
@@ -238,6 +173,281 @@ namespace PickNBook.Api.Controllers
                 _logger.LogError(ex, "Provider failure during hotel search for CityId {CityId}", request.CityId);
                 return StatusCode(500, new { message = $"SRDV Provider failure: {ex.Message}" });
             }
+        }
+
+        [HttpPost("CityAutoSuggest")]
+        [HttpPost("~/v8/CityAutoSuggest")]
+        [AllowAnonymous]
+        [InjectClientIp]
+        public async Task<IActionResult> CityAutoSuggest(
+            [FromBody] SrdvCityAutoSuggestRequestDto request,
+            [FromQuery] bool probe = false,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null || string.IsNullOrWhiteSpace(request.Search))
+            {
+                return BadRequest(new PickNBookCityAutoSuggestResponseDto
+                {
+                    Error = new HotelSearchErrorDto { ErrorCode = 1003, ErrorMessage = "Invalid Request" }
+                });
+            }
+
+            var trimmed = request.Search.Trim();
+            if (trimmed.Length < 3 || trimmed.Length > 100 || (request.Limit.HasValue && (request.Limit.Value < 1 || request.Limit.Value > 50)))
+            {
+                return BadRequest(new PickNBookCityAutoSuggestResponseDto
+                {
+                    Error = new HotelSearchErrorDto { ErrorCode = 1003, ErrorMessage = "Invalid Request" }
+                });
+            }
+
+            var res = await _hotelService.CityAutoSuggestAsync(request, probe, cancellationToken);
+            if (res.Error.ErrorCode == 1003) return BadRequest(res);
+            if (res.Error.ErrorCode == 6000) return StatusCode(StatusCodes.Status401Unauthorized, res);
+            if (res.Error.ErrorCode == 13005) return UnprocessableEntity(res);
+            if (res.Error.ErrorCode != 0) return StatusCode(StatusCodes.Status502BadGateway, res);
+            return Ok(res);
+        }
+
+        [HttpPost("NearbyHotel")]
+        [HttpPost("~/v8/NearbyHotel")]
+        [AllowAnonymous]
+        [InjectClientIp]
+        public async Task<IActionResult> GetNearbyHotel(
+            [FromBody] SrdvNearbyHotelRequestDto request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null)
+            {
+                return BadRequest(new PickNBookNearbyHotelResponseDto
+                {
+                    Error = new HotelSearchErrorDto { ErrorCode = 1003, ErrorMessage = "Invalid Request" }
+                });
+            }
+
+            var coordErr = ValidateCoordinates(request.Latitude, request.Longitude, request.RadiusMeters);
+            if (coordErr != null)
+            {
+                return BadRequest(new PickNBookNearbyHotelResponseDto
+                {
+                    Error = new HotelSearchErrorDto { ErrorCode = 1003, ErrorMessage = coordErr }
+                });
+            }
+
+            var res = await _hotelService.GetNearbyHotelsAsync(request, cancellationToken);
+            if (res.Error.ErrorCode == 1003) return BadRequest(res);
+            if (res.Error.ErrorCode == 6000) return StatusCode(StatusCodes.Status401Unauthorized, res);
+            if (res.Error.ErrorCode == 13000) return UnprocessableEntity(res);
+            if (res.Error.ErrorCode == 13007) return StatusCode(StatusCodes.Status503ServiceUnavailable, res);
+            if (res.Error.ErrorCode != 0) return StatusCode(StatusCodes.Status502BadGateway, res);
+            return Ok(res);
+        }
+
+        [HttpPost("SearchNearby")]
+        [AllowAnonymous]
+        [InjectClientIp]
+        public async Task<IActionResult> SearchNearbyHotels(
+            [FromBody] SrdvNearbyHotelSearchRequestDto request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null)
+            {
+                return BadRequest(new { message = "Request body is required." });
+            }
+
+            var coordErr = ValidateCoordinates(request.Latitude, request.Longitude, request.RadiusMeters);
+            if (coordErr != null)
+            {
+                return BadRequest(new { message = coordErr });
+            }
+
+            var commonValidationError = ValidateCommonSearchParams(
+                request.CheckInDate,
+                request.NoOfNights,
+                request.GuestNationality,
+                request.RoomGuests,
+                request.MinRating,
+                request.MaxRating);
+            if (commonValidationError != null)
+            {
+                return BadRequest(new { message = commonValidationError });
+            }
+
+            try
+            {
+                var response = await _hotelService.SearchNearbyHotelsAsync(request, cancellationToken);
+                int effectiveRadius = Math.Clamp(request.RadiusMeters ?? 10000, 100, 10000);
+                LogHotelSearchFireAndForget(
+                    searchQuery: $"NEARBY:{request.Latitude:F4},{request.Longitude:F4}({effectiveRadius}m)",
+                    cityId: null,
+                    destinationName: request.DestinationName,
+                    checkInDate: request.CheckInDate,
+                    checkOutDate: request.CheckOutDate,
+                    roomGuests: request.RoomGuests,
+                    noOfRooms: Math.Max(1, request.RoomGuests?.Count ?? 1).ToString());
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Provider failure during SearchNearby for ({Lat}, {Lng})", request.Latitude, request.Longitude);
+                return StatusCode(500, new { message = $"SRDV Provider failure: {ex.Message}" });
+            }
+        }
+
+        private static string? ValidateCoordinates(double latitude, double longitude, int? radiusMeters)
+        {
+            if (double.IsNaN(latitude) || double.IsInfinity(latitude) || latitude < -90d || latitude > 90d)
+                return "Latitude must be between -90 and 90.";
+            if (double.IsNaN(longitude) || double.IsInfinity(longitude) || longitude < -180d || longitude > 180d)
+                return "Longitude must be between -180 and 180.";
+            if (radiusMeters.HasValue && (radiusMeters.Value < 100 || radiusMeters.Value > 10000))
+                return "RadiusMeters must be an integer between 100 and 10000.";
+            return null;
+        }
+
+        private static string? ValidateCommonSearchParams(
+            string? checkInDate,
+            int noOfNights,
+            string? guestNationality,
+            List<RoomGuestDto>? roomGuests,
+            string? minRating,
+            string? maxRating)
+        {
+            if (string.IsNullOrWhiteSpace(checkInDate) ||
+                !DateOnly.TryParseExact(checkInDate, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out _))
+            {
+                return "CheckInDate is required and must be in YYYY-MM-DD format.";
+            }
+
+            if (noOfNights < 1 || noOfNights > 30)
+            {
+                return "NoOfNights must be an integer between 1 and 30.";
+            }
+
+            if (!string.IsNullOrWhiteSpace(guestNationality) && guestNationality.Trim().Length != 2)
+            {
+                return "GuestNationality must be a two-letter ISO country code.";
+            }
+
+            if (roomGuests == null || roomGuests.Count < 1 || roomGuests.Count > 9)
+            {
+                return "RoomGuests is required and must contain between 1 and 9 rooms.";
+            }
+
+            for (int i = 0; i < roomGuests.Count; i++)
+            {
+                var room = roomGuests[i];
+                if (room.NoOfAdults < 1 || room.NoOfAdults > 6)
+                    return $"Room {i + 1}: NoOfAdults must be between 1 and 6.";
+                if (room.NoOfChild < 0 || room.NoOfChild > 4)
+                    return $"Room {i + 1}: NoOfChild must be between 0 and 4.";
+
+                int childCount = room.NoOfChild;
+                int ageCount = room.ChildAge?.Count ?? 0;
+                if (childCount > 0 && ageCount != childCount)
+                    return $"Room {i + 1}: The number of ChildAge entries ({ageCount}) must equal NoOfChild ({childCount}).";
+                if (room.ChildAge != null && room.ChildAge.Any(age => age < 0 || age > 17))
+                    return $"Room {i + 1}: Each child age must be between 0 and 17.";
+            }
+
+            if (int.TryParse(minRating, out var minR) && int.TryParse(maxRating, out var maxR))
+            {
+                if (minR < 0 || minR > 7) return "MinRating must be between 0 and 7.";
+                if (maxR < 0 || maxR > 7) return "MaxRating must be between 0 and 7.";
+                if (minR > maxR) return "MinRating cannot be greater than MaxRating.";
+            }
+
+            return null;
+        }
+
+        private void LogHotelSearchFireAndForget(
+            string searchQuery,
+            long? cityId,
+            string? destinationName,
+            string checkInDate,
+            string checkOutDate,
+            List<RoomGuestDto>? roomGuests,
+            string? noOfRooms)
+        {
+            var userId = _currentUserService.GetUserOrGuestId();
+            var scopeFactory = HttpContext.RequestServices.GetRequiredService<Microsoft.Extensions.DependencyInjection.IServiceScopeFactory>();
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = scopeFactory.CreateScope();
+                    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+                    DateTime parsedCheckIn = DateTime.TryParse(checkInDate, out var cin) ? cin : DateTime.UtcNow.AddDays(10);
+                    DateTime parsedCheckOut = DateTime.TryParse(checkOutDate, out var cout) ? cout : parsedCheckIn.AddDays(1);
+                    int adults = roomGuests?.Sum(rg => rg.NoOfAdults) ?? 1;
+                    int rooms = roomGuests != null && roomGuests.Count > 0 ? roomGuests.Count : (int.TryParse(noOfRooms, out var r) ? r : 1);
+
+                    string? resolvedCityName = !string.IsNullOrWhiteSpace(destinationName) ? destinationName.Trim() : null;
+                    if (string.IsNullOrWhiteSpace(resolvedCityName) && cityId.HasValue && cityId.Value > 0)
+                    {
+                        var city = await dbContext.HotelCities.AsNoTracking()
+                            .FirstOrDefaultAsync(c => c.CityId == cityId.Value);
+                        if (city != null)
+                        {
+                            resolvedCityName = city.CityName;
+                        }
+                        else if (_cache.TryGetValue($"srdv:hotel:label:city:{cityId.Value}", out string? cachedLabel) && !string.IsNullOrWhiteSpace(cachedLabel))
+                        {
+                            resolvedCityName = cachedLabel;
+                        }
+                    }
+
+                    if (resolvedCityName != null && resolvedCityName.Length > 100)
+                    {
+                        resolvedCityName = resolvedCityName.Substring(0, 100);
+                    }
+
+                    dbContext.HotelSearchLogs.Add(new HotelSearchLog
+                    {
+                        SearchQuery = searchQuery,
+                        CityName = resolvedCityName,
+                        CityId = cityId,
+                        CheckInDate = DateOnly.FromDateTime(parsedCheckIn),
+                        CheckOutDate = DateOnly.FromDateTime(parsedCheckOut),
+                        Adults = adults,
+                        Rooms = rooms,
+                        UserId = userId,
+                        SearchedAtUtc = DateTime.UtcNow
+                    });
+
+                    if (!string.IsNullOrWhiteSpace(resolvedCityName))
+                    {
+                        var destStat = await dbContext.HotelDestinationStats
+                            .FirstOrDefaultAsync(x => x.CityName == resolvedCityName);
+
+                        if (destStat is null)
+                        {
+                            dbContext.HotelDestinationStats.Add(new HotelDestinationStat
+                            {
+                                CityName = resolvedCityName,
+                                CityId = cityId,
+                                SearchCount = 1,
+                                BookingCount = 0,
+                                LastSearchedAtUtc = DateTime.UtcNow
+                            });
+                        }
+                        else
+                        {
+                            destStat.SearchCount += 1;
+                            destStat.LastSearchedAtUtc = DateTime.UtcNow;
+                        }
+                    }
+
+                    await dbContext.SaveChangesAsync();
+                }
+                catch
+                {
+                    // Background task exceptions intentionally silenced
+                }
+            });
         }
 
         [HttpPost("recheck-search")]

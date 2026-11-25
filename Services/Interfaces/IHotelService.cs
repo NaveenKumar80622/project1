@@ -2,6 +2,7 @@ using PickNBook.Api.Models.DTOs;
 using PickNBook.Api.Models;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace PickNBook.Api.Services
@@ -50,6 +51,9 @@ namespace PickNBook.Api.Services
         Task<HotelBookingDetailsResponseDto> GetBookingDetailsAsync(HotelBookingDetailsRequestDto request);
         Task<HotelCancelResponseDto> CancelBookingAsync(long traceId, string remarks);
         Task<HotelCancelResponseDto> CancelBookingAsync(HotelCancelBookingRequestDto request);
+        Task<PickNBookCityAutoSuggestResponseDto> CityAutoSuggestAsync(SrdvCityAutoSuggestRequestDto request, bool forceProbe = false, CancellationToken cancellationToken = default);
+        Task<PickNBookNearbyHotelResponseDto> GetNearbyHotelsAsync(SrdvNearbyHotelRequestDto request, CancellationToken cancellationToken = default);
+        Task<PickNBookHotelSearchResponseDto> SearchNearbyHotelsAsync(SrdvNearbyHotelSearchRequestDto request, CancellationToken cancellationToken = default);
     }
 }
 

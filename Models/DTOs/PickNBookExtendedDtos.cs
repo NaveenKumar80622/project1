@@ -923,7 +923,31 @@ namespace PickNBook.Api.Models.DTOs
         public long? CityId { get; set; }
 
         [JsonPropertyName("HotelCodes")]
-        public List<int>? HotelCodes { get; set; }
+        public List<long>? HotelCodes { get; set; }
+
+        [JsonPropertyName("DestinationName")]
+        public string? DestinationName { get; set; }
+
+        [JsonPropertyName("SearchKind")]
+        public string? SearchKind { get; set; }
+
+        [JsonPropertyName("Latitude")]
+        public double? Latitude { get; set; }
+
+        [JsonPropertyName("Longitude")]
+        public double? Longitude { get; set; }
+
+        [JsonPropertyName("RadiusMeters")]
+        public int? RadiusMeters { get; set; }
+
+        [JsonPropertyName("BatchIndex")]
+        public int? BatchIndex { get; set; }
+
+        [JsonPropertyName("BatchSize")]
+        public int? BatchSize { get; set; }
+
+        [JsonPropertyName("MaxBatches")]
+        public int? MaxBatches { get; set; }
 
         [JsonPropertyName("ResultCount")]
         public string ResultCount { get; set; } = "50";
@@ -989,7 +1013,7 @@ namespace PickNBook.Api.Models.DTOs
 
         [JsonPropertyName("HotelCodes")]
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-        public List<int>? HotelCodes { get; set; }
+        public List<long>? HotelCodes { get; set; }
 
         [JsonPropertyName("GuestNationality")]
         public string GuestNationality { get; set; } = "IN";
@@ -1042,6 +1066,8 @@ namespace PickNBook.Api.Models.DTOs
         public int RecheckAfterMs { get; set; } = 0;
         public int RecheckTimeoutSeconds { get; set; } = 0;
         public long? ApiTimeMs { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public HotelNearbyMetadataDto? NearbyMetadata { get; set; }
         public List<HotelSearchNoOfRoomsDto> NoOfRooms { get; set; } = new();
         public List<HotelSearchResultItemDto> Results { get; set; } = new();
     }
@@ -1082,6 +1108,10 @@ namespace PickNBook.Api.Models.DTOs
         public string Latitude { get; set; } = string.Empty;
         public string Longitude { get; set; } = string.Empty;
         public string HotelLocation { get; set; } = string.Empty;
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public long? TraceId { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? DistanceMeters { get; set; }
         public object SupplierPrice { get; set; } = "";
         public List<HotelSearchFacilityItemDto> Facilities { get; set; } = new();
         public List<HotelSearchRoomCategoryDto> Rooms { get; set; } = new();
@@ -1553,5 +1583,248 @@ namespace PickNBook.Api.Models.DTOs
         public string? UserName { get; set; }
         public string? Password { get; set; }
         public string? TokenId { get; set; }
+    }
+
+    // ==========================================
+    // HOTEL LOCATION DISCOVERY (SRDV v8 CityAutoSuggest & NearbyHotel)
+    // ==========================================
+    public class HotelNearbyMetadataDto
+    {
+        public double SearchLatitude { get; set; }
+        public double SearchLongitude { get; set; }
+        public int RadiusMeters { get; set; }
+        public int TotalNearbyHotels { get; set; }
+        public int TotalBatches { get; set; }
+        public int BatchIndex { get; set; }
+        public int BatchSize { get; set; }
+        public bool Truncated { get; set; }
+        public int PricedHotelsCount { get; set; }
+    }
+
+    public class SrdvCityAutoSuggestRequestDto
+    {
+        [JsonPropertyName("Search")]
+        public string Search { get; set; } = string.Empty;
+
+        [JsonPropertyName("Limit")]
+        [JsonConverter(typeof(SafeNullableIntConverter))]
+        public int? Limit { get; set; } = 50;
+    }
+
+    public class SrdvSupplierCityAutoSuggestRequest
+    {
+        [JsonPropertyName("Search")]
+        public string Search { get; set; } = string.Empty;
+
+        [JsonPropertyName("Limit")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? Limit { get; set; }
+    }
+
+    public class SrdvRawCityAutoSuggestResponse
+    {
+        public SrdvRawError? Error { get; set; }
+        public List<SrdvRawCityAutoSuggestItem> Result { get; set; } = new();
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int ResultsCount { get; set; }
+    }
+
+    public class SrdvRawCityAutoSuggestItem
+    {
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string Kind { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string CityId { get; set; } = string.Empty;
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string CityName { get; set; } = string.Empty;
+
+        public string? StateName { get; set; }
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string CountryCode { get; set; } = string.Empty;
+
+        public string? Type { get; set; }
+        public string? FullName { get; set; }
+
+        [JsonConverter(typeof(SafeNullableLongConverter))]
+        public long? ParentCityId { get; set; }
+
+        public string? ParentCityName { get; set; }
+
+        [JsonConverter(typeof(SafeNullableIntConverter))]
+        public int? HotelCount { get; set; }
+
+        public bool? ParentOnPage { get; set; }
+
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string HotelId { get; set; } = string.Empty;
+
+        public string? HotelName { get; set; }
+
+        [JsonConverter(typeof(SafeNullableDoubleConverter))]
+        public double? StarRating { get; set; }
+    }
+
+    public class PickNBookCityAutoSuggestResponseDto
+    {
+        public HotelSearchErrorDto Error { get; set; } = new();
+        public int ResultsCount { get; set; }
+        public List<CityAutoSuggestItemDto> Result { get; set; } = new();
+    }
+
+    public class CityAutoSuggestItemDto
+    {
+        public string Kind { get; set; } = string.Empty; // CITY | LOCALITY | HOTEL
+        public string? CityId { get; set; }
+        public string CityName { get; set; } = string.Empty;
+        public string? StateName { get; set; }
+        public string CountryCode { get; set; } = string.Empty;
+        public string? Type { get; set; }
+        public string? FullName { get; set; }
+        public long? ParentCityId { get; set; }
+        public string? ParentCityName { get; set; }
+        public int? HotelCount { get; set; }
+        public bool? ParentOnPage { get; set; }
+        public string? HotelId { get; set; }
+        public string? HotelName { get; set; }
+        public double? StarRating { get; set; }
+        public string SearchTargetType { get; set; } = string.Empty; // CityId | HotelCodes
+        public string SearchTargetId { get; set; } = string.Empty;
+    }
+
+    public class SrdvNearbyHotelRequestDto
+    {
+        [JsonPropertyName("Latitude")]
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Latitude { get; set; }
+
+        [JsonPropertyName("Longitude")]
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Longitude { get; set; }
+
+        [JsonPropertyName("RadiusMeters")]
+        [JsonConverter(typeof(SafeNullableIntConverter))]
+        public int? RadiusMeters { get; set; } = 10000;
+    }
+
+    public class SrdvSupplierNearbyHotelRequest
+    {
+        [JsonPropertyName("Latitude")]
+        public double Latitude { get; set; }
+
+        [JsonPropertyName("Longitude")]
+        public double Longitude { get; set; }
+
+        [JsonPropertyName("RadiusMeters")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? RadiusMeters { get; set; }
+    }
+
+    public class SrdvRawNearbyHotelResponse
+    {
+        public SrdvRawError? Error { get; set; }
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Latitude { get; set; }
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Longitude { get; set; }
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int RadiusMeters { get; set; }
+        public List<SrdvRawNearbyHotelItem> Result { get; set; } = new();
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int ResultsCount { get; set; }
+        public bool Truncated { get; set; }
+    }
+
+    public class SrdvRawNearbyHotelItem
+    {
+        [JsonConverter(typeof(SafeLongConverter))]
+        public long HotelCode { get; set; }
+        [JsonConverter(typeof(SafeLongConverter))]
+        public long CityId { get; set; }
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Latitude { get; set; }
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Longitude { get; set; }
+        [JsonConverter(typeof(SafeNullableDoubleConverter))]
+        public double? StarRating { get; set; }
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int DistanceMeters { get; set; }
+    }
+
+    public class PickNBookNearbyHotelResponseDto
+    {
+        public HotelSearchErrorDto Error { get; set; } = new();
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public int RadiusMeters { get; set; }
+        public int ResultsCount { get; set; }
+        public bool Truncated { get; set; }
+        public List<NearbyHotelItemDto> Result { get; set; } = new();
+    }
+
+    public class NearbyHotelItemDto
+    {
+        public long HotelCode { get; set; }
+        public long CityId { get; set; }
+        public double Latitude { get; set; }
+        public double Longitude { get; set; }
+        public double? StarRating { get; set; }
+        public int DistanceMeters { get; set; }
+    }
+
+    public class SrdvNearbyHotelSearchRequestDto
+    {
+        [JsonPropertyName("Latitude")]
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Latitude { get; set; }
+
+        [JsonPropertyName("Longitude")]
+        [JsonConverter(typeof(SafeDoubleConverter))]
+        public double Longitude { get; set; }
+
+        [JsonPropertyName("RadiusMeters")]
+        [JsonConverter(typeof(SafeNullableIntConverter))]
+        public int? RadiusMeters { get; set; } = 10000;
+
+        [JsonPropertyName("BatchIndex")]
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int BatchIndex { get; set; } = 1;
+
+        [JsonPropertyName("BatchSize")]
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int BatchSize { get; set; } = 200;
+
+        [JsonPropertyName("MaxBatches")]
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int MaxBatches { get; set; } = 1;
+
+        [JsonPropertyName("DestinationName")]
+        public string? DestinationName { get; set; }
+
+        [JsonPropertyName("CheckInDate")]
+        public string CheckInDate { get; set; } = string.Empty;
+
+        [JsonPropertyName("CheckOutDate")]
+        public string CheckOutDate { get; set; } = string.Empty;
+
+        [JsonPropertyName("NoOfNights")]
+        [JsonConverter(typeof(SafeIntConverter))]
+        public int NoOfNights { get; set; } = 1;
+
+        [JsonPropertyName("GuestNationality")]
+        public string GuestNationality { get; set; } = "IN";
+
+        [JsonPropertyName("RoomGuests")]
+        public List<RoomGuestDto> RoomGuests { get; set; } = new();
+
+        [JsonPropertyName("MinRating")]
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string MinRating { get; set; } = "0";
+
+        [JsonPropertyName("MaxRating")]
+        [JsonConverter(typeof(SafeStringConverter))]
+        public string MaxRating { get; set; } = "7";
     }
 }

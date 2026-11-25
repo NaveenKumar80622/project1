@@ -20,6 +20,10 @@ namespace PickNBook.Api.Infrastructure.Helpers
                 "1005" => "Forbidden",
                 "1100" => "Invalid JSON Format",
                 "2008" => "Invalid API Token",
+                "7201" => "Suggested location/hotel ID has expired (older than 30 days). Please fetch fresh suggestions.",
+                "13000" => "HotelCodes mode is not compatible with this Hotel route.",
+                "13005" => "Location suggestions are not available for this Hotel route.",
+                "13007" => "Upstream hotel list could not be read. Please try again.",
                 _ => null
             };
 
